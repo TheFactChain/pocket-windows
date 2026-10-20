@@ -1,12 +1,17 @@
-# Windows Claude — existing local system
+# Windows Claude Portable — implementation in progress
 
 This private repository contains the launcher, gateway setup sources, offline tests,
 and packaging instructions. It deliberately contains no VM disks, saved VPN profile,
 runtime binaries, personal logs, GitHub credentials, or installation media.
 
-The separate **local ZIP** is a clone of the current working system, including both
-installed guests, bundled runtime, UEFI state, and existing saved credentials. It is
-not a generic installer. It has not been tested on another PC.
+Stage 1 has a verified private baseline; stage 2 adds a small native desktop EXE.
+The stage-2 preview contains the EXE and runtime without disks or saved profiles.
+It intentionally blocks guest startup. [Stage-2 report](docs/stage2-report.md) explains
+what was tested. Personal/release ZIPs belong to later stages and are not built yet.
+
+The planned personal ZIP will clone both installed guests, runtime, UEFI state, and
+existing credentials. It is not a generic Windows installer and has not been tested
+on another PC.
 
 ## Run the local ZIP
 
@@ -15,7 +20,9 @@ not a generic installer. It has not been tested on another PC.
 2. Use Windows x64 with hardware virtualization and **Windows Hypervisor Platform**
    already available. The tested host runs Windows 11 Pro with 16 GB RAM. Guests use
    4096 MB + 1024 MB, two virtual CPUs each. Allow RAM for the host as well.
-3. Run `Start.cmd` and approve its administrator request. The existing launcher uses
+3. Run `Launcher.exe`. Diagnostics checks prerequisites and required files. Settings
+   changes RAM/vCPU/private-LAN port only while guests are off. Startup requests UAC
+   after a successful preflight. `Start.cmd` remains the legacy entry. The launcher uses
    Windows PowerShell 5.1 under the host's script execution policy. It does not enable
    Windows features, install drivers, bypass policy, or reconfigure the host network.
    Missing prerequisites require a separate decision by the computer's owner.
@@ -28,8 +35,9 @@ not a generic installer. It has not been tested on another PC.
 
 Start paths are relative to the extracted root; the entry scripts derive that root
 from their own location. Any desktop shortcut must target the newly extracted
-`Start.cmd`; an old absolute shortcut is not portable. There is no `Launcher.exe`,
-headless gateway, or generic VPN importer in this version.
+`Launcher.exe`; an old absolute shortcut is not portable. .NET Framework 4.8 is also
+required for the desktop panel. Headless gateway and generic VPN import are not yet
+implemented; UI resource settings do not apply a guest VPN profile.
 
 Use only one instance on a host: the fixed guest LAN listens on loopback port 31861.
 The copied VPN must remain valid and its server reachable. The configured system is

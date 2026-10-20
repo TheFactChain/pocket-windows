@@ -75,7 +75,7 @@ def collect(project, source):
     entries = {}
     for name in tracked.rstrip('\0').split('\0'):
         if not safe_name(name) or name.split('/')[0] not in {
-                '.gitignore', '.gitattributes', 'README.md', 'Start.cmd', 'scripts', 'tests', 'gateway', 'docs'}:
+                '.gitignore', '.gitattributes', 'README.md', 'Start.cmd', 'scripts', 'tests', 'gateway', 'docs', 'ui'}:
             raise ValueError('Unexpected tracked source path')
         entries[name] = file_under(source, name)
     for name in DATA_FILES:

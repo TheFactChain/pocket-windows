@@ -14,8 +14,12 @@ def load_settings(root):
         if path.stat().st_size > 64 * 1024:
             raise ValueError('Runtime settings file is too large')
         value = json.loads(path.read_text(encoding='utf-8'))
-        if not isinstance(value, dict):
-            raise ValueError('Runtime settings object required')
+    return validate_settings(value)
+
+
+def validate_settings(value):
+    if not isinstance(value, dict):
+        raise ValueError('Runtime settings object required')
     if set(value) - set(DEFAULTS):
         raise ValueError('Unknown runtime setting; profiles and secrets must be separate')
     result = DEFAULTS | value
