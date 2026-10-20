@@ -1,0 +1,15 @@
+#!/usr/sbin/nft -f
+# New guest only. Deliberately blocks all forwarding and uplink traffic until a VPS-specific policy is approved.
+table inet windowsclaude {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+    chain output {
+        type filter hook output priority filter; policy drop;
+        oifname "lo" accept
+    }
+}

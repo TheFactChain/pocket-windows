@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "work_memory_mib": 4096,
+  "gateway_memory_mib": 1024,
+  "vcpus": 2,
+  "lan_port": 31861
+}

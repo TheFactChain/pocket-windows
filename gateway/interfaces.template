@@ -1,0 +1,11 @@
+auto lo
+iface lo inet loopback
+
+auto wan0
+iface wan0 inet static
+    address 10.0.2.15/24
+    post-up ip route replace {{VPS_IPV4}}/32 via 10.0.2.2 dev wan0
+
+auto lan0
+iface lan0 inet static
+    address 192.168.233.1/24

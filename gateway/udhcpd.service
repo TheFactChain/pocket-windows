@@ -1,0 +1,15 @@
+[Unit]
+Description=DHCP for the isolated Windows Claude LAN
+Requires=nftables.service
+BindsTo=nftables.service
+After=nftables.service networking.service
+
+[Service]
+Type=simple
+RuntimeDirectory=windowsclaude
+ExecStart=/usr/bin/busybox udhcpd -f /etc/udhcpd-windowsclaude.conf
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

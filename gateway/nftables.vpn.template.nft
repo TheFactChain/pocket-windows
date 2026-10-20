@@ -1,0 +1,34 @@
+#!/usr/sbin/nft -f
+# Only for the new Debian gateway. Never execute on the Windows host or VPS.
+flush ruleset
+table inet windowsclaude {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state invalid drop
+        iifname "lan0" ip saddr { 0.0.0.0, 192.168.233.0/24 } udp sport 68 udp dport 67 counter accept
+        iifname "lan0" ip saddr 192.168.233.0/24 udp dport 53 counter accept
+        iifname "lan0" ip saddr 192.168.233.0/24 tcp dport 53 counter accept
+        iifname "lan0" ip saddr 192.168.233.0/24 icmp type echo-request counter accept
+        iifname "wan0" ip saddr {{VPS_IPV4}} udp sport {{VPS_PORT}} ct state established counter accept
+        iifname "wan0" ip protocol icmp ct state related icmp type { destination-unreachable, time-exceeded, parameter-problem } counter accept
+        iifname "wc-tun0" meta nfproto ipv4 ct state established,related counter accept
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state invalid drop
+        iifname "lan0" oifname "wc-tun0" ip saddr 192.168.233.0/24 counter accept
+        iifname "wc-tun0" oifname "lan0" ip daddr 192.168.233.0/24 ct state established,related counter accept
+    }
+    chain output {
+        type filter hook output priority filter; policy drop;
+        oifname "lo" accept
+        oifname "wan0" ip daddr {{VPS_IPV4}} udp dport {{VPS_PORT}} counter accept
+        oifname "wc-tun0" meta nfproto ipv4 counter accept
+        oifname "lan0" ip daddr { 192.168.233.0/24, 255.255.255.255 } udp sport 67 udp dport 68 counter accept
+        oifname "lan0" ip daddr 192.168.233.0/24 udp sport 53 counter accept
+        oifname "lan0" ip daddr 192.168.233.0/24 tcp sport 53 counter accept
+        oifname "lan0" ip daddr 192.168.233.0/24 icmp type echo-reply counter accept
+        oifname "lan0" ip daddr 192.168.233.0/24 ct state related icmp type { destination-unreachable, time-exceeded, parameter-problem } counter accept
+    }
+}

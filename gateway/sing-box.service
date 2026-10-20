@@ -1,0 +1,19 @@
+[Unit]
+Description=Windows Claude GoHost gateway
+Requires=nftables.service
+BindsTo=nftables.service
+After=nftables.service networking.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/nft -c -f /etc/nftables.conf
+ExecStartPre=/usr/local/bin/sing-box check -c /etc/sing-box/config.json
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecStartPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=1
+ExecStopPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=0
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

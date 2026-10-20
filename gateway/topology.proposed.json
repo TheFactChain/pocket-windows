@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "status": "proposal-only; not applied",
+  "host_network_changes": false,
+  "work_vm": {
+    "current_network": "none",
+    "future_nic_count": 1,
+    "future_lan": "QEMU stream over host loopback to gateway only",
+    "direct_usernet_nat_bridge": false,
+    "proposed_memory_mib": 6144,
+    "proposed_vcpus": 2,
+    "proposed_disk_gib": 80
+  },
+  "gateway_vm": {
+    "future_nic_count": 2,
+    "future_lan": "QEMU stream over host loopback to WorkVM only",
+    "future_uplink": "QEMU user-mode NAT; no host adapter or port forwarding",
+    "proposed_memory_mib": 1024,
+    "proposed_vcpus": 2,
+    "proposed_disk_gib": 12,
+    "base_firewall": "gateway/nftables.offline.nft",
+    "vpn_core": null,
+    "vps_identity_confirmed": false,
+    "persistent_credentials_created": false
+  },
+  "vpn_endpoint_unavailable": "offline",
+  "installation_or_network_activation_allowed_by_this_file": false
+}

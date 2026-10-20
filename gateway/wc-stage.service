@@ -1,0 +1,11 @@
+[Unit]
+Description=One-time Windows Claude offline gateway preparation
+
+[Service]
+Type=simple
+# This directory is on the guest disk; /run is too small for this delivery.
+UMask=0077
+ExecStart=/bin/sh -c "mkdir -p /root/wc-stage && tar -xf /dev/disk/by-id/virtio-WCDELIVERY -C /root/wc-stage && exec /bin/sh /root/wc-stage/stage.sh"
+
+[Install]
+WantedBy=multi-user.target
