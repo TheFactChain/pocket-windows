@@ -13,6 +13,8 @@ internal sealed partial class ConfinedFileStore : INTFileStore
     private readonly INTFileStore inner;
     private uint rootVolume,rootHigh,rootLow;
     private bool rootKnown;
+    // Identities, not paths: short names, case and links cannot alias a protected folder.
+    private readonly HashSet<string> protectedFolders=new HashSet<string>(StringComparer.Ordinal),protectedAncestors=new HashSet<string>(StringComparer.Ordinal);
     private sealed class OpenHandle
     {
         internal object Native;
@@ -28,15 +30,41 @@ internal sealed partial class ConfinedFileStore : INTFileStore
     [DllImport("kernel32.dll",SetLastError=true)]private static extern bool GetFileInformationByHandle(IntPtr handle,out FileIdentity information);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode)]private static extern uint GetDriveType(string root);
     private static NTStatus LastStatus(){return Win32Status(Marshal.GetLastWin32Error());}
-    internal ConfinedFileStore(string selectedRoot)
+    internal ConfinedFileStore(string selectedRoot) : this(selectedRoot,new string[0]) { }
+    internal ConfinedFileStore(string selectedRoot,IEnumerable<string> protectedPaths)
     {
         if(String.IsNullOrEmpty(selectedRoot)||selectedRoot.Length<3||!Char.IsLetter(selectedRoot[0])||selectedRoot[1]!=':'||selectedRoot[2]!='\\')throw new ArgumentException("A local drive path is required.","selectedRoot");
         string relative;string suffix=selectedRoot.Substring(3).TrimEnd('\\');
         if(!ValidPath(suffix,out relative)||relative!=suffix)throw new ArgumentException("An ordinary local folder is required.","selectedRoot");
         root=Path.GetFullPath(selectedRoot).TrimEnd('\\');if(root.Length==2)root+="\\";
         uint drive=GetDriveType(root.Substring(0,3));if(drive!=2&&drive!=3&&drive!=6)throw new ArgumentException("Network and unknown drives are not supported.","selectedRoot");
+        if(protectedPaths==null)throw new ArgumentNullException("protectedPaths");
+        foreach(string path in protectedPaths)Protect(path);
         inner=new NTDirectoryFileSystem(root);List<SafeFileHandle> pins;
         NTStatus status=PinParents("",out pins);Release(pins);if(status!=NTStatus.STATUS_SUCCESS)throw new IOException("Cannot confine the selected folder: "+status);
+    }
+    private static string Key(FileIdentity identity){return identity.Volume.ToString("x8")+":"+identity.IndexHigh.ToString("x8")+identity.IndexLow.ToString("x8");}
+    private void Protect(string path)
+    {
+        if(String.IsNullOrEmpty(path)||path.Length<3||!Char.IsLetter(path[0])||path[1]!=':'||path[2]!='\\')throw new ArgumentException("A local protected folder is required.","protectedPaths");
+        // Follow links here: the real folder is protected, whichever name the guest later uses for it.
+        string current=Path.GetFullPath(path).TrimEnd('\\');bool target=true;
+        while(current.Length>2)
+        {
+            using(SafeFileHandle pin=PinFile(current,0x80,7,IntPtr.Zero,3,0x02000000,IntPtr.Zero))
+            {
+                FileIdentity identity;
+                if(pin.IsInvalid||!GetFileInformationByHandle(pin.DangerousGetHandle(),out identity)||(identity.Attributes&0x10)==0){if(target)return;}
+                else (target?protectedFolders:protectedAncestors).Add(Key(identity));
+            }
+            // Ancestors stay usable but cannot be renamed or deleted to swap in a look-alike path.
+            target=false;string parent=Path.GetDirectoryName(current);current=parent==null?"":parent.TrimEnd('\\');
+        }
+    }
+    private bool Pinned(object native)
+    {
+        FileIdentity identity;if(!GetFileInformationByHandle((IntPtr)native,out identity))return true;
+        string key=Key(identity);return protectedFolders.Contains(key)||protectedAncestors.Contains(key);
     }
     private static bool ValidPath(string path,out string relative)
     {
@@ -67,6 +95,7 @@ internal sealed partial class ConfinedFileStore : INTFileStore
             FileIdentity identity;if(!GetFileInformationByHandle(pin.DangerousGetHandle(),out identity))return LastStatus();
             if((identity.Attributes&0x400)!=0)return NTStatus.STATUS_ACCESS_DENIED;
             if((identity.Attributes&0x10)==0)return NTStatus.STATUS_NOT_A_DIRECTORY;
+            if(protectedFolders.Contains(Key(identity)))return NTStatus.STATUS_ACCESS_DENIED;
             if(String.Equals(directory.TrimEnd('\\'),root.TrimEnd('\\'),StringComparison.OrdinalIgnoreCase))
             {
                 if(rootKnown&&(identity.Volume!=rootVolume||identity.IndexHigh!=rootHigh||identity.IndexLow!=rootLow))return NTStatus.STATUS_ACCESS_DENIED;
@@ -81,10 +110,10 @@ internal sealed partial class ConfinedFileStore : INTFileStore
         // Keep Close from recycling a native handle while another request still uses it.
         lock(opened){return opened.Native.Equals(IntPtr.Zero)?NTStatus.STATUS_INVALID_HANDLE:action(opened.Native);}
     }
-    private static NTStatus CheckHandle(object native)
+    private NTStatus CheckHandle(object native)
     {
         FileIdentity identity;if(!GetFileInformationByHandle((IntPtr)native,out identity))return LastStatus();
-        return (identity.Attributes&0x400)!=0||((identity.Attributes&0x10)==0&&identity.Links>1)?NTStatus.STATUS_ACCESS_DENIED:NTStatus.STATUS_SUCCESS;
+        return (identity.Attributes&0x400)!=0||((identity.Attributes&0x10)==0&&identity.Links>1)||protectedFolders.Contains(Key(identity))?NTStatus.STATUS_ACCESS_DENIED:NTStatus.STATUS_SUCCESS;
     }
     public NTStatus CreateFile(out object handle,out FileStatus fileStatus,string path,AccessMask desiredAccess,Attributes fileAttributes,ShareAccess shareAccess,CreateDisposition disposition,CreateOptions options,SecurityContext context)
     {
@@ -118,6 +147,7 @@ internal sealed partial class ConfinedFileStore : INTFileStore
                     if(status==NTStatus.STATUS_SUCCESS)fileStatus=FileStatus.FILE_OVERWRITTEN;
                 }
             }
+            if(status==NTStatus.STATUS_SUCCESS&&deleteOnClose&&Pinned(native))status=NTStatus.STATUS_ACCESS_DENIED;
             if(status==NTStatus.STATUS_SUCCESS&&deleteOnClose)status=inner.SetFileInformation(native,new FileDispositionInformation{DeletePending=true});
             if(status!=NTStatus.STATUS_SUCCESS){inner.CloseFile(native);return status;}
             handle=new OpenHandle{Native=native,Path=relative};return status;
@@ -133,6 +163,7 @@ internal sealed partial class ConfinedFileStore : INTFileStore
         NTStatus status=CheckHandle(opened.Native);if(status!=NTStatus.STATUS_SUCCESS)return status;
         if(information==null)return NTStatus.STATUS_INVALID_PARAMETER;
         Type type=information.GetType();
+        if((type==typeof(FileRenameInformationType1)||type==typeof(FileRenameInformationType2)||type==typeof(FileDispositionInformation))&&Pinned(opened.Native))return NTStatus.STATUS_ACCESS_DENIED;
         if(type==typeof(FileRenameInformationType1)||type==typeof(FileRenameInformationType2))
         {
             if(opened.Path.Length==0)return NTStatus.STATUS_ACCESS_DENIED;

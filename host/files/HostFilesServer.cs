@@ -40,20 +40,30 @@ internal sealed class HostFilesServer : IDisposable
     {
         if(input==null||input.Length>65536)throw new ArgumentException("Invalid session");
         var value=new JavaScriptSerializer{MaxJsonLength=65536,RecursionLimit=8}.Deserialize<Dictionary<string,object>>(input);
-        Keys(value,"schema","session_nonce","username","password","shares");
+        Keys(value,"schema","session_nonce","username","password","shares","protected");
         if(!(value["schema"] is int)||(int)value["schema"]!=1)throw new ArgumentException("Invalid session");
         string nonce=Text(value,"session_nonce","\\A[a-f0-9]{32}\\z");
         string user=Text(value,"username","\\AWCP_[A-Za-z0-9_]{1,32}\\z");
         string password=Text(value,"password","\\A[A-Za-z0-9_-]{32,128}\\z");
         var entries=value["shares"] as ArrayList;
         if(entries==null||entries.Count<1||entries.Count>64)throw new ArgumentException("Invalid session");
+        // This program, its private state and autostart folders stay unreachable even in all-drives mode.
+        var protectedEntries=value["protected"] as ArrayList;
+        if(protectedEntries==null||protectedEntries.Count>16)throw new ArgumentException("Invalid session");
+        var protectedPaths=new List<string>();
+        foreach(object entry in protectedEntries)
+        {
+            string path=entry as string;
+            if(path==null||path.Length>32767||!Regex.IsMatch(path,"\\A[A-Za-z]:\\\\[^\\x00-\\x1f]*\\z",RegexOptions.CultureInvariant))throw new ArgumentException("Invalid session");
+            protectedPaths.Add(path);
+        }
         var shares=new SMBShareCollection();var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach(object entry in entries)
         {
             var item=entry as Dictionary<string,object>;Keys(item,"name","path");
             string name=Text(item,"name","\\APC_[A-Za-z0-9_]{1,48}\\z");
             if(!names.Add(name)||!(item["path"] is string))throw new ArgumentException("Invalid session");
-            var share=new FileSystemShare(name,new ConfinedFileStore((string)item["path"]),CachingPolicy.NoCaching);
+            var share=new FileSystemShare(name,new ConfinedFileStore((string)item["path"],protectedPaths),CachingPolicy.NoCaching);
             share.AccessRequested+=delegate(object sender,AccessRequestArgs request){request.Allow=String.Equals(request.UserName,user,StringComparison.Ordinal);};
             shares.Add(share);
         }

@@ -834,7 +834,10 @@ internal sealed partial class MainForm : Form
         string filesState=FileSharingState(report);
         if(filesState.Length>0)
         {
-            string filesDetail=filesState=="ready"?"подключены":filesState=="off"?"выключены":filesState=="unavailable"?"папки недоступны":filesState=="failed"?"соединение прервано":"ожидаем подключения Windows";
+            string filesDetail=filesState=="ready"?"подключены":filesState=="off"?"выключены":filesState=="unavailable"?"папки недоступны":filesState=="failed"?"соединение прервано":filesState=="connecting"?"подключаются":"ожидаем подключения Windows";
+            object skipped;var filesReport=report["host_files"] as Dictionary<string,object>;
+            if(filesReport!=null&&filesReport.TryGetValue("unavailable",out skipped)&&skipped is System.Collections.ICollection&&((System.Collections.ICollection)skipped).Count>0)
+                filesDetail+="; пропущено папок: "+((System.Collections.ICollection)skipped).Count;
             resources.Text+=Environment.NewLine+"Файлы ПК: "+filesDetail;
             if(blocker==null&&filesState=="pending")nextStep.Text="Для первого подключения файлов открой в Windows диск WCPFILES и запусти RUNFILES.CMD.";
             if(blocker==null&&(filesState=="failed"||filesState=="unavailable"))nextStep.Text="Проверь доступность выбранных папок ПК. Повторное подключение можно выполнить через RUNFILES.CMD на диске WCPFILES в Windows.";
@@ -1058,6 +1061,9 @@ internal sealed partial class MainForm : Form
                     "Ctrl+S — сохранить подключение или настройки", "Ctrl+N — новое подключение", "Ctrl+I — импорт подключения",
                     "F5 — обновить состояние или список подключений", "F1 — открыть эту справку", "", "В окне виртуальной Windows",
                     "Ctrl+Alt+F — включить или выключить полный экран", "Ctrl+Alt+G — освободить мышь и клавиатуру", "",
+                    "Файлы ПК в Windows", "Режим и папки выбираются в настройках и применяются при следующем запуске Windows.",
+                    "Первый раз открой в Windows диск WCPFILES, запусти RUNFILES.CMD и подтверди запрос администратора.",
+                    "Папка программы, её служебные данные и автозагрузка ПК из Windows недоступны.", "",
                     "Выключай Windows кнопкой «Выключить» или через меню питания внутри Windows.", "Закрытие работающей панели оставляет Windows в работе и сворачивает панель в область уведомлений."}) };
             var close = new RoundedButton { Text = "Понятно", Primary = true, DialogResult = DialogResult.OK, AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(12,8,12,8) };
             dialog.Padding = new Padding(22); dialog.Controls.Add(content); dialog.Controls.Add(close); dialog.AcceptButton = close; dialog.CancelButton = close; dialog.ShowDialog(this);

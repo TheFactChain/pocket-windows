@@ -95,11 +95,16 @@ internal sealed class SettingsEditor : UserControl
         }
         RecommendedButton.Click+=delegate{ApplyRecommendedValues();};
         rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        TableLayoutPanel files = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 5, Margin = new Padding(0,12,0,0) };
+        TableLayoutPanel files = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 6, Margin = new Padding(0,12,0,0) };
         files.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        for(int index=0;index<5;index++)files.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for(int index=0;index<6;index++)files.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         Label filesHeading = new Label { Text = "Доступ к файлам ПК", AutoSize = true, Dock = DockStyle.Top, Margin = Padding.Empty };
-        Label filesNotice = new Label { Text = "Запись из Windows меняет настоящие файлы ПК. Настройки применяются при следующем запуске Windows.", AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,8,0,8) };
+        Label filesNotice = new Label { AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,8,0,8) };
+        Label filesGuide = new Label { Text = "Первое подключение: в Windows открой диск WCPFILES, запусти RUNFILES.CMD и подтверди запрос администратора. Потом диски ПК подключаются сами при входе.", AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,0,0,8) };
+        fileSharingMode.SelectedIndexChanged+=delegate{
+            filesNotice.Text=fileSharingMode.SelectedIndex==0
+                ?"Запись из Windows меняет настоящие файлы ПК: с режимом всех дисков программы в Windows смогут изменить любой файл, доступный твоей учётной записи. Папка программы и автозагрузка ПК защищены. Настройки применяются при следующем запуске Windows."
+                :"Запись из Windows меняет настоящие файлы ПК. Папка программы и автозагрузка ПК из Windows недоступны. Настройки применяются при следующем запуске Windows.";};
         fileSharingMode.Items.AddRange(new object[]{"Все доступные диски ПК","Только выбранные папки","Выключено"});fileSharingMode.SelectedIndex=2;
         FlowLayoutPanel folderActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Margin = Padding.Empty };
         Button addFolder = new RoundedButton { Text = "Добавить папку", AutoSize = true, Padding = new Padding(10,6,10,6), Margin = new Padding(0,0,8,0) };
@@ -108,8 +113,8 @@ internal sealed class SettingsEditor : UserControl
         addFolder.Click+=delegate{using(FolderBrowserDialog dialog=new FolderBrowserDialog { Description = "Выбери папку ПК для доступа из Windows", ShowNewFolderButton = false })if(dialog.ShowDialog(this)==DialogResult.OK)AddFileSharingFolder(dialog.SelectedPath);};
         removeFolder.Click+=delegate{if(sharedFolders.SelectedIndex>=0)sharedFolders.Items.RemoveAt(sharedFolders.SelectedIndex);};
         sharedFolders.SelectedIndexChanged+=delegate{removeFolder.Enabled=sharedFolders.SelectedIndex>=0;};
-        files.Controls.Add(filesHeading,0,0);files.Controls.Add(fileSharingMode,0,1);files.Controls.Add(sharedFolders,0,2);files.Controls.Add(folderActions,0,3);files.Controls.Add(filesNotice,0,4);
-        files.SizeChanged+=delegate{filesHeading.MaximumSize=filesNotice.MaximumSize=new Size(Math.Max(100,files.ClientSize.Width),0);};
+        files.Controls.Add(filesHeading,0,0);files.Controls.Add(fileSharingMode,0,1);files.Controls.Add(sharedFolders,0,2);files.Controls.Add(folderActions,0,3);files.Controls.Add(filesNotice,0,4);files.Controls.Add(filesGuide,0,5);
+        files.SizeChanged+=delegate{filesHeading.MaximumSize=filesNotice.MaximumSize=filesGuide.MaximumSize=new Size(Math.Max(100,files.ClientSize.Width),0);};
         sharedFolders.FontChanged+=delegate{sharedFolders.Height=sharedFolders.ItemHeight*4+6;};
         rows.Controls.Add(files,0,7);rows.SetColumnSpan(files,2);
         rows.Paint += delegate(object sender,PaintEventArgs args) {

@@ -81,6 +81,40 @@ internal static class HostFileStoreRegression
         }
         Console.WriteLine("PASS: real Unicode directory notification, 64KiB bound, immediate cancel/close, native-handle reuse, once-only callbacks within three seconds.");
     }
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]static extern uint GetShortPathName(string path,StringBuilder shortPath,uint size);
+    static bool shortNameBlocked;
+    static NTStatus OpenFolder(INTFileStore store,string path,out object handle,CreateOptions extra=0)
+    {
+        FileStatus status;return store.CreateFile(out handle,out status,path,AccessMask.GENERIC_READ|AccessMask.DELETE,Attributes.Directory,ShareAccess.Read|ShareAccess.Write|ShareAccess.Delete,CreateDisposition.FILE_OPEN,CreateOptions.FILE_DIRECTORY_FILE|extra,null);
+    }
+    static void Denied(NTStatus status,object handle,INTFileStore store,string message){if(status==NTStatus.STATUS_SUCCESS)store.CloseFile(handle);Assert(status!=NTStatus.STATUS_SUCCESS,message);}
+    static void ProtectedCases(string fixtures)
+    {
+        string root=Path.Combine(fixtures,"protect-share"),outer=Path.Combine(root,"Внешняя папка"),program=Path.Combine(outer,"Program Folder With Long Name");
+        string scripts=Path.Combine(program,"scripts"),runner=Path.Combine(scripts,"run.py");Directory.CreateDirectory(scripts);File.WriteAllText(runner,"original code");
+        INTFileStore store=new ConfinedFileStore(root,new[]{program,Path.Combine(fixtures,"missing-protected")});object handle;int written;
+        string relative="Внешняя папка\\Program Folder With Long Name";
+        Denied(Open(store,relative+"\\scripts\\run.py",CreateDisposition.FILE_OPEN,out handle),handle,store,"Protected file opened through its own path");
+        Denied(Open(store,relative.ToUpperInvariant()+"\\SCRIPTS\\RUN.PY",CreateDisposition.FILE_OVERWRITE,out handle),handle,store,"Protected file opened through a case variant");
+        Denied(OpenFolder(store,relative,out handle),handle,store,"Protected folder itself opened for listing");
+        Denied(Open(store,relative+"\\new.txt",CreateDisposition.FILE_CREATE,out handle),handle,store,"New file created inside protected folder");
+        var name=new StringBuilder(1024);
+        if(GetShortPathName(program,name,1024)>0&&!String.Equals(Path.GetFileName(name.ToString()),Path.GetFileName(program),StringComparison.OrdinalIgnoreCase))
+            Denied(Open(store,"Внешняя папка\\"+Path.GetFileName(name.ToString())+"\\scripts\\run.py",CreateDisposition.FILE_OVERWRITE_IF,out handle),handle,store,"Protected folder reached through its 8.3 short name");
+        else{shortNameBlocked=true;Console.Error.WriteLine("BLOCKED short-name fixture: 8.3 names are disabled on this volume");}
+        Ok(Open(store,"outside-file.txt",CreateDisposition.FILE_CREATE,out handle),"Ordinary file beside protected folder");Ok(store.WriteFile(out written,handle,0,new byte[]{1,2,3}),"Ordinary write");
+        Assert(store.SetFileInformation(handle,new FileRenameInformationType2{FileName=relative+"\\scripts\\run.py",ReplaceIfExists=true})!=NTStatus.STATUS_SUCCESS,"File moved over protected content");
+        Assert(store.SetFileInformation(handle,new FileRenameInformationType2{FileName=relative+"\\moved.txt"})!=NTStatus.STATUS_SUCCESS,"File moved into protected folder");Ok(store.CloseFile(handle),"Ordinary close");
+        Ok(Open(store,"Внешняя папка\\рядом.txt",CreateDisposition.FILE_CREATE,out handle),"Ancestor of protected folder remains usable");Ok(store.CloseFile(handle),"Ancestor file close");
+        Ok(OpenFolder(store,"Внешняя папка",out handle),"Ancestor opens for listing");
+        Assert(store.SetFileInformation(handle,new FileRenameInformationType2{FileName="Подмена"})!=NTStatus.STATUS_SUCCESS,"Ancestor of protected folder renamed");
+        Assert(store.SetFileInformation(handle,new FileDispositionInformation{DeletePending=true})!=NTStatus.STATUS_SUCCESS,"Ancestor of protected folder marked for deletion");Ok(store.CloseFile(handle),"Ancestor close");
+        Denied(OpenFolder(store,"Внешняя папка",out handle,CreateOptions.FILE_DELETE_ON_CLOSE),handle,store,"Ancestor opened with delete-on-close");
+        Assert(Directory.Exists(outer)&&File.ReadAllText(runner)=="original code"&&!File.Exists(Path.Combine(program,"new.txt"))&&!File.Exists(Path.Combine(program,"moved.txt")),"Protected content changed");
+        bool refused=false;try{new ConfinedFileStore(program,new[]{program});}catch(IOException){refused=true;}Assert(refused,"A protected folder cannot become a share root");
+        refused=false;try{new ConfinedFileStore(scripts,new[]{program});}catch(IOException){refused=true;}Assert(refused,"A share inside a protected folder must be refused");
+        Console.WriteLine("PASS: protected program folder denied by identity (path, case"+(shortNameBlocked?"":", 8.3 name")+", create, move-in), ancestors usable but not renamed or deleted.");
+    }
     static void MainCases(string fixtures)
     {
         string root=Path.Combine(fixtures,"selected"),outside=Path.Combine(fixtures,"outside");Directory.CreateDirectory(root);Directory.CreateDirectory(outside);
@@ -136,7 +170,7 @@ internal static class HostFileStoreRegression
             bool notifyOnly=args.Length>0&&args[0]=="--notify-only";
             string fixtures=args.Length==2&&args[0]=="--fixtures"?Path.GetFullPath(args[1]):Path.Combine(home,"test-"+Guid.NewGuid().ToString("N"));
             Assert(String.Equals(Path.GetDirectoryName(fixtures),home,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(fixtures).StartsWith("test-",StringComparison.Ordinal),"Fixtures must be a direct test-* folder beside the isolated harness executable");
-            Directory.CreateDirectory(fixtures);Console.WriteLine("Fixtures: "+fixtures);NotifyCases(fixtures);if(notifyOnly)return 0;MainCases(fixtures);Console.WriteLine("PASS: confined native Unicode IO/rename/delete, traversal/root-swap denial, native sharing/byte locks/status.");
+            Directory.CreateDirectory(fixtures);Console.WriteLine("Fixtures: "+fixtures);NotifyCases(fixtures);if(notifyOnly)return 0;ProtectedCases(fixtures);MainCases(fixtures);Console.WriteLine("PASS: confined native Unicode IO/rename/delete, traversal/root-swap denial, native sharing/byte locks/status.");
             if(!hardlinkBlocked)Console.WriteLine("PASS: hardlink open/overwrite denial and concurrent replacement leaves outside unchanged.");
             if(!junctionBlocked)Console.WriteLine("PASS: junction ancestor/final denial and outside unchanged.");
             return junctionBlocked||hardlinkBlocked?2:0;

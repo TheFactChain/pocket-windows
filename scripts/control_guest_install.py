@@ -322,8 +322,13 @@ def read_file_receipt():
         while '\n' in files_buffer:
             line, files_buffer = files_buffer.split('\n', 1)
             receipt = file_sharing.validate_receipt(line.strip(), files_session.config)
-            state.update(status=('ready' if state['share_count'] else files_session.public['status'])
-                         if receipt['success'] else 'failed', receipt=receipt)
+            if receipt['code'] == file_sharing.LINK_REQUEST and files_session.network:
+                # The guest has a static, gateway-free address on this NIC; only now may Windows see it.
+                command('set_link', {'name': 'wcfilesnic', 'up': True})
+                state.update(status='connecting', link='up', receipt=receipt)
+            else:
+                state.update(status=('ready' if state['share_count'] else files_session.public['status'])
+                             if receipt['success'] else 'failed', receipt=receipt)
             save()
     except (OSError, ValueError, RuntimeError, TimeoutError, queue.Empty):
         files_buffer = ''
@@ -400,6 +405,14 @@ try:
             report['input_devices']=command('query-mice')
             report['blocks']=command('query-block');report['network_filters']=command('query-rx-filter')
             if args.network=='none':assert report['network_filters']==[],'Unexpected NIC'
+            if files_session is not None and files_session.network:
+                # Unplugged until the guest helper confirms static setup, so Windows never takes
+                # a DHCP default route or DNS from the restricted file network.
+                try:
+                    command('set_link',{'name':'wcfilesnic','up':False})
+                    report['host_files']['link']='down'
+                except (RuntimeError,TimeoutError,queue.Empty):
+                    report['host_files'].update(status='failed',code='LINK_CONTROL_FAILED',link='unknown')
             command('cont');report['status']='running';save()
             # Capture only on explicit request, so a user's local password entry is never polled.
             targets=iter([]);target=next(targets,None)

@@ -25,8 +25,10 @@ namespace WindowsClaude.GuestFiles
     public sealed class Config { public string Nonce,Username,Password;public readonly List<Share> Shares=new List<Share>(); }
     public sealed class Share { public string Name,Label,PreferredLetter; }
     public sealed class Mapping { public string Name,Letter; }
-    public sealed class NicState { public string Id,Mac;public bool Up,HasGateway,HasDns;public string[] Addresses=new string[0],Masks=new string[0]; }
-    public interface INicConfiguration { NicState[] Read();void Configure(string id); }
+    public sealed class NicState { public string Id,Mac;public bool Up,HasGateway,HasDns;public string[] Addresses=new string[0],Masks=new string[0],Gateways=new string[0],DnsServers=new string[0]; }
+    // Saved IPv4 setup: readable while the host keeps the cable unplugged, unlike live addresses.
+    public sealed class StaticConfig { public bool DhcpEnabled=true;public string[] Addresses=new string[0],Masks=new string[0],Gateways=new string[0],DnsServers=new string[0]; }
+    public interface INicConfiguration { NicState[] Read();StaticConfig ReadStatic(string id);void Configure(string id); }
     public sealed class Outcome
     {
         public string Code="OK";public bool NeedsShortcut;
@@ -134,12 +136,29 @@ namespace WindowsClaude.GuestFiles
         {
             return nic!=null&&nic.Mac=="525400770004"&&nic.Up&&!nic.HasGateway&&!nic.HasDns&&nic.Addresses!=null&&nic.Masks!=null&&nic.Addresses.Length==1&&nic.Masks.Length==1&&nic.Addresses[0]=="192.168.234.15"&&nic.Masks[0]=="255.255.255.0";
         }
+        static bool Only(string[] values,string expected){return values!=null&&values.Length==1&&values[0]==expected;}
+        static bool None(string[] values){return values==null||values.All(String.IsNullOrWhiteSpace);}
+        public static bool StaticReady(NicState nic,StaticConfig config)
+        {
+            return nic!=null&&nic.Mac=="525400770004"&&config!=null&&!config.DhcpEnabled&&Only(config.Addresses,"192.168.234.15")&&Only(config.Masks,"255.255.255.0")&&None(config.Gateways)&&None(config.DnsServers);
+        }
+        // Windows lists these unreachable site-local resolvers on any IPv6 adapter without its own DNS.
+        public static bool DefaultIpv6Dns(string address)
+        {
+            string value=(address??"").Split('%')[0];System.Net.IPAddress parsed;
+            return System.Net.IPAddress.TryParse(value,out parsed)&&new[]{"fec0:0:0:ffff::1","fec0:0:0:ffff::2","fec0:0:0:ffff::3"}.Any(item=>System.Net.IPAddress.Parse(item).Equals(parsed));
+        }
+        public static string Describe(NicState nic)
+        {
+            if(nic==null)return "адаптер папок ПК не найден";
+            return "связь "+(nic.Up?"есть":"нет")+"; IPv4 "+(nic.Addresses.Length==0?"нет":String.Join(", ",nic.Addresses))+"; шлюз "+(nic.Gateways.Length==0?"нет":String.Join(", ",nic.Gateways))+"; DNS "+(nic.DnsServers.Length==0?"нет":String.Join(", ",nic.DnsServers));
+        }
         public static void ConfigureNic(INicConfiguration network,bool elevated)
         {
             if(!elevated)throw new InvalidOperationException("ADMIN_TOKEN_REQUIRED");
             var matches=network.Read().Where(item=>item.Mac=="525400770004").ToArray();Guid id;
             if(matches.Length!=1||!Guid.TryParse(matches[0].Id,out id))throw new InvalidOperationException("ISOLATED_NIC_NOT_UNIQUE");
-            if(!NicReady(matches[0]))network.Configure(id.ToString("B"));
+            if(!StaticReady(matches[0],network.ReadStatic(id.ToString("B"))))network.Configure(id.ToString("B"));
         }
         public static void EnsureNic(Func<bool> ready,Func<int> configure,Action wait)
         {
@@ -259,9 +278,20 @@ namespace WindowsClaude.GuestFiles
                 return NetworkInterface.GetAllNetworkInterfaces().Select(adapter=>
                 {
                     var ip=adapter.GetIPProperties();var ipv4=ip.UnicastAddresses.Where(item=>item.Address.AddressFamily==AddressFamily.InterNetwork).ToArray();
-                    return new NicState{Id=adapter.Id,Mac=adapter.GetPhysicalAddress().ToString(),Up=adapter.OperationalStatus==OperationalStatus.Up,HasGateway=ip.GatewayAddresses.Count!=0,HasDns=ip.DnsAddresses.Count!=0,Addresses=ipv4.Select(item=>item.Address.ToString()).ToArray(),Masks=ipv4.Select(item=>item.IPv4Mask.ToString()).ToArray()};
+                    string[] gateways=ip.GatewayAddresses.Select(item=>item.Address.ToString()).ToArray(),dns=ip.DnsAddresses.Select(item=>item.ToString()).ToArray();
+                    return new NicState{Id=adapter.Id,Mac=adapter.GetPhysicalAddress().ToString(),Up=adapter.OperationalStatus==OperationalStatus.Up,HasGateway=gateways.Length!=0,HasDns=dns.Any(item=>!DefaultIpv6Dns(item)),Addresses=ipv4.Select(item=>item.Address.ToString()).ToArray(),Masks=ipv4.Select(item=>item.IPv4Mask.ToString()).ToArray(),Gateways=gateways,DnsServers=dns};
                 }).ToArray();
             }
+            public StaticConfig ReadStatic(string id)
+            {
+                Guid guid;if(!Guid.TryParse(id,out guid))throw new InvalidOperationException("ISOLATED_NIC_NOT_UNIQUE");
+                using(var key=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\"+guid.ToString("B"),false))
+                {
+                    if(key==null)return new StaticConfig();object dhcp=key.GetValue("EnableDHCP");
+                    return new StaticConfig{DhcpEnabled=!(dhcp is int)||(int)dhcp!=0,Addresses=Values(key,"IPAddress"),Masks=Values(key,"SubnetMask"),Gateways=Values(key,"DefaultGateway"),DnsServers=Values(key,"NameServer").SelectMany(item=>item.Split(new[]{',',' '},StringSplitOptions.RemoveEmptyEntries)).ToArray()};
+                }
+            }
+            static string[] Values(RegistryKey key,string name){object value=key.GetValue(name);return value is string[]?(string[])value:value is string?new[]{(string)value}:new string[0];}
             public void Configure(string id)
             {
                 RequireGuest();
@@ -277,9 +307,22 @@ namespace WindowsClaude.GuestFiles
             using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"netsh.exe"),arguments){UseShellExecute=false,CreateNoWindow=true}))
             {if(process==null)throw new InvalidOperationException("NIC_CONFIGURATION_FAILED");if(!process.WaitForExit(30000)){process.Kill();process.WaitForExit();throw new InvalidOperationException("NIC_CONFIGURATION_FAILED");}if(process.ExitCode!=0)throw new InvalidOperationException("NIC_CONFIGURATION_FAILED");}
         }
+        static string nicDetail;
         static bool Ready()
         {
-            var matches=new WindowsNic().Read().Where(item=>item.Mac=="525400770004").ToArray();return matches.Length==1&&NicReady(matches[0]);
+            var matches=new WindowsNic().Read().Where(item=>item.Mac=="525400770004").ToArray();
+            nicDetail=matches.Length==1?Describe(matches[0]):matches.Length==0?Describe(null):"найдено несколько адаптеров папок ПК";
+            return matches.Length==1&&NicReady(matches[0]);
+        }
+        static bool StaticReady()
+        {
+            var network=new WindowsNic();var matches=network.Read().Where(item=>item.Mac=="525400770004").ToArray();
+            return matches.Length==1&&StaticReady(matches[0],network.ReadStatic(matches[0].Id));
+        }
+        public static string LinkRequest(Config config){return Json.Serialize(new{schema=1,session_nonce=config.Nonce,success=false,code="NIC_STATIC",mappings=new object[0]});}
+        static void SendReceipt(string line)
+        {
+            using(var serial=new SerialPort("COM2",115200){WriteTimeout=3000,Encoding=new UTF8Encoding(false),NewLine="\n"}){serial.Open();serial.WriteLine(line);}
         }
         static int ElevateNic()
         {
@@ -361,6 +404,8 @@ namespace WindowsClaude.GuestFiles
                 case "UNLETTERED_CONNECTION_REMAINS":return "Осталось временное подключение без буквы. Выйди из учётной записи Windows и войди снова, чтобы очистить его.";
                 case "CREDENTIAL_CONFLICT":return "Windows уже подключена к ПК с другими учётными данными. Выйди из учётной записи Windows и войди снова. Чужие подключения не отключены.";
                 case "NIC_NOT_READY":return "Изолированная сеть папок ПК не готова. Проверь подключение в панели и повтори запуск RUNFILES.CMD.";
+                case "NIC_NOT_CONFIGURED":return "Отдельная сеть папок ПК ещё не настроена. Открой диск WCPFILES, запусти RUNFILES.CMD и подтверди запрос Windows.";
+                case "FILE_CHANNEL_FAILED":return "Не удалось сообщить панели о готовности сети папок ПК. Перезапусти Windows из панели и повтори RUNFILES.CMD.";
                 case "NIC_ADMIN_CANCELLED":return "Для настройки отдельной сети папок ПК нужно разрешение администратора. Повтори RUNFILES.CMD и подтверди запрос Windows.";
                 case "NIC_CONFIGURATION_FAILED":return "Не удалось настроить отдельный сетевой адаптер папок ПК. Повтори RUNFILES.CMD.";
                 case "EXPLORER_LABEL_FAILED":return "Папки ПК подключены, но Проводник не принял их понятные названия. Повтори RUNFILES.CMD.";
@@ -388,7 +433,13 @@ namespace WindowsClaude.GuestFiles
                     bool held;try{held=mutex.WaitOne(0);}catch(AbandonedMutexException){held=true;}if(!held)throw new InvalidOperationException("APPLY_ALREADY_RUNNING");
                     try
                     {
-                        if(args[0]=="--install"){if(config.Shares.Count>0)EnsureNic(Ready,ElevateNic,()=>Thread.Sleep(1000));Install();installed=true;}
+                        if(args[0]=="--install"){if(config.Shares.Count>0)EnsureNic(StaticReady,ElevateNic,()=>Thread.Sleep(1000));Install();installed=true;}
+                        if(config.Shares.Count>0)
+                        {
+                            // The host connects the file NIC only after this confirmation.
+                            if(!StaticReady())throw new InvalidOperationException("NIC_NOT_CONFIGURED");
+                            try{SendReceipt(LinkRequest(config));}catch(Exception){throw new InvalidOperationException("FILE_CHANNEL_FAILED");}
+                        }
                         string state=StatePath();List<Mapping> previous;
                         try{previous=File.Exists(state)?ParseOwned(ReadBounded(state)):new List<Mapping>();}catch(FormatException){throw new InvalidOperationException("OWN_RECEIPT_INVALID");}
                         outcome=ApplyMappings(config,previous,new WinNet(),Ready,()=>Thread.Sleep(1000),false,true,owned=>SaveOwned(state,owned));
@@ -399,8 +450,9 @@ namespace WindowsClaude.GuestFiles
                 }
             }
             catch(Exception error){outcome.Code=error is InvalidOperationException&&Matches(error.Message,"[A-Z_]{1,64}")?error.Message:error is FormatException?"CONFIG_INVALID":"APPLY_FAILED";}
-            bool sent=true;try{using(var serial=new SerialPort("COM2",115200){WriteTimeout=3000,Encoding=new UTF8Encoding(false),NewLine="\n"}){serial.Open();serial.WriteLine(Receipt(config,outcome));}}catch{sent=false;}
-            if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code),"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
+            bool sent=true;try{SendReceipt(Receipt(config,outcome));}catch{sent=false;}
+            string detail=outcome.Code=="NIC_NOT_READY"&&nicDetail!=null?Environment.NewLine+Environment.NewLine+"Состояние сети папок ПК: "+nicDetail+".":"";
+            if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code)+detail,"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
             return !sent?3:outcome.Success?0:2;
         }
         [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]struct NetResource {public uint Scope,Type,DisplayType,Usage;public string Local,Remote,Comment,Provider;}

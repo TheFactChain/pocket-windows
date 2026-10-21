@@ -22,11 +22,30 @@ internal static class HostFilesServerRegression
     }
     static void Assert(bool value,string message){if(!value)throw new Exception(message);}
     static void Success(NTStatus status,string message){Assert(status==NTStatus.STATUS_SUCCESS,message+": "+status);}
-    static string Input(string root)
+    static string Input(string root,params string[] protectedPaths)
     {
         return new JavaScriptSerializer().Serialize(new Dictionary<string,object>{{"schema",1},{"session_nonce",new string('a',32)},
             {"username","WCP_fixture"},{"password","fixture_password_01234567890123456789"},
-            {"shares",new[]{new Dictionary<string,object>{{"name","PC_TEST"},{"path",root}}}}});
+            {"shares",new[]{new Dictionary<string,object>{{"name","PC_TEST"},{"path",root}}}},{"protected",protectedPaths}});
+    }
+    static void ProtectedOverSmb(string directory)
+    {
+        string program=Path.Combine(directory,"program"),code=Path.Combine(program,"run.py");Directory.CreateDirectory(program);File.WriteAllText(code,"original");
+        using(var server=HostFilesServer.Start(Input(directory,program)))
+        {
+            var client=new Client();try
+            {
+                Assert(client.Open(server.Port),"Protected fixture connect");Success(client.Login("","WCP_fixture","fixture_password_01234567890123456789"),"Protected fixture login");
+                NTStatus status;var files=client.TreeConnect("PC_TEST",out status);Success(status,"Protected fixture tree");object handle;FileStatus state;
+                Assert(files.CreateFile(out handle,out state,"program\\run.py",AccessMask.GENERIC_WRITE,SMBLibrary.FileAttributes.Normal,ShareAccess.Read|ShareAccess.Write|ShareAccess.Delete,
+                    CreateDisposition.FILE_OVERWRITE,CreateOptions.FILE_NON_DIRECTORY_FILE,null)!=NTStatus.STATUS_SUCCESS,"Protected program file must be unreachable over SMB");
+                Success(files.CreateFile(out handle,out state,"beside.txt",AccessMask.GENERIC_WRITE,SMBLibrary.FileAttributes.Normal,ShareAccess.Read|ShareAccess.Write|ShareAccess.Delete,
+                    CreateDisposition.FILE_CREATE,CreateOptions.FILE_NON_DIRECTORY_FILE,null),"Ordinary file beside protected folder");Success(files.CloseFile(handle),"Ordinary close");
+                Success(files.Disconnect(),"Protected fixture disconnect");
+            }
+            finally{client.Disconnect();}
+        }
+        Assert(File.ReadAllText(code)=="original","Protected program file changed");
     }
     static void Reject(string value){bool failed=false;try{using(var server=HostFilesServer.Start(value)){} }catch(ArgumentException){failed=true;} Assert(failed,"Invalid session must be rejected before listening");}
     static void Authentication(int port,string username,string password)
@@ -76,6 +95,8 @@ internal static class HostFilesServerRegression
             string outside=Path.Combine(Path.GetDirectoryName(directory),"outside.txt");File.WriteAllText(outside,"unchanged");
             Reject("{}");Reject(Input(directory).Replace("\"schema\":1","\"schema\":true"));
             Reject(Input(directory).Replace("\"PC_TEST\"","\"../escape\""));
+            Reject(Input(directory).Replace(",\"protected\":[]",""));Reject(Input(directory,"relative\\program"));Reject(Input(directory,"\\\\server\\share"));
+            ProtectedOverSmb(Path.Combine(args[0],"protected-"+Guid.NewGuid().ToString("N")));
             using(var server=HostFilesServer.Start(Input(directory)))
             {
                 Assert(server.Port>=49152&&server.Port<=65535,"Server must use a high loopback port");
@@ -84,7 +105,7 @@ internal static class HostFilesServerRegression
                 Tamper(server.Port,directory,false);Tamper(server.Port,directory,true);
                 Assert(File.ReadAllText(outside)=="unchanged","Outside contents must remain unchanged");
             }
-            Console.WriteLine("PASS: loopback SMB2, NTLMv2, guest/wrong password denied, signed Unicode reads/writes over 1MB, flush, rename, share conflict, path confinement, reconnect.");return 0;
+            Console.WriteLine("PASS: loopback SMB2, NTLMv2, guest/wrong password denied, signed Unicode reads/writes over 1MB, flush, rename, share conflict, path confinement, protected program folder, reconnect.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }

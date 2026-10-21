@@ -25,9 +25,29 @@ internal static class GuestFilesRegression
     }
     sealed class FakeNic : INicConfiguration
     {
-        internal NicState[] States;internal int Reads,Changes;internal string ChangedId;
+        internal NicState[] States;internal StaticConfig Static=new StaticConfig();internal int Reads,Changes;internal string ChangedId,StaticId;
         public NicState[] Read(){Reads++;return States;}
+        public StaticConfig ReadStatic(string id){StaticId=id;return Static;}
         public void Configure(string id){Changes++;ChangedId=id;}
+    }
+    static StaticConfig Isolated(){return new StaticConfig{DhcpEnabled=false,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.255.0"},Gateways=new[]{""},DnsServers=new string[0]};}
+    static void StaticRegression()
+    {
+        var nic=new NicState{Id="{d4fd0ad7-e160-4146-903c-2337af221325}",Mac="525400770004",Up=false};
+        Assert(Program.StaticReady(nic,Isolated()),"Saved static no-gateway setup must count as ready while the host keeps the cable unplugged");
+        foreach(StaticConfig bad in new[]{new StaticConfig(),new StaticConfig{DhcpEnabled=true,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.255.0"}},
+            new StaticConfig{DhcpEnabled=false,Addresses=new[]{"192.168.234.16"},Masks=new[]{"255.255.255.0"}},new StaticConfig{DhcpEnabled=false,Addresses=new[]{"192.168.234.15","10.0.0.2"},Masks=new[]{"255.255.255.0","255.0.0.0"}},
+            new StaticConfig{DhcpEnabled=false,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.0.0"}},new StaticConfig{DhcpEnabled=false,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.255.0"},Gateways=new[]{"192.168.234.2"}},
+            new StaticConfig{DhcpEnabled=false,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.255.0"},DnsServers=new[]{"192.168.234.3"}},null})
+            Assert(!Program.StaticReady(nic,bad),"DHCP, gateway, DNS or foreign address must not unlock the file network link");
+        Assert(!Program.StaticReady(new NicState{Mac="525400770003"},Isolated()),"Only the exact file NIC may unlock its link");
+        Assert(Program.DefaultIpv6Dns("fec0:0:0:ffff::1%1")&&Program.DefaultIpv6Dns("fec0::ffff:0:0:0:3")&&!Program.DefaultIpv6Dns("192.168.234.3")&&!Program.DefaultIpv6Dns("fec0:0:0:ffff::4")&&!Program.DefaultIpv6Dns(null),"Only Windows' built-in unreachable IPv6 resolvers are ignorable");
+        Config config=Program.ParseConfig(ConfigText());string request=Program.LinkRequest(config);var value=Json.Deserialize<Dictionary<string,object>>(request);
+        Assert(value.Count==5&&(string)value["code"]=="NIC_STATIC"&&(bool)value["success"]==false&&(string)value["session_nonce"]==config.Nonce&&((System.Collections.ArrayList)value["mappings"]).Count==0,"Link request must be an exact receipt the host validates");
+        Assert(!request.Contains(config.Password)&&!request.Contains(config.Username),"Link request leaked credentials");
+        string described=Program.Describe(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15"},DnsServers=new[]{"fec0:0:0:ffff::1%1"}});
+        Assert(described.Contains("192.168.234.15")&&described.Contains("fec0:0:0:ffff::1%1")&&!described.Contains(config.Password),"NIC diagnostics must name the observed addresses");
+        Assert(Program.Describe(null).Length>0,"Missing NIC must still be described");
     }
     static void Refuse(Action action,string code)
     {
@@ -48,7 +68,7 @@ internal static class GuestFilesRegression
         string[] commands=Program.NicCommands(7,19);
         Assert(commands.SequenceEqual(new[]{"interface ipv4 set address name=7 source=static address=192.168.234.15 mask=255.255.255.0 gateway=none store=persistent","interface ipv4 set dnsservers name=7 source=static address=none register=none validate=no","interface ipv6 set dnsservers name=19 source=static address=none register=none validate=no"}),"Native command plan must target only selected per-family indices and remove DNS/default gateway on that NIC");
         Assert(Program.NicCommands(7,null).Length==2,"IPv4-only NIC cannot require an IPv6 command");Refuse(()=>Program.NicCommands(0,19),"ISOLATED_NIC_NOT_UNIQUE");Refuse(()=>Program.NicCommands(7,-1),"ISOLATED_NIC_NOT_UNIQUE");
-        isolated.Addresses=new[]{"192.168.234.15"};isolated.Masks=new[]{"255.255.255.0"};nic=new FakeNic{States=new[]{main,isolated}};Program.ConfigureNic(nic,true);Assert(nic.Changes==0,"Ready NIC must remain untouched");
+        nic=new FakeNic{States=new[]{main,isolated},Static=Isolated()};Program.ConfigureNic(nic,true);Assert(nic.Changes==0&&nic.StaticId==id,"NIC with the saved static setup must remain untouched, even while unplugged");
         int prompts=0,reads=0,waits=0;Program.EnsureNic(()=>true,()=>{prompts++;return 0;},()=>waits++);Assert(prompts==0&&waits==0,"Ready NIC must not request UAC");
         Program.EnsureNic(()=>++reads>2,()=>{prompts++;return 0;},()=>waits++);Assert(prompts==1&&reads==3&&waits==1,"Elevated completion must be followed by refreshed NIC state");
         Refuse(()=>Program.EnsureNic(()=>false,()=>1,()=>{throw new Exception("Failed child must not proceed");}),"NIC_CONFIGURATION_FAILED");
@@ -104,6 +124,7 @@ internal static class GuestFilesRegression
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.16"},Masks=new[]{"255.255.255.0"}}),"Bootstrap must require the exact static guest address, not any address in the subnet");
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15","192.168.234.16"},Masks=new[]{"255.255.255.0","255.255.255.0"}}),"Extra IPv4 addresses must fail exact bootstrap validation");
             BootstrapRegression();
+            StaticRegression();
             ExplorerLabelRegression();
             FakeNet net=new FakeNet();net.Used.Add("C");Outcome outcome=Apply(config,new List<Mapping>(),net);Assert(outcome.Success&&outcome.Mappings.Single().Letter=="Z"&&net.Adds==1,"Normal temporary mapping");
             var second=new Share{Name="PC_second",Label="second",PreferredLetter="Z"};config.Shares.Add(second);net=new FakeNet();outcome=Apply(config,new List<Mapping>(),net);Assert(outcome.Mappings[0].Letter=="Z"&&outcome.Mappings[1].Letter=="Y","Preferred-letter conflicts must pick a different free letter");config.Shares.RemoveAt(1);
@@ -124,7 +145,7 @@ internal static class GuestFilesRegression
             Assert(Program.ShortcutMatches(@"C:\Users\test\HostFilesGuest.exe","--apply",@"C:\Users\test\HostFilesGuest.exe","--apply")&&!Program.ShortcutMatches(@"C:\foreign.exe","--apply",@"C:\Users\test\HostFilesGuest.exe","--apply")&&!Program.ShortcutMatches(@"C:\Users\test\HostFilesGuest.exe","--install",@"C:\Users\test\HostFilesGuest.exe","--apply"),"Startup ownership must verify exact target and arguments");
             using(var bios=Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS",false))
             {Assert(bios==null||!Program.IsQemu(bios.GetValue("SystemManufacturer") as string),"This harness must run on the non-QEMU host, never execute native guest code in a guest");Assert(Program.Main(new[]{"--apply"})!=0&&Program.Main(new[]{"--configure-nic"})!=0&&Program.Main(new[]{"--install"})!=0,"Real host BIOS guard must refuse mapping, configuration and installation");}
-            Console.WriteLine("PASS: strict bounded config; exact NIC and configuration boundary; UAC/post-child verification; immutable upgrade and failure retention; letters/C/UNC; own cleanup/no-force; ordinary token; receipt redaction; real host guard. No native network/UAC/shortcut operations executed.");return 0;
+            Console.WriteLine("PASS: strict bounded config; exact NIC and configuration boundary; saved static setup unlocks the unplugged link; UAC/post-child verification; immutable upgrade and failure retention; letters/C/UNC; own cleanup/no-force; ordinary token; receipt redaction; real host guard. No native network/UAC/shortcut operations executed.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }

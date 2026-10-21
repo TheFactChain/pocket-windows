@@ -12,11 +12,15 @@ import re
 import secrets
 import subprocess
 import threading
+import uuid
 
 from file_snapshot import locked_read
 from profile_store import _pinned_directory, _plain
 
 DEFAULTS = {'schema': 1, 'mode': 'off', 'folders': []}
+# Guest receipt: its file NIC is static with no gateway/DNS, so the host may connect the link.
+LINK_REQUEST = 'NIC_STATIC'
+STARTUP_FOLDERS = ('B97D20BB-F46A-4C97-BA10-5E3608430854', '82A5EA35-D9CD-47C5-9629-E15D2F714E6E')
 
 
 def _unique(pairs):
@@ -86,7 +90,45 @@ def local_drives():
             if mask & (1 << index) and kernel.GetDriveTypeW(chr(65 + index) + ':\\') in (2, 3)]
 
 
-def resolve_shares(settings):
+def _known_folder(identifier):
+    shell = ctypes.WinDLL('shell32', use_last_error=True)
+    ole = ctypes.WinDLL('ole32')
+    shell.SHGetKnownFolderPath.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(ctypes.c_void_p)]
+    shell.SHGetKnownFolderPath.restype = ctypes.c_long
+    ole.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    guid = ctypes.create_string_buffer(uuid.UUID(identifier).bytes_le, 16)
+    pointer = ctypes.c_void_p()
+    try:
+        if shell.SHGetKnownFolderPath(guid, 0, None, ctypes.byref(pointer)) != 0:
+            return None
+        return Path(ctypes.wstring_at(pointer))
+    finally:
+        ole.CoTaskMemFree(pointer)
+
+
+def protected_paths(root):
+    """Real folders the guest must never reach, even with every drive shared for writing:
+    this program (the host runs its scripts), its private session state and autostart."""
+    from session_carrier import _local_app_data
+    candidates = [Path(root), _local_app_data() / 'WindowsClaudePortable',
+                  *(_known_folder(identifier) for identifier in STARTUP_FOLDERS)]
+    result = []
+    for path in candidates:
+        try:
+            path = str(path.resolve(strict=True)) if path is not None else ''
+        except OSError:
+            continue
+        if re.match(r'^[A-Za-z]:\\', path) and path.casefold() not in (item.casefold() for item in result):
+            result.append(path)
+    return result
+
+
+def _inside(path, folder):
+    path, folder = ntpath.normcase(ntpath.normpath(path)), ntpath.normcase(ntpath.normpath(folder))
+    return path == folder or path.startswith(folder.rstrip('\\') + '\\')
+
+
+def resolve_shares(settings, protected=()):
     settings = validate_settings(settings)
     if settings['mode'] == 'off':
         return [], []
@@ -99,8 +141,13 @@ def resolve_shares(settings):
             with _pinned_directory(Path(path), create=False):
                 if not Path(path).is_dir():
                     raise ValueError('Not a local directory')
+            real = str(Path(path).resolve(strict=True))
         except (OSError, ValueError, RuntimeError):
             unavailable.append({'label': label, 'status': 'unavailable'})
+            continue
+        if any(_inside(real, folder) or _inside(path, folder) for folder in protected):
+            # The server refuses these too; reporting them keeps the reason visible.
+            unavailable.append({'label': label, 'status': 'protected'})
             continue
         name = 'PC_' + path[0].upper() if drive else 'PC_' + hashlib.sha256(path.casefold().encode('utf-8')).hexdigest()[:12]
         shares.append({'name': name, 'path': path, 'label': label, 'preferred_letter': path[0].upper() if drive else ''})
@@ -145,14 +192,15 @@ class Session:
     """The controller keeps this object, stdin and private media across QEMU reboots."""
     def __init__(self, root, nonce, *, base_directory=None):
         self.stack, self.process, self.medium = ExitStack(), None, None
-        self.arguments, self.config = [], None
+        self.arguments, self.config, self.network = [], None, False
         self.public = {'status': 'off', 'share_count': 0, 'unavailable': []}
         try:
             from file_share_carrier import Medium
             if re.fullmatch('[a-f0-9]{32}', nonce) is None:
                 raise ValueError('Invalid Windows file session nonce')
             settings = load_settings(root)
-            shares, unavailable = resolve_shares(settings)
+            protected = protected_paths(root) if settings['mode'] != 'off' else []
+            shares, unavailable = resolve_shares(settings, protected)
             self.public.update(status='pending' if shares else 'off' if settings['mode'] == 'off' else 'unavailable',
                                share_count=len(shares), unavailable=unavailable)
             self.config = {'schema': 1, 'session_nonce': nonce, 'username': 'WCP_' + secrets.token_hex(12),
@@ -170,8 +218,15 @@ class Session:
                     stream = self.stack.enter_context(locked_read(path))
                     if hashlib.file_digest(stream, 'sha256').hexdigest() != records[name]['sha256']:
                         raise ValueError('File-sharing component integrity check failed')
+                _plain(helper)
+                with locked_read(helper) as source:
+                    helper_bytes = source.read(2 * 1024 ** 2 + 1)
+                # Created before the server starts, so its private base folder exists to be protected.
+                self.medium = Medium(self.config, helper_bytes, base_directory=base_directory)
             if shares:
-                request = dict(self.config, shares=[{key: item[key] for key in ('name', 'path')} for item in shares])
+                protected = protected_paths(root)
+                request = dict(self.config, shares=[{key: item[key] for key in ('name', 'path')} for item in shares],
+                               protected=protected)
                 request_bytes = json.dumps(request, ensure_ascii=True, separators=(',', ':')).encode('ascii')
                 if len(request_bytes) > 65536:
                     raise ValueError('Список доступных папок слишком велик.')
@@ -194,12 +249,9 @@ class Session:
                         or ready['share_count'] != len(shares)):
                     raise ValueError('File-sharing helper did not confirm this session')
                 self.arguments += network_arguments(ready['port'])
+                self.network = True
             # The empty config also removes mappings from an earlier enabled session.
-            if shares or helper.exists():
-                _plain(helper)
-                with locked_read(helper) as source:
-                    helper_bytes = source.read(2 * 1024 ** 2 + 1)
-                self.medium = Medium(self.config, helper_bytes, base_directory=base_directory)
+            if self.medium is not None:
                 self.arguments += self.stack.enter_context(self.medium.hold())
                 self.arguments += ['-chardev', 'ringbuf,id=wcfilesreceipt,size=32768',
                                    '-device', 'isa-serial,index=1,chardev=wcfilesreceipt']

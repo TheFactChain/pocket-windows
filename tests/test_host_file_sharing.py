@@ -81,6 +81,34 @@ class FileSharingTests(unittest.TestCase):
             self.assertNotIn('path', unavailable[0])
             self.assertEqual(files.resolve_shares({'mode': 'off', 'folders': [str(root)]}), ([], []))
 
+    def test_program_state_and_startup_are_protected_and_reported(self):
+        files = self.module()
+        with tempfile.TemporaryDirectory(prefix='защита ') as temporary:
+            root = Path(temporary) / 'Моя версия'
+            (root / 'scripts').mkdir(parents=True)
+            beside = Path(temporary) / 'рядом'
+            beside.mkdir()
+            protected = files.protected_paths(root)
+            self.assertEqual(protected[0], str(root.resolve()))
+            startup = files._known_folder(files.STARTUP_FOLDERS[0])
+            if startup is not None and startup.exists():
+                self.assertIn(str(startup.resolve()).casefold(), [item.casefold() for item in protected])
+            self.assertTrue(all(len(item) > 3 and item[1:3] == ':\\' for item in protected), 'Drive roots and relative paths must never be protected entries')
+            shares, unavailable = files.resolve_shares(
+                {'mode': 'selected', 'folders': [str(root / 'scripts'), str(root), str(beside)]}, protected)
+            self.assertEqual([item['path'] for item in shares], [str(beside)])
+            self.assertEqual([item['status'] for item in unavailable], ['protected', 'protected'])
+            self.assertTrue(all('path' not in item for item in unavailable))
+
+    def test_static_link_request_is_an_exact_receipt_without_mappings(self):
+        files = self.module()
+        config = {'schema': 1, 'session_nonce': 'a' * 32, 'shares': [{'name': 'PC_test', 'label': 'ПК', 'preferred_letter': ''}]}
+        request = {'schema': 1, 'session_nonce': 'a' * 32, 'success': False, 'code': files.LINK_REQUEST, 'mappings': []}
+        self.assertEqual(files.validate_receipt(json.dumps(request), config)['code'], 'NIC_STATIC')
+        for patch in ({'success': True}, {'session_nonce': 'b' * 32}):
+            with self.subTest(patch=patch), self.assertRaises(ValueError):
+                files.validate_receipt(json.dumps(dict(request, **patch)), config)
+
     def test_file_network_is_restricted_and_has_one_loopback_forward(self):
         files = self.module()
         arguments = files.network_arguments(54321)

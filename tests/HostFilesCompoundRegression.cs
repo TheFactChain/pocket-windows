@@ -79,7 +79,7 @@ internal static class HostFilesCompoundRegression
         {
             if(args.Length>1&&args[1]=="--auth-only"){AuthenticationCompound();return 0;}
             string root=Path.Combine(args[0],"compound-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
-            string input=new JavaScriptSerializer().Serialize(new{schema=1,session_nonce=new string('a',32),username="WCP_fixture",password="fixture_password_01234567890123456789",shares=new[]{new{name="PC_TEST",path=root}}});
+            string input=new JavaScriptSerializer().Serialize(new{schema=1,session_nonce=new string('a',32),username="WCP_fixture",password="fixture_password_01234567890123456789",shares=new[]{new{name="PC_TEST",path=root}},@protected=new string[0]});
             using(var server=HostFilesServer.Start(input)){Related(server.Port,root,true);Related(server.Port,root,false);}
             AuthenticationCompound();return 0;
         }
