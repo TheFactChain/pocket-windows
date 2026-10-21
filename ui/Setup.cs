@@ -3,6 +3,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -299,22 +300,39 @@ internal static class SetupInstaller
 internal sealed class PortableSetup : Form
 {
     readonly TextBox folder=new TextBox { Dock=DockStyle.Top };
-    readonly Label status=new Label { Dock=DockStyle.Fill, AutoSize=false, Padding=new Padding(0,12,0,0) };
-    readonly Button install=new Button { Text="Установить", AutoSize=true };
-    readonly Button browse=new Button { Text="Выбрать папку", AutoSize=true };
-    readonly Button cancel=new Button { Text="Закрыть", AutoSize=true };
+    readonly Label status=new Label { Dock=DockStyle.Top, AutoSize=true, ForeColor=NativeStyle.Ink };
+    readonly Button install=new RoundedButton { Text="Установить", Primary=true, AutoSize=true, MinimumSize=new Size(120,44), Padding=new Padding(16,10,16,10) };
+    readonly Button browse=new RoundedButton { Text="Выбрать папку", AutoSize=true, MinimumSize=new Size(120,44), Padding=new Padding(16,10,16,10) };
+    readonly Button cancel=new RoundedButton { Text="Закрыть", AutoSize=true, MinimumSize=new Size(100,44), Padding=new Padding(16,10,16,10) };
     readonly CheckBox shortcut=new CheckBox { Text="Ярлык на рабочем столе", Checked=true, AutoSize=true };
     CancellationTokenSource cancellation;
     PortableSetup()
     {
-        Text="Установка Windows Claude Portable"; Width=650; Height=280; MinimumSize=Size;
-        StartPosition=FormStartPosition.CenterScreen; Padding=new Padding(20);
+        AutoScaleDimensions=new SizeF(96,96); AutoScaleMode=AutoScaleMode.Dpi;
+        Font=new Font("Segoe UI",10); BackColor=NativeStyle.Background; ForeColor=NativeStyle.Ink;
+        Text="Установка Windows Claude Portable"; ClientSize=new Size(740,480); MinimumSize=new Size(700,460);
+        StartPosition=FormStartPosition.CenterScreen; Padding=new Padding(24);
         folder.Text=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Windows Claude Portable");
-        var buttons=new FlowLayoutPanel { Dock=DockStyle.Bottom, Height=42 };
-        buttons.Controls.AddRange(new Control[] {browse,install,cancel});
-        var top=new Label { Text="Новая папка установки (существующие папки не заменяются):", Dock=DockStyle.Top, Height=28 };
-        shortcut.Dock=DockStyle.Bottom;
-        Controls.Add(status); Controls.Add(shortcut); Controls.Add(folder); Controls.Add(top); Controls.Add(buttons);
+        var layout=new TableLayoutPanel { Dock=DockStyle.Fill, ColumnCount=1, RowCount=4, Margin=Padding.Empty };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var title=new Label { Text="Установка Windows Claude Portable", AutoSize=true, ForeColor=NativeStyle.Ink, Margin=new Padding(0,0,0,16) };
+        var card=new RoundedFlowPanel { Dock=DockStyle.Fill, AutoSize=true, AutoSizeMode=AutoSizeMode.GrowAndShrink, FlowDirection=FlowDirection.TopDown, WrapContents=false, BackColor=Color.White, Padding=new Padding(16), Margin=new Padding(0,0,0,16) };
+        var top=new Label { Text="Новая папка установки (существующие папки не заменяются):", AutoSize=true, ForeColor=NativeStyle.Ink, Margin=new Padding(0,0,0,10) };
+        folder.Dock=DockStyle.None; folder.Margin=new Padding(0,0,0,12);
+        shortcut.ForeColor=NativeStyle.Ink; shortcut.Margin=Padding.Empty;
+        card.Controls.AddRange(new Control[] {top,folder,shortcut});
+        card.SizeChanged+=delegate { int width=Math.Max(1,card.ClientSize.Width-card.Padding.Horizontal); top.MaximumSize=new Size(width,0); folder.Width=width; shortcut.MaximumSize=new Size(width,0); };
+        var progress=new RoundedPanel { Dock=DockStyle.Fill, BackColor=Color.White, AutoScroll=true, Padding=new Padding(16), Margin=new Padding(0,0,0,16), MinimumSize=new Size(0,100) };
+        progress.Controls.Add(status);
+        progress.SizeChanged+=delegate { status.MaximumSize=new Size(Math.Max(1,progress.ClientSize.Width-progress.Padding.Horizontal-SystemInformation.VerticalScrollBarWidth),0); };
+        var buttons=new FlowLayoutPanel { Dock=DockStyle.Fill, AutoSize=true, FlowDirection=FlowDirection.RightToLeft, WrapContents=false, Margin=Padding.Empty };
+        buttons.Controls.AddRange(new Control[] {cancel,install,browse});
+        layout.Controls.Add(title,0,0); layout.Controls.Add(card,0,1); layout.Controls.Add(progress,0,2); layout.Controls.Add(buttons,0,3);
+        Controls.Add(layout);
         status.Text="Рядом с Setup.exe должны находиться Windows-Claude.zip и Windows-Claude.zip.sha256. Архив распакуется в новую папку.";
         browse.Click+=delegate { using(var picker=new FolderBrowserDialog { Description="Выбери родительскую папку; внутри будет создана Windows Claude Portable" }) if(picker.ShowDialog()==DialogResult.OK) folder.Text=Path.Combine(picker.SelectedPath,"Windows Claude Portable"); };
         cancel.Click+=delegate { if(cancellation!=null) { cancellation.Cancel(); status.Text="Отмена: ожидаю завершения текущего чтения…"; } else Close(); };

@@ -20,6 +20,7 @@ internal sealed partial class MainForm
             operationResult = result; operation.Text = Bridge.Message(result);
             if (!Bridge.Ok(result))
             {
+                if (action == "get-profile-view" || action == "list-profiles") ConnectionPage.RestoreLoadedSelection();
                 ConnectionPage.Error.Text = Bridge.Message(result);
                 if (Flag(result,"outcome_unknown")) TrackUnknownOutcome(result);
                 return result;
@@ -37,7 +38,7 @@ internal sealed partial class MainForm
                     Dictionary<string,object> view = await run("get-profile-view",new Dictionary<string,object>{{"profile_id",id}});
                     if (!CanUpdate) return result;
                     if (Bridge.Ok(view)) ConnectionPage.LoadView((Dictionary<string,object>)view["profile"]);
-                    else ConnectionPage.Error.Text = Bridge.Message(view);
+                    else { ConnectionPage.RestoreLoadedSelection(); ConnectionPage.Error.Text = Bridge.Message(view); }
                 }
             }
             else if (action == "save-profile" || action == "select-profile" || action == "import-profile")
@@ -56,7 +57,10 @@ internal sealed partial class MainForm
                 return result;
             }
             else if (action == "list-profiles" || action == "get-profile-view")
+            {
+                if (CanUpdate) ConnectionPage.RestoreLoadedSelection();
                 result = Bridge.Failure("Не удалось загрузить подключения. Проверь компоненты и повтори.");
+            }
             else
                 result = Bridge.Unknown("Исход действия с подключением неизвестен. Сначала выполни диагностику и проверь список профилей.","profile_operation_failed");
             if (CanUpdate) { operationResult = result; operation.Text = Bridge.Message(result); if (Flag(result,"outcome_unknown")) TrackUnknownOutcome(result); ConnectionPage.Error.Text = Bridge.Message(result); }
@@ -145,18 +149,26 @@ internal sealed partial class MainForm
 internal sealed class ProfileImportDialog : Form
 {
     private readonly TextBox uri = new TextBox { Dock = DockStyle.Fill, UseSystemPasswordChar = true, AccessibleName = "Ссылка подключения" };
-    private readonly Label error = new Label { AutoSize = true, ForeColor = Color.Firebrick };
+    private readonly Label error = new Label { AutoSize = true, Visible = false, ForeColor = Color.FromArgb(175,59,48) };
     internal Dictionary<string,object> JsonProfile;
     internal string UriText { get { return uri.Text; } }
     internal ProfileImportDialog()
     {
-        Text = "Импорт подключения"; Font = new Font("Segoe UI",10); BackColor = NativeStyle.Background; ClientSize = new Size(560,230);
+        Text = "Импорт подключения"; Font = new Font("Segoe UI",10); BackColor = NativeStyle.Background; ForeColor = NativeStyle.Ink;
+        AutoScaleDimensions = new SizeF(96,96); AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(560,230); MinimumSize = Size; AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink;
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; StartPosition = FormStartPosition.CenterParent;
-        TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 4 };
+        error.TextChanged += delegate { error.Visible = !String.IsNullOrEmpty(error.Text); };
+        TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(20), ColumnCount = 1, RowCount = 4 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        root.Controls.Add(new Label { Text = "Вставь ссылку Hysteria2, SOCKS5, HTTP или HTTPS. Она может содержать пароль и поэтому скрыта.", AutoSize = true, Dock = DockStyle.Fill },0,0);
-        root.Controls.Add(uri,0,1); root.Controls.Add(error,0,2);
-        FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false };
+        for (int row=0;row<4;row++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        Label help = new Label { Text = "Вставь ссылку Hysteria2, SOCKS5, HTTP или HTTPS. Она может содержать пароль и поэтому скрыта.", AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,0,0,14) };
+        root.Controls.Add(help,0,0);
+        uri.Margin = Padding.Empty; uri.Dock = DockStyle.Top; uri.BorderStyle = BorderStyle.None; uri.BackColor = Color.White;
+        RoundedPanel input = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.White, Padding = new Padding(12,10,12,10), Margin = new Padding(0,0,0,8) };
+        input.Controls.Add(uri); error.Margin = new Padding(0,0,0,8); error.Dock = DockStyle.Top;
+        root.Controls.Add(input,0,1); root.Controls.Add(error,0,2);
+        FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, FlowDirection = FlowDirection.RightToLeft, Margin = new Padding(0,8,0,0) };
         Button import = new RoundedButton { Text = "Импортировать", Primary = true, AutoSize = true, Padding = new Padding(14,9,14,9) };
         Button json = new RoundedButton { Text = "Открыть JSON", AutoSize = true, Padding = new Padding(14,9,14,9) };
         Button cancel = new RoundedButton { Text = "Отмена", DialogResult = DialogResult.Cancel, AutoSize = true, Padding = new Padding(14,9,14,9) };
@@ -175,6 +187,8 @@ internal sealed class ProfileImportDialog : Form
                 catch (Exception) { error.Text = "Не удалось прочитать профиль JSON. Проверь формат и доступ к файлу."; }
             }
         };
+        root.SizeChanged += delegate { help.MaximumSize = error.MaximumSize = new Size(Math.Max(100,root.ClientSize.Width-root.Padding.Horizontal),0); };
+        help.MaximumSize = error.MaximumSize = new Size(ClientSize.Width-root.Padding.Horizontal,0);
         actions.Controls.Add(import);actions.Controls.Add(json);actions.Controls.Add(cancel);root.Controls.Add(actions,0,3);Controls.Add(root);AcceptButton = import;CancelButton = cancel;
     }
 }
@@ -185,14 +199,22 @@ internal sealed class ProfileExportDialog : Form
     internal bool IncludeSecrets { get { return secrets.Checked; } }
     internal ProfileExportDialog()
     {
-        Text = "Экспорт подключения"; Font = new Font("Segoe UI",10); BackColor = NativeStyle.Background; ClientSize = new Size(510,220);
+        Text = "Экспорт подключения"; Font = new Font("Segoe UI",10); BackColor = NativeStyle.Background; ForeColor = NativeStyle.Ink;
+        AutoScaleDimensions = new SizeF(96,96); AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(510,220); MinimumSize = Size; AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink;
         FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; StartPosition = FormStartPosition.CenterParent;
-        TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 3 };
+        TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(20), ColumnCount = 1, RowCount = 3 };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        for (int row=0;row<3;row++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        secrets.Margin = new Padding(0,0,0,12);
         root.Controls.Add(secrets,0,0);
-        root.Controls.Add(new Label { Text = "По умолчанию сохраняются только настройки. Если включить пароли, они попадут в JSON открытым текстом. Передавай такой файл только доверенному получателю.", AutoSize = true, Dock = DockStyle.Fill, ForeColor = NativeStyle.Muted },0,1);
-        FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
+        Label help = new Label { Text = "По умолчанию сохраняются только настройки. Если включить пароли, они попадут в JSON открытым текстом. Передавай такой файл только доверенному получателю.", AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = Padding.Empty };
+        root.Controls.Add(help,0,1);
+        FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, FlowDirection = FlowDirection.RightToLeft, Margin = new Padding(0,20,0,0) };
         Button save = new RoundedButton { Text = "Выбрать файл", Primary = true, AutoSize = true, Padding = new Padding(14,9,14,9), DialogResult = DialogResult.OK };
         Button cancel = new RoundedButton { Text = "Отмена", AutoSize = true, Padding = new Padding(14,9,14,9), DialogResult = DialogResult.Cancel };
+        root.SizeChanged += delegate { help.MaximumSize = new Size(Math.Max(100,root.ClientSize.Width-root.Padding.Horizontal),0); };
+        help.MaximumSize = new Size(ClientSize.Width-root.Padding.Horizontal,0);
         actions.Controls.Add(save);actions.Controls.Add(cancel);root.Controls.Add(actions,0,2);Controls.Add(root);AcceptButton = save;CancelButton = cancel;
     }
 }

@@ -14,7 +14,8 @@ $arguments = @('/nologo', '/define:SETUP', '/target:winexe', '/platform:x64',
     '/reference:System.IO.Compression.FileSystem.dll',
     ('/win32manifest:' + (Join-Path $root 'ui\app.manifest')),
     ('/win32icon:' + (Join-Path $root 'ui\AppIcon.ico')),
-    ('/out:' + $exe), (Join-Path $root 'ui\Setup.cs'))
+    ('/out:' + $exe), (Join-Path $root 'ui\Setup.cs'),
+    (Join-Path $root 'ui\NativeStyle.cs'), (Join-Path $root 'ui\Icons.cs'))
 & $compiler @arguments
 if ($LASTEXITCODE -ne 0) { throw 'Setup compilation failed.' }
 $file = Get-Item -LiteralPath $exe

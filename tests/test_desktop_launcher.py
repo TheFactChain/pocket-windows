@@ -15,7 +15,7 @@ class DesktopLauncherTests(unittest.TestCase):
     def test_reported_visual_regressions(self):
         compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
         for name in ('DesktopShellRegression', 'SettingsLayoutRegression', 'ConnectionLayoutRegression',
-                     'DesktopPanelLifecycleRegression'):
+                     'DesktopPanelLifecycleRegression', 'ProfileDialogsRegression'):
             with self.subTest(harness=name), tempfile.TemporaryDirectory(prefix='desktop-reported-') as temporary:
                 executable = Path(temporary) / (name + '.exe')
                 command = [str(compiler), '/nologo', '/target:exe', '/platform:x64', '/main:' + name,
@@ -28,6 +28,23 @@ class DesktopLauncherTests(unittest.TestCase):
                 result = subprocess.run([str(executable), temporary], capture_output=True, timeout=45,
                                         creationflags=subprocess.CREATE_NO_WINDOW)
                 self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
+
+    def test_setup_uses_the_shared_style_and_readable_layout(self):
+        compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+        with tempfile.TemporaryDirectory(prefix='setup-layout-') as temporary:
+            executable = Path(temporary) / 'SetupLayoutRegression.exe'
+            command = [str(compiler), '/nologo', '/define:SETUP', '/target:exe', '/platform:x64',
+                       '/main:SetupLayoutRegression', '/reference:System.Windows.Forms.dll',
+                       '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll',
+                       '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
+                       '/win32manifest:' + str(ROOT / 'ui/app.manifest'), '/out:' + str(executable),
+                       *[str(ROOT / 'ui' / name) for name in ('Setup.cs', 'NativeStyle.cs', 'Icons.cs')],
+                       str(ROOT / 'tests/SetupLayoutRegression.cs')]
+            build = subprocess.run(command, capture_output=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
+            result = subprocess.run([str(executable), temporary], capture_output=True, timeout=45,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
 
     def test_lifecycle_wiring_and_timeout_budgets(self):
         compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'

@@ -27,6 +27,8 @@ internal sealed class ConnectionEditor : UserControl
     private bool busy;
     private bool needsCredentials;
     private bool hadCredentials;
+    private string loadedProtocol;
+    private string loadedObfuscation;
     private bool testAvailable;
     private readonly CheckBox advanced = new CheckBox { Text = "Дополнительные параметры", AutoSize = true, ForeColor = NativeStyle.Accent, Margin = new Padding(0,10,0,4) };
     private readonly Label intro = new Label { Text = "Импортируй ссылку поставщика или введи адрес, порт и пароль вручную.", AutoSize = true, Dock = DockStyle.Fill, ForeColor = NativeStyle.Muted, Margin = new Padding(0,0,0,12) };
@@ -116,6 +118,9 @@ internal sealed class ConnectionEditor : UserControl
     private void UpdateRows()
     {
         bool hy=Protocol.SelectedIndex==0;bool tls=hy||Protocol.SelectedIndex==3;
+        bool preserve=CanReuseCredentials;
+        ((Label)rows["auth"][0]).Text="Пароль Hysteria2"+(preserve?"\nПусто — прежний пароль":"");
+        ((Label)rows["password"][0]).Text="Пароль прокси"+(preserve?"\nПусто — прежний пароль":"");
         SetRowVisibility("advanced",tls);SetRowVisibility("tls_server_name",tls&&advanced.Checked);
         SetRowVisibility("obfs",hy&&advanced.Checked);SetRowVisibility("auth",hy);
         SetRowVisibility("obfs_password",hy&&advanced.Checked&&Obfuscation.Checked);SetRowVisibility("proxy_auth",!hy);
@@ -147,9 +152,27 @@ internal sealed class ConnectionEditor : UserControl
         binding=false;
     }
     internal string PickedId {get{return Profiles.SelectedItem is Entry?Text(((Entry)Profiles.SelectedItem).Value,"profile_id",""):null;}}
+    internal void RestoreLoadedSelection()
+    {
+        binding=true;
+        try
+        {
+            Profiles.SelectedIndex=-1;
+            for(int index=0;index<Profiles.Items.Count;index++)
+                if(Text(((Entry)Profiles.Items[index]).Value,"profile_id","")==ProfileId){Profiles.SelectedIndex=index;break;}
+        }
+        finally{binding=false;}
+    }
+    private bool CanReuseCredentials
+    {
+        get{return ProfileId!=null&&hadCredentials&&!needsCredentials&&Protocol.SelectedIndex>=0
+            &&loadedProtocol==new[]{"hysteria2","socks5","http","https"}[Protocol.SelectedIndex]
+            &&loadedObfuscation==(Protocol.SelectedIndex==0&&Obfuscation.Checked?"salamander":"");}
+    }
     internal void LoadView(Dictionary<string,object> view)
     {
         ProfileId=Text(view,"profile_id",null);needsCredentials=Flag(view,"needs_credentials");hadCredentials=Flag(view,"auth_present");ProxyAuth.Checked=hadCredentials;
+        loadedProtocol=Text(view,"protocol","hysteria2");loadedObfuscation=Text(view,"obfs","");
         foreach(TextBox field in Fields.Values)field.Clear();
         foreach(string key in new[]{"name","host","port","tls_server_name"})Fields[key].Text=Text(view,key,"");
         string protocol=Text(view,"protocol","hysteria2");Protocol.SelectedIndex=Array.IndexOf(new[]{"hysteria2","socks5","http","https"},protocol);if(Protocol.SelectedIndex<0)Protocol.SelectedIndex=0;
@@ -158,20 +181,18 @@ internal sealed class ConnectionEditor : UserControl
         State.Text=needsCredentials?"Нужно ввести пароль заново для этого пользователя Windows.":Flag(view,"selected")?"Выбрано для следующего запуска. Текущий сеанс не изменён.":"Сохранено. Профиль ещё не выбран для запуска.";
         State.AccessibleName=Text(view,"name","Профиль");
         State.Text+=Flag(view,"verified")?" Проверка подключения пройдена.":" Сеть не проверена.";
-        bool preserve=Flag(view,"auth_present")&&!needsCredentials;
-        ((Label)rows["auth"][0]).Text="Пароль Hysteria2"+(preserve?"\nПусто — прежний пароль":"");
-        ((Label)rows["password"][0]).Text="Пароль прокси"+(preserve?"\nПусто — прежний пароль":"");
         Error.Text="";UpdateRows();SetBusy(busy);
     }
     internal void LoadImported(Dictionary<string,object> profile)
     {
         LoadView(profile);ProfileId=null;Dictionary<string,object> credentials=profile.ContainsKey("credentials")?profile["credentials"] as Dictionary<string,object>:null;
         if(credentials!=null)foreach(string key in new[]{"auth","obfs_password","username","password"})if(credentials.ContainsKey(key))Fields[key].Text=Convert.ToString(credentials[key]);
-        needsCredentials=Protocol.SelectedIndex==0;State.Text="Импорт заполнен в редакторе. Проверь поля, введи пароль и сохрани.";
+        needsCredentials=Protocol.SelectedIndex==0;RestoreLoadedSelection();UpdateRows();SetBusy(busy);State.Text="Импорт заполнен в редакторе. Проверь поля, введи пароль и сохрани.";
     }
     internal bool TrySaveRequest(out Dictionary<string,object> request)
     {
         request=null;int port;
+        if(Protocol.SelectedIndex<0||Protocol.SelectedIndex>=4){Error.Text="Выбери тип подключения.";return false;}
         if(String.IsNullOrWhiteSpace(Fields["name"].Text)||String.IsNullOrWhiteSpace(Fields["host"].Text)){Error.Text="Заполни название и адрес сервера.";return false;}
         if(!Int32.TryParse(Fields["port"].Text,NumberStyles.None,CultureInfo.InvariantCulture,out port)||port<1||port>65535){Error.Text="Порт должен быть целым числом от 1 до 65535.";return false;}
         bool hy=Protocol.SelectedIndex==0;
@@ -187,7 +208,7 @@ internal sealed class ConnectionEditor : UserControl
                 profile["credentials"]=secret;
             }
             else if(Fields["obfs_password"].Text.Length>0){Error.Text="Для смены маскировки введи и пароль Hysteria2.";return false;}
-            else if(ProfileId==null||needsCredentials){Error.Text="Введи пароль Hysteria2.";return false;}
+            else if(!CanReuseCredentials){Error.Text="Введи пароль Hysteria2. После смены типа подключения или маскировки пароль нужен заново.";return false;}
         }
         else if(!ProxyAuth.Checked)profile["credentials"]=new Dictionary<string,object>();
         else if(Fields["username"].Text.Length>0||Fields["password"].Text.Length>0)
@@ -195,7 +216,7 @@ internal sealed class ConnectionEditor : UserControl
             if(Fields["username"].Text.Length==0||Fields["password"].Text.Length==0){Error.Text="Для авторизации нужны и логин, и пароль.";return false;}
             profile["credentials"]=new Dictionary<string,object>{{"username",Fields["username"].Text},{"password",Fields["password"].Text}};
         }
-        else if(ProfileId==null||!hadCredentials||needsCredentials){Error.Text="Введи логин и пароль для авторизации.";return false;}
+        else if(!CanReuseCredentials){Error.Text="Введи логин и пароль для авторизации. После смены типа подключения пароль нужен заново.";return false;}
         request=new Dictionary<string,object>{{"profile",profile}};if(ProfileId!=null)request["profile_id"]=ProfileId;Error.Text="";return true;
     }
     internal void SetTestAvailable(bool value){testAvailable=value;SetBusy(busy);}

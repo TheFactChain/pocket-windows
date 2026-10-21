@@ -3,10 +3,10 @@
   "release_date": "2026-10-21",
   "archive": {
     "name": "Windows-Claude.zip",
-    "bytes": 26162129575,
-    "sha256": "3f1c625c1bb81f864264394fc4d7d009ca513ef50b6dc751cf29710a6ee10958"
+    "bytes": 26162130477,
+    "sha256": "f58422ea1c224058748af928c222358fb8a1b283523b2b0334314e0a02b661f4"
   },
-  "setup_sha256": "21264294c7a287cb96062f09cb22e6c7ff1f7d10d153eaab7cff85bf11968391",
+  "setup_sha256": "f5cde70c1baf9a8552247fd17553ffa57d94a3ce3b4885434b2f964bf890873a",
   "drive_folder_url": "https://drive.google.com/drive/folders/17qU5W2SGMoi9TdhfqjYyj7fuWWYbNbtr",
   "archive_upload_status": "pending_replacement_by_owner",
   "connection_profiles_included": false,
@@ -16,5 +16,7 @@
   "archive_drive_url": "https://drive.google.com/file/d/1dILc4N3wSCB6mUYXktF2sJA2L8XH1nQD/view",
   "drive_access": "anyone_with_link",
   "remote_archive_verification": "previous_revision_size_and_parent_verified; current_revision_pending",
-  "focused_regression_tests_passed": 12
+  "focused_regression_tests_passed": 12,
+  "launcher_sha256": "4f8d296abd195e94a9367d2906a5a5a0036540b2099d164f6a2a1f8afb44a76d",
+  "ui_regression_methods_passed": 7
 }
