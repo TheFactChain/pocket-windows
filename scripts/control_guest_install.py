@@ -297,7 +297,9 @@ def protect_work_window():
     user.EnumWindows(callback_type(visit), 0)
     return bool(found)
 def handle_control(control):
+    action=None
     try:
+        if not isinstance(control,dict):raise ValueError('Control message must be an object')
         action=control.get('action')
         if action=='capture':capture('manual-'+str(len(report['captures'])))
         elif action=='status':report['qmp_status']=command('query-status');save()
@@ -341,7 +343,7 @@ def handle_control(control):
     except Exception as error:
         if isinstance(error, (OSError, TimeoutError, queue.Empty)):
             report['status'] = 'control-unavailable-guest-running'
-        report.setdefault('control_errors',[]).append({'action':str(control.get('action'))[:64],'error':(type(error).__name__+': '+str(error))[:512]})
+        report.setdefault('control_errors',[]).append({'action':str(action)[:64],'error':(type(error).__name__+': '+str(error))[:512]})
         report['control_errors']=report['control_errors'][-64:]
         save()
 

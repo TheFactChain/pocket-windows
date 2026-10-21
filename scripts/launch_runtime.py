@@ -444,6 +444,16 @@ def recovery_snapshot(root):
             raise RuntimeError('Invalid session state; recovery refused')
         identity = state.get('process')
         if state.get('guest') == 'work-boot' and 'session_nonce' in state:
+            if state.get('status') in ('exited', 'interrupted') and not valid_work_session(root, state):
+                controller = state.get('controller')
+                image = Path(controller['image']) if isinstance(controller, dict) and isinstance(controller.get('image'), str) else Path()
+                old_root = image.parents[2] if image.is_absolute() and len(image.parents) > 2 else root
+                # Moved terminal history grants no ownership; both recorded processes must be gone.
+                if not same_path(old_root, root) and valid_work_session(old_root, state):
+                    if (same_identity(identity, process_identity(identity['pid']))
+                            or same_identity(controller, process_identity(controller['pid']))):
+                        raise RuntimeError('Historical Windows or its controller is still active; recovery refused')
+                    continue
             if not valid_work_session(root, state) or not state_matches(root, path, state, identity):
                 raise RuntimeError('Windows session identity is invalid; recovery refused')
             if (same_identity(identity, process_identity(identity['pid']))

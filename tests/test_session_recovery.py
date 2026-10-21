@@ -147,5 +147,53 @@ class SessionRecoveryTests(unittest.TestCase):
             descriptors=runtime.normal_log_descriptors(self.root)
         self.assertTrue(next(item for item in descriptors if item['directory']==path.parent.name)['exited'])
 
+    def historical_work(self, state, status='exited'):
+        old = json.loads(json.dumps(state))
+        old_root = self.root.parent / (self.root.name + '-before-move')
+        for key, pid in (('process', 301), ('controller', 401)):
+            old[key]['pid'] = pid
+            old[key]['image'] = str(old_root / Path(old[key]['image']).relative_to(self.root))
+        old.update(status=status, pid=old['process']['pid'])
+        directory = self.root/'logs/guest-work-boot-old-root'
+        directory.mkdir(exist_ok=True)
+        path = directory/'state.json'
+        path.write_text(json.dumps(old))
+        return path, old
+
+    def test_terminal_history_from_old_root_does_not_block_current_recovery(self):
+        path, state = self.work()
+        for status in ('exited', 'interrupted'):
+            historical, _ = self.historical_work(state, status)
+            before = historical.read_bytes()
+            with self.subTest(status=status), self.patches():
+                snapshot = runtime.recovery_snapshot(self.root)
+                self.assertEqual([row['state'] for row in snapshot['work']], [str(path)])
+            self.assertEqual(historical.read_bytes(), before)
+
+    def test_old_root_history_does_not_hide_live_processes_or_native_denial(self):
+        _, state = self.work()
+        _, old = self.historical_work(state)
+        for key in ('process', 'controller'):
+            identity = old[key]
+            self.identities = {identity['pid']: identity}
+            with self.subTest(key=key), self.patches():
+                with self.assertRaises(RuntimeError): runtime.recovery_snapshot(self.root)
+        self.identities.clear()
+        with self.patches(), mock.patch.object(runtime, 'process_identity', side_effect=PermissionError('native denial')):
+            with self.assertRaises(OSError): runtime.recovery_snapshot(self.root)
+        self.inventory = {900: self.identity(900, True)}
+        with self.patches():
+            with self.assertRaises(RuntimeError): runtime.recovery_snapshot(self.root)
+
+    def test_malformed_or_nonterminal_old_root_state_is_not_ignored(self):
+        _, state = self.work()
+        historical, old = self.historical_work(state, 'running')
+        with self.patches():
+            with self.assertRaises(RuntimeError): runtime.recovery_snapshot(self.root)
+        old.update(status='exited', session_nonce='invalid')
+        historical.write_text(json.dumps(old))
+        with self.patches():
+            with self.assertRaises(RuntimeError): runtime.recovery_snapshot(self.root)
+
 
 if __name__=='__main__':unittest.main()
