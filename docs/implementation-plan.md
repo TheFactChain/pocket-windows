@@ -1,5 +1,10 @@
 # Approved portable implementation — seven stages
 
+Current execution status is in the parent portable root's Beads database.
+Unfinished criteria were migrated on 2026-10-20: stage 3 `wcp-dxc`, stage 4
+`wcp-cxi`, stages 5-7 `wcp-79r`. This document preserves the approved scope;
+`wcp-bgr` tracks the bounded fixes and explicitly approved duplicate cleanup.
+
 Execute on separate local copies. Preserve the original working system. Each stage
 ends with relevant verification, a report and a separate source commit. The only
 GitHub destination is private `nekontritce11123-lab/windows-claude-portable`; no secrets,

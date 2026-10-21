@@ -1,5 +1,35 @@
 # Existing acceptance and clone verification
 
+## Portable maintenance verification — 2026-10-20
+
+Current evidence: `maintenance-verification.json`; cleanup evidence is the parent
+portable root's `CLEANUP-REPORT.json`. The original working project was excluded
+from changes. Baseline deletion was explicitly approved by the user.
+
+- Full portable suite: 79 tests passed, zero failures (4.125 seconds). Regressions
+  were observed failing before the fixes for package EXE/settings inventory,
+  owned-pair memory checks, invalid settings recovery, and historical warning retention.
+- Native C# to Python integration passed on a separate QA copy without disks or
+  profiles: invalid settings were editable as defaults and preserved before save,
+  warnings remained visible, failed saves stayed visible, and unconfigured Start
+  was refused. The QEMU process set did not change.
+- Rebuilt 24,064-byte Launcher.exe passed its native self-test. Its SHA256 is
+  recorded in the JSON evidence. No original guest was opened or controlled.
+- Approved baseline, preview and old build copies were removed after checking
+  standalone qcow2 disks and absence of link dependencies. 8,519 files were deleted;
+  filesystem free space increased by about 42.08 GiB. Protected working data retained
+  its sizes and last-write times.
+- After cleanup, required files, QEMU SHA256, public settings, process state and
+  WHPX passed read-only checks outside the sandbox. Actual startup was blocked only
+  by available RAM: 4,153 MiB observed versus 4,864 MiB required by current settings.
+  The sandbox itself cannot observe WHPX capability; it was checked outside it.
+
+No VM/VPN test, second-PC test or complete personal ZIP build was performed during
+this maintenance. Saved acceptance remains historical; diagnostics do not certify
+the network of the current copy. Ongoing project status is in Beads, not this report.
+
+## Historical acceptance of the original system
+
 The original system was accepted on its original Windows 11 Pro host on 2026-10-20.
 The historical observations below are not second-PC tests.
 

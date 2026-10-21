@@ -1,28 +1,70 @@
-# Current architecture
+# Архитектура
 
-| Component | Current implementation |
-| --- | --- |
-| Entry | `Start.cmd` → Windows PowerShell wrapper → bundled Python supervisor |
-| Hypervisor | Portable QEMU 11.1.0, WHPX only, pinned engine SHA256 |
-| Work guest | Existing Tiny11 normal Windows, IDE qcow2 + persistent UEFI variables |
-| Gateway | Existing Debian minimal, sing-box 1.14.3 Hysteria2 with gVisor TUN |
-| Work network | One e1000 NIC, loopback QEMU stream to gateway LAN |
-| Gateway uplink | QEMU user NAT; no host bridge, TAP, hostfwd or guestfwd |
-| Guest policy | nftables default drop; one authorized VPS endpoint; no direct fallback |
-| Lifecycle | Gateway first, Windows second; normal Windows shutdown then gateway ACPI |
-| Host changes at runtime | None to host network, Defender, VBS or Hyper-V features |
+Текущий сценарий — запуск уже установленной Tiny11 с Claude Desktop, Firefox
+и существующей локальной учётной записью. Пользователь работает через
+`Launcher.exe`; Linux остаётся скрытым.
 
-The launcher checks a local accepted-network marker and prevents duplicate owned
-disk opens. Errors retain running guests for inspection; controllers never send QMP
-`quit` or forcibly terminate a guest. Gateway and Windows both currently have a GUI
-window. No guest agent or general profile editor is included.
+| Часть | Реализация |
+|---|---|
+| Панель и установщик | C#, WinForms, системный .NET Framework |
+| Управление | Встроенный Python 3.12.14 и служебные PowerShell-сценарии |
+| Виртуализация | Переносимый QEMU 11.1.0, WHPX |
+| Рабочая VM | Tiny11, постоянный QCOW2 и UEFI variables |
+| Шлюз | Подготовленный Debian с sing-box, без видимого окна |
+| Подключения | Hysteria2, SOCKS5, HTTP и HTTPS CONNECT |
+| Сеть Windows | Один e1000 NIC, локальный QEMU stream к LAN шлюза |
+| Внешняя сеть шлюза | QEMU user NAT, без bridge/TAP/hostfwd/guestfwd |
+| Защита сети | Закрытая политика nftables, без прямого fallback |
 
-Normal boot needs only the included source files, runtime directories, two active
-qcow2 images, `state/workvm-vars.fd`, and `state/gateway-network-accepted.json`.
-The installed gateway reads its VPN configuration inside its disk. The host-side
-private profile is retained as requested, but normal boot does not read it.
+## Панель и состояние
 
-Install/resume/staging branches in `control_guest_install.py` are historical setup
-tools. Their media and delivery archive are excluded from the local runtime ZIP.
-Only the normal `Start.cmd` route is supported for this clone. Do not invoke the
-installation branches to start the already installed guests.
+WinForms вызывает `scripts/portable_app.py` через встроенный Python с
+изолированными параметрами запуска. Четыре раздела панели: «Главная»,
+«Подключение», «Настройки» и «Диагностика». Восстановление Python/QEMU и
+подготовка host-компонентов доступны через PowerShell без рабочего Python.
+
+Видимые настройки ресурсов — память Windows и число процессоров каждой VM.
+Служебные память шлюза и LAN-порт сохраняются в конфигурации для совместимости.
+Настройки ресурсов применяются при следующем запуске. Повреждённый файл настроек
+не перезаписывается без сохранения его исходных байтов рядом.
+
+Профили подключения хранятся отдельно от дисков и компонентов. Секреты защищены
+DPAPI пользователя основной Windows. Сохранённый или выбранный профиль не меняет
+работающий шлюз: его версия применяется в следующем сеансе. После переноса
+на другой ПК программа может запросить повторный ввод секретов.
+
+## Запуск и выключение
+
+Сначала контроллер проверяет компоненты, ресурсы и выбранное подключение, затем
+запускает шлюз с одноразовым слоем записи. Готовность относится к текущему сеансу,
+версии профиля и версии шлюза. Только после неё запускается Windows. Старый
+маркер сетевой приёмки не доказывает готовность нового сеанса.
+
+Windows получает сеть только через шлюз. Ошибка подключения не разрешает прямой
+выход. Шлюз повторяет проверки и восстанавливает соединение при временном обрыве;
+проверка управляемого стенда не заменяет приёмку всех поддерживаемых протоколов.
+
+Штатная остановка выполняется в порядке Windows, затем шлюз. Закрытие панели
+не завершает VM. Повторный запуск панели должен восстановить отображение реального
+состояния процессов. При неопределённом результате выключения пользовательская
+Windows сохраняется работающей; автоматическое принудительное завершение запрещено.
+
+Компоненты runtime и шлюза заменяются отдельно от пользовательского Windows-диска.
+Восстановление приложения не означает восстановление повреждённых данных Windows.
+Во время обычной работы host-сеть, Defender, VBS и параметры Hyper-V автоматически
+не перенастраиваются. Подготовка требуемого host-компонента — отдельное действие с UAC.
+
+## Границы исходников и поставки
+
+Git содержит исходники и проверки, но не VM, runtime, пароли или журналы.
+Готовая поставка использует явный перечень файлов и самостоятельные QCOW2 без
+внешних backing-файлов. Public-архив не включает host-профили, но не очищает
+содержимое Windows-диска: его пригодность проверяется отдельно.
+
+Старые `Start.cmd`, install/resume-ветки и материалы `guest/reference/` и
+`guest/template/` остаются историческими средствами подготовки. Для обычного
+запуска готовой Windows используются `Launcher.exe` и штатный runtime-путь.
+Audit/Sysprep, создание пользователя из EXE и установка VPN на пустой VPS
+исключены из текущего объёма.
+
+Приёмка окончательного пакета и перенос на другой ПК ещё не объявлены завершёнными.

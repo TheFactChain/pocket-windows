@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "release_date": "2026-10-21",
+  "archive": {
+    "name": "Windows-Claude.zip",
+    "bytes": 26162129282,
+    "sha256": "ec2a0c24e54b9943e857123b437b833fe43df7aed7f03818e1f2e3acf75e1523"
+  },
+  "setup_sha256": "21264294c7a287cb96062f09cb22e6c7ff1f7d10d153eaab7cff85bf11968391",
+  "drive_folder_url": "https://drive.google.com/drive/folders/17qU5W2SGMoi9TdhfqjYyj7fuWWYbNbtr",
+  "archive_upload_status": "pending_manual_upload",
+  "connection_profiles_included": false,
+  "apps_accepted_by_owner": true,
+  "vm_started_for_publication": false,
+  "other_pc_tested": false
+}

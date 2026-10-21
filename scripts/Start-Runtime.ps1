@@ -68,27 +68,6 @@ try {
         & $python @planArguments
         exit $LASTEXITCODE
     }
-    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        if ($Elevated) { throw 'Administrator approval was not granted.' }
-        $arguments = @('-NoProfile', '-File', (Quote-NativeArgument $PSCommandPath),
-                       '-Project', (Quote-NativeArgument $Project), '-Elevated') -join ' '
-        if ($WorkTestMedia) { $arguments += ' -WorkTestMedia' }
-        if ($Gui) { $arguments += ' -Gui' }
-        if ($guiPath) { $arguments += ' -GuiResultPath ' + (Quote-NativeArgument $guiPath) }
-        # This foreground console can show a startup error and wait for the user.
-        $window = if ($Gui) { 'Hidden' } else { 'Normal' }
-        $failureCode = 'elevation_failed'
-        $child = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Verb RunAs `
-            -ArgumentList $arguments -WindowStyle $window -PassThru
-        # Wait for this wrapper, not its long-running supervisor/guest descendants.
-        $child.WaitForExit()
-        $child.Refresh()
-        if ($guiPath -and -not (Test-Path -LiteralPath $guiPath)) {
-            Write-GuiStartupResult 'elevation_failed' '' $child.ExitCode
-        }
-        exit $child.ExitCode
-    }
 
     $failureCode = 'runtime_error'
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffffffZ') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -102,7 +81,7 @@ try {
         -WorkingDirectory $Project -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $directory 'supervisor.stdout.log') `
         -RedirectStandardError (Join-Path $directory 'supervisor.stderr.log')
-    $deadline = [DateTime]::UtcNow.AddSeconds(170)
+    $deadline = [DateTime]::UtcNow.AddSeconds(270)
     while ([DateTime]::UtcNow -lt $deadline) {
         $report = $null
         if (Test-Path -LiteralPath $receipt -PathType Leaf) {
@@ -124,7 +103,7 @@ try {
         Start-Sleep -Milliseconds 200
     }
     $failureCode = 'startup_timeout'
-    throw "Startup was not confirmed within 170 seconds. Any running guests were retained. Read: $directory"
+    throw "Startup was not confirmed within 270 seconds. Any running guests were retained. Read: $directory"
 }
 catch {
     $nativeError = Get-NativeStartupError $_.Exception

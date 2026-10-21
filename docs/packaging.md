@@ -1,38 +1,180 @@
-# Clone the already installed system locally
+# Переносимые архивы и установка
 
-Run `scripts/pack_existing_runtime.py` with the bundled Python after both VMs have
-been shut down normally. This script never starts or stops a VM, edits credentials,
-changes a host setting, contacts GitHub, or uploads a file.
+Для готовой поставки используются отдельная подготовленная Windows с Claude,
+Firefox и существующей локальной учётной записью, скрытый шлюз и режим `public`.
+Создание пользователя, Audit/Sysprep и установка ОС из EXE в текущий сценарий
+не входят. Сборка архива не заменяет проверку запуска и сохранности данных.
+
+Перед упаковкой штатно выключи Windows и шлюз. Выбери новое имя архива в уже
+существующем родительском каталоге. Упаковщик работает с подготовленной
+runtime-папкой: чистый Git clone не содержит VM, Python/QEMU и готовых EXE,
+поэтому сам по себе не является входным комплектом для упаковки.
+
+## Личная резервная копия
+
+Без явного `--mode public` упаковщик сохраняет установленную Windows, настройки
+и профили владельца в личный ZIP. Такой архив не предназначен для выдачи другим
+пользователям.
+
+Запускай сценарий и Python из той portable-папки, которую копируешь:
 
 ```powershell
-& '<project>\runtime\python-3.12.14\python.exe' -I -S -B `
-  '<source-repo>\scripts\pack_existing_runtime.py' `
-  --project '<project>' --source-repo '<source-repo>' `
-  --commit '<verified Git commit>' --output '<local destination>\Windows-Claude.zip'
+& '<portable>\runtime\python-3.12.14\python.exe' -X utf8 -I -S -B `
+  '<portable>\scripts\pack_existing_runtime.py' `
+  --project '<portable>' --output '<папка назначения>\Windows-Claude.zip'
 ```
 
-The script includes the tracked source allowlist, both active disks, the complete
-existing runtime, the UEFI variables, the accepted-network marker, and the current
-saved private VPN profile. It opens source data read-only and refuses existing ZIP
-outputs. Large payloads are streamed with ZIP64 and fast standard Deflate compression.
+Git, отдельный каталог исходников и commit не требуются. Старый параметр
+`--source-repo` допускает только сам каталог `--project`; `--commit` больше не
+используется.
 
-Excluded without deleting originals: `.git`, Git authentication, existing logs and
-screenshots, stale session/PID state, cache/history, previous broken/backup images,
-installer ISO/WIM/initrd/answer files, downloaded builders, delivery archives, build
-directories, and outside-project SSH keys or Downloads profiles. Linux passwords and
-installed VPN authentication remain preserved inside the copied gateway disk.
+## Что сохраняется
 
-All files required for the same normal boot are included. Source tools for historical
-installation branches may reference excluded media; they must not be used for boot.
-The host Python/Codex installation is not a runtime dependency.
+- `Launcher.exe` и необходимые служебные сценарии из явного перечня.
+- Пользовательский диск Windows и файл её UEFI.
+- Публичные настройки памяти, процессоров и сетевого порта.
+- `profiles/profiles.json`: выбранное подключение, все сохранённые версии профилей
+  и защищённые Windows DPAPI секреты.
+- Установленная и предыдущая версии шлюза, указанные в его текущем каталоге.
+- Файлы Python и QEMU из манифеста компонентов и архив их восстановления.
+- Каталог и ZIP восстановления шлюза, если оба присутствуют. Неполная пара
+  блокирует упаковку.
 
-The generated manifest contains file names, sizes and hashes, not credential values.
-The ZIP is deliberately a private local copy with existing secrets and is not encrypted.
-The final SHA256 sidecar covers the entire ZIP. Its size is measured after compression;
-uncompressed payload size is reported independently.
+Секреты подключения копируются в существующем зашифрованном виде. На другом ПК или
+под другим пользователем Windows DPAPI может быть недоступна; тогда потребуется
+заново ввести пароль подключения. Упаковщик не расшифровывает и не перенастраивает
+профили.
 
-Offline source tests (no VM start):
+Старый профиль из `private/`, журналы, состояние работающих сеансов, Beads, Git,
+установочные ISO, сборочные каталоги, тесты и исходники интерфейса в архив не входят.
+Исходные файлы остаются на месте.
+
+## Проверка и результат
+
+На время копирования упаковщик удерживает блокировку операций этой portable-копии,
+проверяет отсутствие работающих QEMU и читает исходные данные с запретом записи.
+Диски должны быть самостоятельными qcow2 без внешнего backing-файла. Ссылки,
+небезопасные пути, повреждённые компоненты и существующие выходные файлы отклоняются.
+
+Файлы записываются потоками в ZIP64. Перед выдачей результата проверяются состав,
+размеры и SHA256 каждого файла. Состав, размеры и SHA256 файлов внутри
+`components-recovery.zip` также проверяются по манифесту компонентов; дополнительные
+файлы и ссылки в нём отклоняются.
+
+После успешной проверки появляются:
+
+- `Windows-Claude.zip`;
+- `Windows-Claude.zip.sha256`;
+- `Windows-Claude.zip.manifest.json` с составом и измеренными размерами.
+
+Это **личная копия**: ZIP не шифруется и содержит данные установленной Windows.
+Манифест помечен `personal_copy`; значения паролей в отчёт не записываются.
+Режим `personal` используется по умолчанию. Упаковка сама по себе не подтверждает
+запуск на другом ПК.
+
+## Публичный режим
+
+Для **отдельной подготовленной чистой копии** добавь `--mode public`:
 
 ```powershell
-& '<project>\runtime\python-3.12.14\python.exe' -I -S -B -m unittest discover -s '<source-repo>\tests' -v
+& '<portable>\runtime\python-3.12.14\python.exe' -X utf8 -I -S -B `
+  '<portable>\scripts\pack_existing_runtime.py' `
+  --mode public --project '<чистая копия>' `
+  --output '<папка поставки>\Windows-Claude.zip'
+```
+
+Режим не читает и не включает каталог `profiles/`. Старый `private/`, журналы,
+сборочные инструменты, исходники интерфейса и тесты также не включаются. Нужные
+служебные сценарии и компоненты runtime остаются в явном разрешённом перечне.
+Публичный manifest сохраняет schema 2, `kind=public_distribution`,
+`encrypted_profiles_included=false`, `credentials_portability=No connection profiles included.`
+Состав, размеры, SHA256 и самостоятельность дисков проверяются так же, как в личном режиме.
+
+**Этот параметр не очищает гостевую Windows.** Подготовленная локальная учётная
+запись сохраняется по согласованному сценарию. Личные входы в Claude и другие
+сервисы, пользовательские файлы и секреты также останутся в ZIP, если не были
+исключены до упаковки.
+Проверка и подготовка чистого master-диска — обязательная отдельная приёмка;
+JSON-план подготовки не является её доказательством. До этой приёмки публичная
+Windows и готовность публичной поставки остаются неподтверждёнными.
+`second_pc_tested` всегда остаётся `false`.
+
+Пользовательские проверки выполняй на извлечённой копии. Профили, журналы и
+новые данные из этой проверки не следует переносить обратно в чистый master
+или готовый public-архив. После изменений исходников нужно пересобрать и
+проверить именно поставляемый EXE, а не только тестировать исходный код.
+
+## Setup.exe
+
+Минимальный offline-установщик предназначен только для полного публичного ZIP.
+Положи в одну папку `Setup.exe`, `Windows-Claude.zip` и
+`Windows-Claude.zip.sha256`. Дополнительный `.zip.manifest.json` — отчёт упаковки;
+установщик проверяет manifest внутри самого ZIP.
+
+Сборка установленным .NET Framework compiler без загрузки зависимостей:
+
+```powershell
+& '<portable>\scripts\Build-Setup.ps1' -OutputDirectory '<новая папка сборки>'
+```
+
+Установщик позволяет выбрать родительскую папку и создать ярлык на рабочем столе.
+Установка не требует администратора и ничего не устанавливает внутрь host Windows.
+Существующее назначение, даже пустое, отклоняется. Поэтому повторная установка
+требует новой папки; диски и профили существующего пользователя не заменяются.
+Уже существующий одноимённый ярлык также не заменяется.
+
+Перед распаковкой проверяются внешний SHA256, внутренние manifest/checksums,
+явный перечень файлов, ZIP64-размеры и свободное место под полный payload плюс
+256 МиБ. Затем файлы потоками распаковываются в новую соседнюю папку
+`.windows-claude-setup-<GUID>`, с SHA256 каждого файла и проверкой standalone qcow2.
+Небезопасные пути, ссылки, reparse-пути, совпадения имён без учёта регистра,
+личные архивы и дополнительные файлы отклоняются. Папки назначения и архива
+закрепляются открытыми дескрипторами на время операции.
+
+После успешной проверки временная папка одним переименованием публикуется на том
+же диске. Отмена возможна до публикации. Ошибка или обычная отмена удаляет только
+созданную этой операцией временную папку; чужие временные папки не затрагиваются.
+При принудительном завершении процесса или отключении питания staging может
+остаться рядом с назначением. Установщик не продолжает и не удаляет такие папки
+автоматически; их можно удалить вручную после проверки пути.
+
+SHA256 защищает от повреждения файлов, но не удостоверяет издателя: ZIP и его
+SHA256 нужно получать вместе из доверенного источника. Подпись выпуска пока
+не реализована.
+
+README и документация не входят во внутренний строгий состав runtime-архива.
+К поставке рядом с Setup и ZIP приложи краткую инструкцию и сведения о
+[сторонних компонентах](third-party.md). Public-режим не предоставляет прав
+на передачу Windows и стороннего ПО; это проверяется отдельно до публикации.
+
+## Проверки исходников
+
+Launcher собирается тем же системным компилятором, без внешних загрузок:
+
+```powershell
+& '<исходники>\scripts\Build-Launcher.ps1' -OutputDirectory '<новая папка Launcher>'
+```
+
+Скрипты сборки не меняют execution policy. Для проверок ниже нужен подготовленный
+Python/runtime; часть интеграционных тестов также использует QEMU и компоненты
+из готового комплекта. Чистый clone не считается автономным тестовым окружением.
+
+Целевая проверка упаковщика на небольших искусственных данных:
+
+```powershell
+& '<portable>\runtime\python-3.12.14\python.exe' -X utf8 -I -S -B `
+  -m unittest discover -s '<portable>\tests' -p 'test_pack_existing_runtime.py' -v
+```
+
+Эти тесты проверяют сохранение профилей, распаковку, восстановление компонентов,
+проверки целостности и защиту файлов. Public-тест дополнительно собирает native
+тестовый executable из `ui/Setup.cs` и `tests/SetupRegression.cs`, проверяет
+защитные сценарии на малых искусственных ZIP и устанавливает настоящий публичный
+fixture-архив упаковщика. Они не запускают пользовательские VM, UI или ярлыки.
+
+Только public/Setup-проверки:
+
+```powershell
+& '<portable>\runtime\python-3.12.14\python.exe' -X utf8 -I -S -B `
+  -m unittest discover -s '<portable>\tests' -p 'test_pack_existing_runtime.py' -k public -v
 ```

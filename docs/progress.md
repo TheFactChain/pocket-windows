@@ -1,5 +1,11 @@
 # Execution ledger — docs/implementation-plan.md
 
+Current status moved to Beads in the parent portable root on 2026-10-20.
+The entries below are historical. Stage 3 has a prepared personal copy, confirmed
+by `STAGE3-PREPARATION.json`; complete fresh network acceptance is not confirmed.
+Current fixes/cleanup: `wcp-bgr`; remaining stage 3: `wcp-dxc`; stage 4: `wcp-cxi`;
+stages 5-7: `wcp-79r`. Do not interpret the old "not started" section as current.
+
 ## Stage 1 — complete
 
 - 2026-10-20 10:42 UTC: no QEMU/VirtualBox/Hyper-V/VMware guest processes found.

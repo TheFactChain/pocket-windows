@@ -1,62 +1,122 @@
-# Windows Claude Portable — implementation in progress
+# Windows Claude Portable
 
-This private repository contains the launcher, gateway setup sources, offline tests,
-and packaging instructions. It deliberately contains no VM disks, saved VPN profile,
-runtime binaries, personal logs, GitHub credentials, or installation media.
+Готовая Windows Tiny11 с Claude Desktop, Firefox и подготовленной локальной
+учётной записью. Панель `Launcher.exe` запускает Windows через скрытый
+Debian-шлюз. Пользователь задаёт своё подключение и при необходимости меняет
+память и число процессоров; устанавливать ОС или настраивать Linux не требуется.
 
-Stage 1 has a verified private baseline; stage 2 adds a small native desktop EXE.
-The stage-2 preview contains the EXE and runtime without disks or saved profiles.
-It intentionally blocks guest startup. [Stage-2 report](docs/stage2-report.md) explains
-what was tested. Personal/release ZIPs belong to later stages and are not built yet.
+Готовый комплект собран 21 октября 2026 года. В ZIP входят 979 файлов;
+их целостность и состав проверены. Windows с Claude и Firefox приняты владельцем
+по его ручной проверке. При публикации приложений и Windows заново не запускали.
+Работа на другом ПК и причина прежнего зависания QEMU отдельно не подтверждены.
 
-The planned personal ZIP will clone both installed guests, runtime, UEFI state, and
-existing credentials. It is not a generic Windows installer and has not been tested
-on another PC.
+[Закрытая папка готового комплекта на Google Диске](https://drive.google.com/drive/folders/17qU5W2SGMoi9TdhfqjYyj7fuWWYbNbtr).
+Setup, SHA256, манифест и инструкция уже загружены. Основной ZIP размером 26,2 ГБ
+ещё требуется добавить вручную; до этого папка содержит неполный комплект.
+Архив и диски не входят в Git. Параметры выпуска записаны в [RELEASE.json](RELEASE.json).
 
-## Run the local ZIP
+## Запуск готового комплекта
 
-1. Fully extract the ZIP to a writable local NTFS folder with sufficient free space.
-   Keep its `Windows-Claude` folder structure together. Do not run inside the ZIP.
-2. Use Windows x64 with hardware virtualization and **Windows Hypervisor Platform**
-   already available. The tested host runs Windows 11 Pro with 16 GB RAM. Guests use
-   4096 MB + 1024 MB, two virtual CPUs each. Allow RAM for the host as well.
-3. Run `Launcher.exe`. Diagnostics checks prerequisites and required files. Settings
-   changes RAM/vCPU/private-LAN port only while guests are off. Startup requests UAC
-   after a successful preflight. `Start.cmd` remains the legacy entry. The launcher uses
-   Windows PowerShell 5.1 under the host's script execution policy. It does not enable
-   Windows features, install drivers, bypass policy, or reconfigure the host network.
-   Missing prerequisites require a separate decision by the computer's owner.
-4. Two existing QEMU windows appear: Debian gateway and Windows. The gateway starts
-   its services automatically; routine operation does not require console login.
-   Programs in Windows are installed by the user.
-5. Shut down guest Windows normally. The supervisor then requests a graceful gateway
-   shutdown. For explicit graceful stop, run `scripts/Stop-Runtime.ps1` in PowerShell.
-   Do not force-close guest processes.
+1. Сохрани portable-папку целиком в доступном для записи месте либо установи её
+   через `Setup.exe`. Для Setup рядом должны находиться `Windows-Claude.zip` и
+   `Windows-Claude.zip.sha256`. Выбирай новое, ещё не существующее назначение.
+2. Открой `Launcher.exe` именно из установленной или распакованной папки.
+   Целевая система — Windows 11 x64 с аппаратной виртуализацией, Windows
+   Hypervisor Platform и .NET Framework 4.8.
+3. В «Диагностике» проверь ПК и комплект. Если требуется включить платформу
+   гипервизора, используй «Подготовить этот ПК» и подтверди UAC. При необходимости
+   перезагрузи ПК самостоятельно. Обычный запуск VM не повышает права автоматически.
+4. В «Подключении» добавь параметры уже настроенного прокси/VPN либо импортируй
+   поддерживаемую ссылку или JSON-профиль. Сохрани и выбери профиль. Отдельная
+   проверка подключения доступна при выключенных VM.
+5. В «Настройках» при необходимости измени память Windows и число процессоров
+   каждой VM. Для сохранения сначала штатно выключи обе VM. Новые значения
+   действуют при следующем запуске.
+6. На главной нажми «Запустить Windows». Сначала проверяется шлюз, затем
+   открывается готовый рабочий стол Windows. Создание пользователя через EXE
+   и мастер установки Windows в этот сценарий не входят.
+   Обычный запуск использует встроенный Python напрямую и не требует разрешения
+   на запуск PowerShell-скриптов. Подготовка ПК и компонентов пока использует PowerShell.
+7. Заверши работу кнопкой выключения в панели либо через меню питания гостевой
+   Windows. Сначала выключается Windows, затем шлюз. Закрытие панели само по себе
+   не выключает VM; повторное открытие должно показывать их фактическое состояние.
 
-Start paths are relative to the extracted root; the entry scripts derive that root
-from their own location. Any desktop shortcut must target the newly extracted
-`Launcher.exe`; an old absolute shortcut is not portable. .NET Framework 4.8 is also
-required for the desktop panel. Headless gateway and generic VPN import are not yet
-implemented; UI resource settings do not apply a guest VPN profile.
+## Разделы панели
 
-Use only one instance on a host: the fixed guest LAN listens on loopback port 31861.
-The copied VPN must remain valid and its server reachable. The configured system is
-designed to remain offline if the gateway/VPN fails. Prior acceptance is documented
-in [validation](docs/validation.md); copying does not prove acceptance on another PC.
+| Раздел | Назначение |
+|---|---|
+| Главная | Состояние, выбранное подключение, запуск и штатное выключение |
+| Подключение | Создание, импорт, редактирование, выбор, экспорт и проверка профилей |
+| Настройки | Память Windows и число процессоров каждой VM |
+| Диагностика | Причина блокировки, отчёт, подготовка ПК и восстановление компонентов |
 
-## Saved credentials and integrity
+Память шлюза и внутренний сетевой порт остаются служебными параметрами
+`config/runtime.json`; обычный пользователь их не настраивает.
 
-The local ZIP intentionally retains existing credentials. In particular, the gateway
-disk contains the installed VPN authentication and Linux account password hashes.
-`private/gohost-user1/sing-box.json` is a byte-for-byte local copy of the saved VPN
-profile. Windows disk contents, browser state, and internal snapshots are retained.
-No password is reset, recovered, added to this README, or requested in chat.
+## Подключение и перенос
 
-The ZIP is **not encrypted**. Keep it as private as the running system; it is never
-uploaded by the packaging procedure. This source repository is not a place for it.
-`MANIFEST.json` and `MANIFEST.sha256` describe packaged bytes; the adjacent ZIP SHA256
-can be checked before extraction. The full archive is verified without booting a VM.
+Поддерживаются Hysteria2 с TCP/UDP, SOCKS5 и HTTP/HTTPS CONNECT с TCP.
+Сервер уже должен быть настроен, в том числе если это твой VPS. Панель не
+устанавливает VPN на пустой VPS. Прямой выход Windows при неисправном подключении
+не должен открываться; полная матрица сетевой приёмки остаётся обязательной.
 
-See [architecture](docs/architecture.md), [local packaging](docs/packaging.md), and
-[third-party components](docs/third-party.md). Windows use/activation rights and
-third-party redistribution rights are separate from this local copy operation.
+IPv4 и IPv6 передаются через выбранное подключение; адрес сервера в этой версии
+должен быть доступен по IPv4. На управляемом стенде проверены TCP через HTTP CONNECT,
+обрыв и восстановление связи без обнаруженного обхода в ограниченном WAN-захвате.
+Это не подтверждает все протоколы и все реальные серверы.
+
+Сохранение и выбор профиля не меняют работающий сеанс. Изменения применяются после
+штатного выключения при следующем запуске. Успешная проверка профиля не означает,
+что он уже применён к Windows.
+
+Пароли в `profiles/profiles.json` защищены DPAPI текущего пользователя основной
+Windows. При переносе на другой ПК или под другого пользователя может потребоваться
+повторный ввод секретов в редакторе профиля. ZIP не шифруется: в личной копии
+сохраняются данные Windows, даже если пароли подключения защищены DPAPI.
+
+## Восстановление
+
+Диагностика сохраняет отчёт без значений паролей в `logs/diagnostics-latest.json`.
+Обычная проверка состояния не перечитывает весь диск шлюза; его полная SHA256
+проверяется перед использованием.
+
+- **Восстановить Python и QEMU** возвращает компоненты из локального проверяемого
+  архива. Действие доступно даже при отсутствии Python.
+- **Восстановить шлюз** использует отдельный локальный пакет. Windows-диск и
+  подключения находятся вне заменяемых компонентов.
+- **Восстановить сеанс** появляется после сбоя, когда Windows и её контроллер
+  уже завершились. Сохраняется предыдущий журнал; при необходимости сбрасывается
+  только подтверждённый одноразовый шлюз. Работающая Windows не завершается,
+  её диск и подключения не откатываются.
+- **Подготовить этот ПК** включает требуемый компонент виртуализации основной
+  Windows с UAC; ОС внутри VM эта кнопка не устанавливает.
+
+Перед восстановлением компонентов штатно выключи VM. Если выключение не подтверждено,
+панель показывает это состояние и продолжает проверку; таймаут не считается остановкой.
+Повреждённый пользовательский Windows-диск
+автоматически не исправляется и не сбрасывается: нужна отдельная исправная копия.
+Если повреждён `config/runtime.json`, настройки открываются со значениями по
+умолчанию; сохранение оставляет исходный файл рядом как `runtime.invalid-<id>.json`.
+
+## Исходники и сборка
+
+Git-каталог содержит исходники панели, служебные сценарии, тесты и документацию.
+В нём нет VM, Python/QEMU, пользовательских профилей и готовых EXE. Чистый clone
+не является готовой portable-папкой или автономным окружением всех тестов.
+
+На Windows с установленным системным компилятором .NET Framework:
+
+```powershell
+& '.\scripts\Build-Launcher.ps1' -OutputDirectory 'C:\Build\launcher-new'
+& '.\scripts\Build-Setup.ps1' -OutputDirectory 'C:\Build\setup-new'
+```
+
+Используй новое имя выходного каталога: скрипты не заменяют существующий EXE.
+Запуск PS1 должен быть разрешён политикой твоей среды; сборка не меняет её.
+Упаковщик работает с уже подготовленной runtime-папкой, а не создаёт Windows
+из исходников. Подробнее: [архитектура](docs/architecture.md),
+[упаковка и проверки](docs/packaging.md), [сторонние компоненты](docs/third-party.md).
+
+Исторические средства установки, Audit/Sysprep и подготовки первого пользователя
+не входят в текущий пользовательский сценарий. Наличие исходников и успешная
+упаковка не подтверждают права передачи Windows и стороннего ПО другим лицам.

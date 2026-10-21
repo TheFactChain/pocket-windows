@@ -1,0 +1,20 @@
+[Unit]
+Description=Disposable IPv6 acceptance probe
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=network-pre.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I -B /usr/local/lib/wc-gateway/probe.py
+Environment=PYTHONUNBUFFERED=1
+Restart=no
+TimeoutStartSec=190
+RuntimeMaxSec=190
+TimeoutStopSec=5
+UMask=0077
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

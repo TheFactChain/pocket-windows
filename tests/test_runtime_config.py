@@ -64,6 +64,8 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertIn('addr.port=32861', ' '.join(result))
         self.assertNotIn('addr.port=31861', ' '.join(result))
         self.assertNotIn('hostfwd', ' '.join(result))
+        self.assertNotIn('filter-dump', ' '.join(result))
+        self.assertNotIn('pcap', ' '.join(result))
 
 
 if __name__ == '__main__':

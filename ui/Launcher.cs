@@ -1,17 +1,31 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 internal static class Bridge
 {
+    private sealed class PendingReply : Dictionary<string,object>
+    {
+        internal readonly Task<Dictionary<string,object>> Settled;
+        internal PendingReply(Dictionary<string,object> reply,Task<Dictionary<string,object>> settled) : base(reply) { Settled = settled; }
+    }
+
+    internal static Task<Dictionary<string,object>> PendingOperation(Dictionary<string,object> reply)
+    {
+        PendingReply pending = reply as PendingReply;
+        return pending == null ? null : pending.Settled;
+    }
     internal static string Root
     {
         get { return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); }
@@ -38,227 +52,995 @@ internal static class Bridge
 
     internal static bool Ok(Dictionary<string, object> value)
     {
-        return value.ContainsKey("ok") && value["ok"] is bool && (bool)value["ok"];
+        return value != null && value.ContainsKey("ok") && value["ok"] is bool && (bool)value["ok"];
     }
 
     internal static string Message(Dictionary<string, object> value)
     {
-        return value.ContainsKey("message") ? Convert.ToString(value["message"]) : "Готово.";
+        return value != null && value.ContainsKey("message") ? Convert.ToString(value["message"]) : Ok(value) ? "Готово." : "Ответ не получен.";
     }
 
     internal static Dictionary<string, object> Run(string root, string action, object payload)
     {
+        return RunAsync(root, action, payload).GetAwaiter().GetResult();
+    }
+
+    internal static int TimeoutMilliseconds(string action)
+    {
+        switch (action)
+        {
+            case "start":
+            case "test-profile": return 330000;
+            case "stop": return 510000;
+            case "repair-gateway":
+            case "recover-session": return 180000;
+            case "prepare-host": return 210000;
+            default: return 30000;
+        }
+    }
+
+    internal static async Task<Dictionary<string, object>> RunAsync(string root, string action, object payload)
+    {
+        if (action == "prepare-components") return await PrepareComponentsAsync(root).ConfigureAwait(false);
+        if (action == "prepare-host")
+        {
+            string script = Path.Combine(root, "scripts", "Prepare-Host.ps1");
+            if (!File.Exists(script)) return Failure("Не найден сценарий подготовки этого ПК. Распакуй полный комплект.");
+            string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+            ProcessStartInfo prepare = new ProcessStartInfo(powershell, String.Join(" ", new[] { "-NoProfile", "-NonInteractive", "-File", script, "-Root", root }.Select(Quote)));
+            prepare.WorkingDirectory = root;
+            Dictionary<string,object> reply = await RunProcessAsync(prepare, TimeoutMilliseconds(action)).ConfigureAwait(false);
+            string code = reply.ContainsKey("code") ? Convert.ToString(reply["code"]) : "error";
+            if (code == "outcome_unknown") { reply["outcome_unknown"] = true; reply["message"] = "Исход подготовки ПК неизвестен. Изменение компонентов может продолжаться. Не повторяй действие до проверки состояния."; }
+            else if (code == "restart_required") { reply["restart_required"] = true; reply["message"] = "Для завершения подготовки перезагрузи ПК самостоятельно."; }
+            else if (code == "uac_cancelled") reply["message"] = "Запрос администратора отменён. Подготовка ПК не выполнена.";
+            else if (code == "ready") reply["message"] = "Этот ПК готов к аппаратному ускорению виртуальных машин.";
+            return reply;
+        }
         string python = Path.Combine(root, "runtime", "python-3.12.14", "python.exe");
         string backend = Path.Combine(root, "scripts", "portable_app.py");
-        if (!File.Exists(python) || !File.Exists(backend))
-            return Failure("Не найден bundled runtime. Полностью распакуйте комплект рядом с Launcher.exe.");
+        if (!File.Exists(python))
+        {
+            Dictionary<string, object> failure = Failure("Не найден Python");
+            failure["blockers"] = new object[] { new Dictionary<string, object> {
+                { "title", "Не хватает компонентов" },
+                { "detail", "Python отсутствует. Нажми «Восстановить Python и QEMU»: приложение вернёт файлы из комплекта." },
+                { "action", "prepare" }, { "action_label", "Восстановить Python и QEMU" }
+            } };
+            return failure;
+        }
+        if (!File.Exists(backend))
+            return Failure("Не найдены файлы приложения. Распакуй полный комплект рядом с Launcher.exe.");
         string[] args = { "-X", "utf8", "-I", "-S", "-B", backend, "--root", root, "--action", action };
         ProcessStartInfo info = new ProcessStartInfo(python, String.Join(" ", args.Select(Quote)));
         info.WorkingDirectory = root;
+        return await ExecuteProcessAsync(info, TimeoutMilliseconds(action), payload).ConfigureAwait(false);
+    }
+
+    internal static Dictionary<string, object> Unknown(string message, string code)
+    {
+        Dictionary<string, object> failure = Failure(message);
+        failure["code"] = code;
+        failure["outcome_unknown"] = true;
+        return failure;
+    }
+
+    internal static Task<Dictionary<string, object>> RunProcessAsync(ProcessStartInfo info, int timeoutMilliseconds)
+    {
+        return ExecuteProcessAsync(info, timeoutMilliseconds, null);
+    }
+
+    private static async Task<Dictionary<string, object>> ExecuteProcessAsync(ProcessStartInfo info, int timeoutMilliseconds, object payload)
+    {
         info.UseShellExecute = false;
         info.CreateNoWindow = true;
-        info.RedirectStandardInput = true;
-        info.RedirectStandardOutput = true;
-        info.RedirectStandardError = true;
-        info.StandardOutputEncoding = Encoding.UTF8;
-        info.StandardErrorEncoding = Encoding.UTF8;
-        using (Process process = Process.Start(info))
+        info.RedirectStandardInput = info.RedirectStandardOutput = info.RedirectStandardError = true;
+        info.StandardOutputEncoding = info.StandardErrorEncoding = Encoding.UTF8;
+        Process process = new Process { StartInfo = info, EnableRaisingEvents = true };
+        TaskCompletionSource<bool> exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.Exited += delegate { exited.TrySetResult(true); };
+        try { process.Start(); }
+        catch (Exception error)
         {
+            process.Dispose();
+            if (!(error is System.ComponentModel.Win32Exception) && !(error is InvalidOperationException) && !(error is IOException)) throw;
+            Dictionary<string, object> failure = Failure("Не удалось запустить служебный компонент. Проверь доступ к папке и целостность файлов.");
+            failure["code"] = "process_start_failed";
+            return failure;
+        }
+        Task<Dictionary<string, object>> response = SettleResponseAsync(ReadResponseAsync(process, exited.Task, payload), exited.Task);
+        if (await Task.WhenAny(response, Task.Delay(timeoutMilliseconds)).ConfigureAwait(false) != response)
+        {
+            // Keep draining pipes until the child exits; timeout never terminates a supervisor or a VM.
+            Task cleanup = response.ContinueWith(completed => { var observed = completed.Exception; process.Dispose(); },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return new PendingReply(Unknown("Ответ не получен вовремя. Операция может продолжаться. Дождись завершения служебного процесса и повтори диагностику. VM и служебные процессы не останавливались.", "timeout"),response);
+        }
+        try
+        {
+            Dictionary<string,object> reply = await response.ConfigureAwait(false);
+            string code = reply.ContainsKey("code") ? Convert.ToString(reply["code"]) : "";
+            return new[] {"invalid_response","process_failed","transport_error"}.Contains(code) ? new PendingReply(reply,response) : reply;
+        }
+        finally { process.Dispose(); }
+    }
+
+    private static async Task<Dictionary<string,object>> SettleResponseAsync(Task<Dictionary<string,object>> response,Task exited)
+    {
+        await Task.WhenAll(response,exited).ConfigureAwait(false);
+        return await response.ConfigureAwait(false);
+    }
+
+    private static async Task<Dictionary<string, object>> ReadResponseAsync(Process process, Task exited, object payload)
+    {
+        try
+        {
+            Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderr = process.StandardError.ReadToEndAsync();
             if (payload != null)
             {
                 byte[] body = Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(payload));
-                process.StandardInput.BaseStream.Write(body, 0, body.Length);
-                process.StandardInput.BaseStream.Flush();
+                await process.StandardInput.BaseStream.WriteAsync(body, 0, body.Length).ConfigureAwait(false);
+                await process.StandardInput.BaseStream.FlushAsync().ConfigureAwait(false);
             }
             process.StandardInput.Close();
-            Task<string> stdout = process.StandardOutput.ReadToEndAsync();
-            Task<string> stderr = process.StandardError.ReadToEndAsync();
-            int timeout = action == "start" ? 220000 : 30000;
-            if (!process.WaitForExit(timeout))
-                return Failure("Ответ не подтверждён вовремя. Проверьте logs; VM принудительно не закрывались.");
-            Task.WaitAll(stdout, stderr);
-            try
+            await Task.WhenAll(exited, stdout, stderr).ConfigureAwait(false);
+            Dictionary<string, object> result;
+            try { result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(stdout.Result.Trim()); }
+            catch (ArgumentException) { result = null; }
+            catch (InvalidOperationException) { result = null; }
+            if (result == null || !result.ContainsKey("ok") || !(result["ok"] is bool))
+                return Unknown("Служебный компонент не вернул корректный ответ. Исход операции не подтверждён. Проверь состояние через диагностику.", "invalid_response");
+            if (process.ExitCode != 0 && Ok(result))
+                return Unknown("Служебный компонент завершился с ошибкой. Исход операции не подтверждён. Проверь состояние через диагностику.", "process_failed");
+            return result;
+        }
+        catch (Exception error)
+        {
+            if (!(error is IOException) && !(error is InvalidOperationException) && !(error is ObjectDisposedException)) throw;
+            return Unknown("Связь со служебным компонентом прервалась. Исход операции неизвестен. Проверь состояние через диагностику.", "transport_error");
+        }
+    }
+
+    private static async Task<Dictionary<string, object>> PrepareComponentsAsync(string root)
+    {
+        string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+        string script = Path.Combine(root, "scripts", "Prepare-Dependencies.ps1");
+        if (!File.Exists(script)) return Failure("Не найден сценарий подготовки. Распакуй полный комплект приложения.");
+        ProcessStartInfo info = new ProcessStartInfo(powershell, String.Join(" ", new[] { "-NoProfile", "-NonInteractive", "-File", script, "-Project", root }.Select(Quote)));
+        info.WorkingDirectory = root;
+        Dictionary<string, object> reply = await RunProcessAsync(info, 180000).ConfigureAwait(false);
+        string code = reply.ContainsKey("code") ? Convert.ToString(reply["code"]) : "error";
+        Dictionary<string, string> messages = new Dictionary<string, string> {
+            { "ready", "Компоненты готовы. Файлы Python и QEMU проверены." },
+            { "repaired", "Компоненты восстановлены. Файлов: " + (reply.ContainsKey("repaired_files") ? Convert.ToString(reply["repaired_files"]) : "несколько") + "." },
+            { "runtime_busy", "Компоненты заняты работающей VM. Штатно заверши Windows и шлюз, затем повтори подготовку." },
+            { "package_missing", "Не найден runtime/components-recovery.zip. Распакуй полный комплект приложения и повтори подготовку." },
+            { "invalid_package", "Пакет восстановления повреждён или не соответствует комплекту. Распакуй полный проверенный комплект приложения." },
+            { "error", "Подготовка не завершена. Проверь свободное место и доступ к папке. Если ошибка сохранится, распакуй полный комплект." }
+        };
+        if (messages.ContainsKey(code)) reply["message"] = messages[code];
+        else if (code == "invalid_response" || code == "process_failed")
+            reply["message"] = "Windows PowerShell не подтвердил подготовку. Проверь разрешение запуска scripts/Prepare-Dependencies.ps1 в свойствах комплекта и политике Windows. Политика выполнения не изменялась; исход подготовки не подтверждён.";
+        return reply;
+    }
+
+}
+
+internal static class NativeStyle
+{
+    internal static readonly Color Background = Color.FromArgb(242, 242, 247);
+    internal static readonly Color Accent = Color.FromArgb(36, 129, 204);
+    internal static readonly Color Ink = Color.FromArgb(28, 28, 30);
+    internal static readonly Color Muted = Color.FromArgb(110, 110, 115);
+
+    internal static GraphicsPath Rounded(Rectangle bounds, int radius)
+    {
+        GraphicsPath path = new GraphicsPath();
+        int diameter = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+        if (diameter < 2) { path.AddRectangle(bounds); return path; }
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    internal static void Surface(Control control, Graphics graphics, int radius)
+    {
+        graphics.Clear(control.Parent == null ? Background : control.Parent.BackColor);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (GraphicsPath shape = Rounded(new Rectangle(0, 0, control.Width - 1, control.Height - 1), radius))
+        using (Brush fill = new SolidBrush(control.BackColor)) graphics.FillPath(fill, shape);
+    }
+}
+
+internal sealed class RoundedButton : Button
+{
+    internal bool Primary;
+    internal bool Segment;
+    internal AppGlyph? Glyph;
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        Size text = TextRenderer.MeasureText(Text, Font, Size.Empty, TextFormatFlags.SingleLine);
+        return new Size(Math.Max(MinimumSize.Width,text.Width + Math.Max(24,Padding.Horizontal) + (Glyph.HasValue ? 40 : 0)),
+            Math.Max(MinimumSize.Height,text.Height + Padding.Vertical));
+    }
+    private bool selected;
+    internal bool Selected
+    {
+        get { return selected; }
+        set
+        {
+            if (selected == value) return;
+            selected = value;
+            Invalidate();
+            AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
+            AccessibilityNotifyClients(value ? AccessibleEvents.Selection : AccessibleEvents.SelectionRemove, -1);
+        }
+    }
+    protected override AccessibleObject CreateAccessibilityInstance() { return Segment ? new SegmentAccessibleObject(this) : base.CreateAccessibilityInstance(); }
+    private sealed class SegmentAccessibleObject : Control.ControlAccessibleObject
+    {
+        private readonly RoundedButton button;
+        internal SegmentAccessibleObject(RoundedButton owner) : base(owner) { button = owner; }
+        public override AccessibleRole Role { get { return AccessibleRole.PageTab; } }
+        public override string DefaultAction { get { return "Выбрать"; } }
+        public override void DoDefaultAction() { button.PerformClick(); }
+        public override AccessibleStates State
+        {
+            get
             {
-                return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(stdout.Result.Trim());
-            }
-            catch (InvalidOperationException)
-            {
-                return Failure("Backend не вернул корректный ответ. Проверьте целостность комплекта.");
-            }
-            catch (ArgumentException)
-            {
-                return Failure("Backend не вернул корректный ответ. Проверьте целостность комплекта.");
+                AccessibleStates state = base.State;
+                if (!button.Segment) return state;
+                state |= AccessibleStates.Selectable;
+                return button.Selected ? state | AccessibleStates.Selected : state & ~AccessibleStates.Selected;
             }
         }
     }
+    private bool hover;
+    private bool pressed;
+    internal RoundedButton()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
+        Cursor = Cursors.Hand;
+        UseVisualStyleBackColor = false;
+    }
+    protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hover = pressed = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { pressed = true; Invalidate(); base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent == null ? NativeStyle.Background : Parent.BackColor);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        Color fill = Segment ? (Selected ? Color.White : Parent.BackColor) : Primary ? NativeStyle.Accent : Color.White;
+        Color text = Segment ? NativeStyle.Ink : Primary ? Color.White : NativeStyle.Accent;
+        if (!Enabled) { fill = Segment ? fill : Color.FromArgb(229, 229, 234); text = NativeStyle.Muted; }
+        else if (pressed) fill = ControlPaint.Dark(fill, 0.08f);
+        else if (hover) fill = Primary ? ControlPaint.Light(fill, 0.08f) : Color.FromArgb(246, 247, 249);
+        if (SystemInformation.HighContrast)
+        {
+            fill = Selected || Primary ? SystemColors.Highlight : SystemColors.Control;
+            text = !Enabled ? SystemColors.GrayText : Selected || Primary ? SystemColors.HighlightText : SystemColors.ControlText;
+        }
+        using (GraphicsPath shape = NativeStyle.Rounded(new Rectangle(1, 1, Width - 3, Height - 3), Segment ? 9 : 13))
+        using (Brush brush = new SolidBrush(fill)) e.Graphics.FillPath(brush, shape);
+        if (Glyph.HasValue) AppIcons.Draw(e.Graphics, Glyph.Value, new Rectangle(14, (Height - 20) / 2, 20, 20), text);
+        int textLeft = Glyph.HasValue ? 42 : 12;
+        TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(textLeft, 4, Width - textLeft - 12, Height - 8), text,
+            (Segment ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter) | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | (ShowKeyboardCues ? 0 : TextFormatFlags.HidePrefix));
+        if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -7, -7), text, fill);
+    }
+}
+
+internal sealed class RoundedPanel : Panel
+{
+    internal RoundedPanel() { SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        if (Width < 2 || Height < 2) return;
+        Region previous = Region;
+        using (GraphicsPath path = NativeStyle.Rounded(ClientRectangle, 16)) Region = new Region(path);
+        if (previous != null) previous.Dispose();
+    }
+    protected override void OnPaintBackground(PaintEventArgs e) { NativeStyle.Surface(this, e.Graphics, 16); }
+}
+
+internal sealed class RoundedFlowPanel : FlowLayoutPanel
+{
+    internal RoundedFlowPanel() { SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true); }
+    protected override void OnPaintBackground(PaintEventArgs e) { NativeStyle.Surface(this, e.Graphics, 16); }
 }
 
 internal sealed class SettingsDialog : Form
 {
-    private readonly Dictionary<string, NumericUpDown> fields = new Dictionary<string, NumericUpDown>();
+    private readonly SettingsEditor editor = new SettingsEditor();
+    private readonly Dictionary<string, TextBox> fields;
+    private readonly Label validationError;
     internal Dictionary<string, object> Value
     {
-        get
-        {
-            Dictionary<string, object> result = new Dictionary<string, object> { { "schema", 1 } };
-            foreach (KeyValuePair<string, NumericUpDown> field in fields)
-                result.Add(field.Key, Decimal.ToInt32(field.Value.Value));
-            return result;
-        }
+        get { Dictionary<string, object> value; if (!editor.TryGetValue(out value)) throw new InvalidOperationException("Проверь настройки."); return value; }
     }
-
+    internal bool TrySave() { Dictionary<string, object> value; if (!editor.TryGetValue(out value)) { DialogResult = DialogResult.None; return false; } DialogResult = DialogResult.OK; return true; }
     internal SettingsDialog(Dictionary<string, object> settings)
     {
-        Text = "Настройки следующего запуска";
-        Font = new Font("Segoe UI", 10);
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(480, 285);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = MinimizeBox = false;
-        StartPosition = FormStartPosition.CenterParent;
-        TableLayoutPanel table = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 6 };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
-        string[] keys = { "work_memory_mib", "gateway_memory_mib", "vcpus", "lan_port" };
-        string[] labels = { "RAM Windows, МиБ", "RAM gateway, МиБ", "vCPU каждой VM", "Порт внутренней LAN" };
-        int[] minimum = { 1024, 256, 1, 1024 };
-        int[] maximum = { 32768, 4096, 32, 65535 };
-        for (int index = 0; index < keys.Length; index++)
-        {
-            table.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-            table.Controls.Add(new Label { Text = labels[index], Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, index);
-            NumericUpDown input = new NumericUpDown { Minimum = minimum[index], Maximum = maximum[index], Dock = DockStyle.Fill };
-            input.Value = Convert.ToDecimal(settings[keys[index]]);
-            fields.Add(keys[index], input);
-            table.Controls.Add(input, 1, index);
-        }
-        Label note = new Label { Text = "Сначала штатно завершите VM. Сеть и защита основной Windows не меняются.", Dock = DockStyle.Fill, AutoSize = true };
-        table.Controls.Add(note, 0, 4);
-        table.SetColumnSpan(note, 2);
-        FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
-        Button save = new Button { Text = "Сохранить", AutoSize = true, DialogResult = DialogResult.OK };
-        Button cancel = new Button { Text = "Отмена", AutoSize = true, DialogResult = DialogResult.Cancel };
-        actions.Controls.Add(save);
-        actions.Controls.Add(cancel);
-        table.Controls.Add(actions, 0, 5);
-        table.SetColumnSpan(actions, 2);
-        AcceptButton = save;
-        CancelButton = cancel;
-        Controls.Add(table);
+        Text = "Настройки"; Font = new Font("Segoe UI", 10); BackColor = NativeStyle.Background;
+        AutoScaleDimensions = new SizeF(96, 96); AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(590, 450); FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = MinimizeBox = false; StartPosition = FormStartPosition.CenterParent;
+        fields = editor.Fields; validationError = editor.Error; editor.LoadValues(settings, false);
+        editor.SaveButton.Click += delegate { TrySave(); };
+        editor.CancelButton.Text = "Отмена"; editor.CancelButton.DialogResult = DialogResult.Cancel;
+        AcceptButton = editor.SaveButton; CancelButton = editor.CancelButton; Controls.Add(editor);
     }
 }
 
-internal sealed class MainForm : Form
-{
-    internal readonly Button StartButton = new Button { Text = "Запустить", AutoSize = true };
-    internal readonly Button SettingsButton = new Button { Text = "Настройки", AutoSize = true };
-    internal readonly Button DiagnosticsButton = new Button { Text = "Диагностика", AutoSize = true };
-    private readonly Label status = new Label { Text = "Проверка комплекта…", AutoSize = true, Dock = DockStyle.Fill };
-    private readonly TextBox details = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
-    private bool ready;
-    internal string StatusText { get { return status.Text; } }
+internal enum AppPage { Home, Connection, Settings, Diagnostics }
 
-    internal MainForm()
+internal sealed partial class MainForm : Form
+{
+    private static readonly Color Ink = NativeStyle.Ink;
+    private static readonly Color Muted = NativeStyle.Muted;
+    private static readonly Color Blue = NativeStyle.Accent;
+    internal readonly Button StartButton = MakeButton("Запустить Windows", true);
+    internal readonly Button SettingsButton = MakeButton("Настройки", false);
+    internal readonly Button DiagnosticsButton = MakeButton("Диагностика", false);
+    internal readonly Button PrepareButton = MakeButton("Восстановить Python и QEMU", false);
+    private readonly Label status = new Label { Text = "Проверяем готовность", AutoSize = true, Font = new Font("Segoe UI", 13, FontStyle.Bold), ForeColor = Ink };
+    // Kept as the plain-text representation for backend integration and accessibility checks.
+    private readonly TextBox details = new TextBox { Multiline = true, ReadOnly = true, Visible = false };
+    private readonly Label nextStep = new Label { AutoSize = true, ForeColor = Muted };
+    private readonly Label resources = new Label { AutoSize = true, Font = new Font("Segoe UI", 11), ForeColor = Ink };
+    private readonly Label network = new Label { AutoSize = true, ForeColor = Color.FromArgb(130, 100, 32) };
+    private readonly Label checkedAt = new Label { AutoSize = true, ForeColor = Muted, Text = "Диагностика ещё не выполнена" };
+    private readonly Label reportLocation = new Label { AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9) };
+    private readonly Label operation = new Label { AutoSize = false, AutoEllipsis = true, Dock = DockStyle.Fill, ForeColor = Ink, Font = new Font("Segoe UI",9), Visible = false };
+    private readonly Label preparationHint = new Label { AutoSize = true, ForeColor = NativeStyle.Muted,
+        Font = new Font("Segoe UI", 9.5f), Margin = new Padding(0, 0, 0, 12),
+        Text = "Проверит файлы, необходимые для запуска Windows, и восстановит недостающие или повреждённые. Интернет не нужен." };
+    private readonly ProgressBar progress = new ProgressBar { Dock = DockStyle.Fill, Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 25, Visible = false, Height = 4 };
+    private readonly Panel pages = new Panel { Dock = DockStyle.Fill, BackColor = NativeStyle.Background };
+    private readonly Panel overview = new Panel { Dock = DockStyle.Fill, BackColor = NativeStyle.Background };
+    private readonly Panel diagnostics = new Panel { Dock = DockStyle.Fill, BackColor = NativeStyle.Background };
+    private readonly RoundedButton overviewButton = new RoundedButton { Text = "Главная", Segment = true, Selected = true, AutoSize = true, Padding = new Padding(14,10,14,10), Margin = new Padding(0,0,0,4), Glyph = AppGlyph.Home };
+    internal readonly Button ConnectionButton = MakeButton("Подключение", false);
+    internal readonly Button StopButton = MakeButton("Выключить", false);
+    internal readonly Button PrepareHostButton = MakeButton("Подготовить этот ПК", false);
+    internal readonly Button RepairGatewayButton = MakeButton("Восстановить шлюз", false);
+    private readonly Button refreshButton = MakeButton("Проверить снова", false);
+    private readonly LinkLabel sessionState = new LinkLabel { Font = new Font("Segoe UI",9), AutoSize = true, ForeColor = NativeStyle.Muted, LinkColor = NativeStyle.Accent, ActiveLinkColor = NativeStyle.Accent, LinkBehavior = LinkBehavior.HoverUnderline };
+    internal readonly SettingsEditor SettingsPage = new SettingsEditor();
+    internal readonly ConnectionEditor ConnectionPage = new ConnectionEditor();
+    private readonly Dictionary<AppPage,Control> pageControls = new Dictionary<AppPage,Control>();
+    private readonly Dictionary<AppPage,RoundedButton> navigation = new Dictionary<AppPage,RoundedButton>();
+    private bool settingsLoaded;
+    private bool displaySettingsLoaded;
+    private bool profilesLoaded;
+    private bool stopAvailable;
+    private bool runtimeActive;
+    private string workState = "unknown";
+    private string gatewayState = "unknown";
+    private bool testAvailable;
+    internal AppPage ActivePage { get; private set; }
+    private bool showingDiagnostics;
+    private readonly FlowLayoutPanel checkRows = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 12, 0) };
+    private readonly Button nextAction = MakeButton("Изменить настройки", false);
+    private readonly Func<string, object, Task<Dictionary<string, object>>> run;
+    private Dictionary<string, object> readinessReport;
+    private Dictionary<string, object> operationResult;
+    private bool outcomeUnknown;
+    private Task<Dictionary<string,object>> pendingOutcome;
+    private string pendingStartReceipt;
+    private string activeOperationAction;
+    private bool closing;
+    private readonly System.Windows.Forms.Timer lifecycleTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+    private NotifyIcon trayIcon;
+    private ToolStripMenuItem trayStop;
+    private bool lifecycleEnabled;
+    private bool runtimePolling;
+    private bool panelHiddenForSession;
+    private int operationRevision;
+    internal Dictionary<string, object> ReadinessReport { get { return readinessReport; } }
+    internal Dictionary<string, object> OperationResult { get { return operationResult; } }
+    private string suggestedAction = "retry";
+    private bool ready;
+    private bool busy;
+    internal string StatusText { get { return status.Text; } }
+    internal string ResourceText { get { return resources.Text; } }
+    internal string DiagnosticsText { get { return details.Text; } }
+    internal string CheckedAtText { get { return checkedAt.Text; } }
+    internal bool DiagnosticsSelected { get { return showingDiagnostics; } }
+
+    private static Button MakeButton(string text, bool primary)
     {
+        return new RoundedButton { Text = text, Primary = primary, AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(20, 12, 20, 12),
+            MinimumSize = new Size(120, 46), Margin = new Padding(0, 0, 10, 0), BackColor = Color.White,
+            Font = new Font("Segoe UI", 10.5f, primary ? FontStyle.Bold : FontStyle.Regular) };
+    }
+
+    private void SelectPage(bool showDiagnostics) { SelectPage(showDiagnostics ? AppPage.Diagnostics : AppPage.Home); }
+    private void SelectPage(AppPage page)
+    {
+        ActivePage = page; showingDiagnostics = page == AppPage.Diagnostics;
+        if (!busy && !outcomeUnknown) operation.Visible = false;
+        foreach (KeyValuePair<AppPage,Control> item in pageControls) item.Value.Visible = item.Key == page;
+        pageControls[page].BringToFront();
+        foreach (KeyValuePair<AppPage,RoundedButton> item in navigation) item.Value.Selected = item.Key == page;
+    }
+
+    internal async Task NavigateAsync(AppPage page)
+    {
+        if (!CanUpdate) return;
+        SelectPage(page);
+        if (page == AppPage.Diagnostics) { await RunAction("diagnose", true); return; }
+        if (page == AppPage.Connection) { if (!profilesLoaded) await ProfileActionAsync("list-profiles", null); return; }
+        if (page != AppPage.Settings || settingsLoaded || !BeginOperation("get-settings")) return;
+        try
+        {
+            Dictionary<string,object> reply = await run("get-settings", null);
+            if (!CanUpdate) return;
+            if (!Bridge.Ok(reply)) { operation.Text = SettingsPage.Error.Text = Bridge.Message(reply); SettingsPage.Error.Visible = true; return; }
+            SettingsPage.LoadValues((Dictionary<string,object>)reply["settings"], Flag(reply,"recovery_required"));
+            if (reply.ContainsKey("windows_settings"))
+            {
+                SettingsPage.LoadWindowsValues((Dictionary<string,object>)reply["windows_settings"],
+                    reply.ContainsKey("windows_disk") ? (Dictionary<string,object>)reply["windows_disk"] : null);
+                displaySettingsLoaded = true;
+            }
+            settingsLoaded = true; operation.Text = "";
+        }
+        catch (Exception) { if (CanUpdate) { operation.Text = SettingsPage.Error.Text = "Не удалось загрузить настройки. Повтори после проверки компонентов."; SettingsPage.Error.Visible = true; } }
+        finally { if (CanUpdate) Busy(false); }
+    }
+
+    internal MainForm() : this(true, (Func<string, object, Task<Dictionary<string, object>>>)null) { }
+
+    internal MainForm(bool diagnoseOnShow, Func<string, object, Dictionary<string, object>> runner)
+        : this(diagnoseOnShow, runner == null ? null : new Func<string, object, Task<Dictionary<string, object>>>((action, payload) => Task.Run(() => runner(action, payload)))) { }
+
+    internal MainForm(bool diagnoseOnShow, Func<string, object, Task<Dictionary<string, object>>> runner)
+    {
+        run = runner ?? ((action, payload) => Bridge.RunAsync(Bridge.Root, action, payload));
         Text = "Windows Claude Portable";
+        Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);
+        FormClosing += delegate(object sender,FormClosingEventArgs args) {
+            if (lifecycleEnabled && args.CloseReason == CloseReason.UserClosing
+                && (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start")))
+            { args.Cancel = true; HidePanelForSession(); return; }
+            closing = true;
+        };
+        Disposed += delegate {
+            closing = true; lifecycleTimer.Stop(); lifecycleTimer.Dispose();
+            if (trayIcon != null)
+            {
+                NotifyIcon icon = trayIcon; trayIcon = null;
+                ContextMenuStrip menu = icon.ContextMenuStrip;
+                icon.Visible = false; icon.Dispose(); if (menu != null) menu.Dispose();
+            }
+        };
         Font = new Font("Segoe UI", 10);
+        ForeColor = Ink;
+        BackColor = NativeStyle.Background;
+        AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(660, 380);
-        MinimumSize = new Size(600, 330);
+        ClientSize = new Size(980, 680);
+        MinimumSize = new Size(900, 620);
         StartPosition = FormStartPosition.CenterScreen;
-        TableLayoutPanel table = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 1, RowCount = 5 };
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        table.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-        table.Controls.Add(new Label { Text = "Windows Claude", Font = new Font("Segoe UI", 18, FontStyle.Bold), Dock = DockStyle.Fill }, 0, 0);
-        table.Controls.Add(status, 0, 1);
-        FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        foreach (Button button in new[] { StartButton, SettingsButton, DiagnosticsButton }) buttons.Controls.Add(button);
-        table.Controls.Add(buttons, 0, 2);
-        table.Controls.Add(details, 0, 3);
-        table.Controls.Add(new Label { Text = "Закрытие панели не останавливает VM. Завершайте гостевую Windows штатно.", Dock = DockStyle.Fill, AutoSize = true }, 0, 4);
-        Controls.Add(table);
-        StartButton.Enabled = false;
-        StartButton.Click += async delegate { await Action("start"); };
-        DiagnosticsButton.Click += async delegate { await Action("diagnose"); };
-        SettingsButton.Click += Settings;
-        Shown += async delegate { await Action("diagnose"); };
+        TableLayoutPanel frame = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(22,16,22,12), ColumnCount = 1, RowCount = 4, Margin = Padding.Empty };
+        frame.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        frame.RowStyles.Add(new RowStyle(SizeType.AutoSize)); frame.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        frame.RowStyles.Add(new RowStyle(SizeType.AutoSize)); frame.RowStyles.Add(new RowStyle(SizeType.Absolute,4));
+        TableLayoutPanel body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,190)); body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); body.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        FlowLayoutPanel nav = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0,0,18,0) };
+        Button[] buttons = { overviewButton, ConnectionButton, SettingsButton, DiagnosticsButton };
+        AppPage[] order = { AppPage.Home, AppPage.Connection, AppPage.Settings, AppPage.Diagnostics };
+        AppGlyph[] glyphs = { AppGlyph.Home, AppGlyph.Network, AppGlyph.Settings, AppGlyph.Diagnostics };
+        for (int index = 0; index < order.Length; index++)
+        {
+            AppPage target = order[index]; RoundedButton button = (RoundedButton)buttons[index];
+            button.Segment = true; button.Glyph = glyphs[index]; button.MinimumSize = new Size(174,42);
+            button.Margin = new Padding(0,0,0,5); button.Padding = new Padding(14,9,14,9);
+            button.Click += async delegate { await NavigateAsync(target); }; navigation.Add(target,button); nav.Controls.Add(button);
+            button.FontChanged += delegate { body.ColumnStyles[0].Width = navigation.Values.Max(item => item.GetPreferredSize(Size.Empty).Width) + nav.Margin.Horizontal; };
+        }
+        body.Layout += delegate {
+            int width = navigation.Values.Max(item => item.GetPreferredSize(Size.Empty).Width);
+            body.ColumnStyles[0].Width = width + nav.Margin.Horizontal;
+            operation.Margin = new Padding(width + nav.Margin.Horizontal,6,0,0);
+            foreach (RoundedButton item in navigation.Values) { item.AutoSize = false; item.Size = new Size(width,item.GetPreferredSize(Size.Empty).Height); }
+        };
+        body.Controls.Add(nav,0,0); body.Controls.Add(pages,1,0); frame.Controls.Add(body,0,1);
+        pageControls.Add(AppPage.Home,overview); pageControls.Add(AppPage.Connection,ConnectionPage); pageControls.Add(AppPage.Settings,SettingsPage); pageControls.Add(AppPage.Diagnostics,diagnostics);
+        foreach (Control page in pageControls.Values) { page.Dock = DockStyle.Fill; pages.Controls.Add(page); }
+        TableLayoutPanel home = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty };
+        home.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        for (int index = 0; index < 3; index++) home.RowStyles.Add(new RowStyle(SizeType.AutoSize)); home.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        RoundedFlowPanel summary = new RoundedFlowPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(16,10,16,10), Margin = new Padding(0,0,0,8), BackColor = Color.White };
+        status.Font = new Font("Segoe UI",12,FontStyle.Bold); status.Margin = new Padding(0,0,0,5); nextStep.Margin = new Padding(0,0,0,6); sessionState.Margin = new Padding(0,0,0,6);
+        summary.Controls.Add(status); summary.Controls.Add(nextStep); summary.Controls.Add(sessionState);
+        FlowLayoutPanel launch = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = Padding.Empty };
+        ((RoundedButton)StartButton).Glyph = AppGlyph.Play; StartButton.Padding = new Padding(14,9,14,9);
+        StopButton.Padding = new Padding(14,9,14,9); launch.Controls.Add(StartButton); launch.Controls.Add(StopButton); summary.Controls.Add(launch);
+        nextAction.Padding = new Padding(10,7,10,7); nextAction.Margin = new Padding(0,8,0,0); summary.Controls.Add(nextAction); home.Controls.Add(summary,0,0);
+        RoundedFlowPanel allocation = new RoundedFlowPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(16,8,16,8), Margin = new Padding(0,0,0,6), BackColor = Color.White };
+        resources.Font = new Font("Segoe UI",9.5f); resources.Margin = Padding.Empty; allocation.Controls.Add(resources); home.Controls.Add(allocation,0,1);
+        network.Font = new Font("Segoe UI",9); network.ForeColor = Muted; network.Margin = new Padding(2,0,2,0); home.Controls.Add(network,0,2);
+        overview.Controls.Add(home);
+        TableLayoutPanel diagnosticLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
+        diagnosticLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        FlowLayoutPanel tools = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true, Margin = new Padding(0,0,0,8) };
+        ((RoundedButton)PrepareButton).Glyph = ((RoundedButton)RepairGatewayButton).Glyph = AppGlyph.Repair; ((RoundedButton)refreshButton).Glyph = AppGlyph.Diagnostics;
+        foreach (Button button in new[] {refreshButton,PrepareHostButton,PrepareButton,RepairGatewayButton}) { button.Padding = new Padding(10,7,10,7); tools.Controls.Add(button); }
+        diagnosticLayout.Controls.Add(tools,0,0); preparationHint.Text = "Подготовка ПК включает виртуализацию с запросом UAC. Восстановление Python, QEMU и шлюза использует проверенные файлы из комплекта. Интернет не нужен.";
+        diagnosticLayout.Controls.Add(preparationHint,0,1); diagnosticLayout.Controls.Add(checkRows,0,2); diagnosticLayout.Controls.Add(checkedAt,0,3); diagnosticLayout.Controls.Add(reportLocation,0,4); diagnostics.Controls.Add(diagnosticLayout);
+        operation.Height=operation.Font.Height+4;operation.FontChanged+=delegate{operation.Height=operation.Font.Height+4;};
+        frame.Controls.Add(operation,0,2); frame.Controls.Add(progress,0,3); Controls.Add(frame);
+        overview.Resize += delegate {
+            int width = Math.Max(100,overview.ClientSize.Width-38);
+            foreach (Label label in new[] {status,nextStep,sessionState,resources,network}) label.MaximumSize = new Size(width,0);
+            launch.MaximumSize = new Size(width,0);
+        };
+        diagnosticLayout.SizeChanged += delegate { preparationHint.MaximumSize = new Size(Math.Max(100,diagnosticLayout.Width),0); };
+        checkRows.SizeChanged += delegate { FitCheckRows(); };
+        StartButton.Enabled = false; StopButton.Enabled = false; nextAction.Visible = false;
+        StartButton.Click += async delegate { await RunAction("start",false); };
+        StopButton.Click += async delegate { if (stopAvailable) await RunAction("stop",false); };
+        PrepareButton.Click += async delegate { await RunAction("prepare-components",false); };
+        PrepareHostButton.Click += async delegate { await RunAction("prepare-host",false); };
+        RepairGatewayButton.Click += async delegate { await RunAction("repair-gateway",false); };
+        refreshButton.Click += async delegate { await RunAction("diagnose",true); };
+        sessionState.LinkClicked += async delegate { await NavigateAsync(AppPage.Connection); };
+        SettingsPage.SaveButton.Click += async delegate { Dictionary<string,object> value; if (SettingsPage.TryGetValue(out value)) await SaveSettingsAndDiagnose(value); };
+        ConnectionPage.ProfilePicked += async id => { await ProfileActionAsync("get-profile-view",new Dictionary<string,object>{{"profile_id",id}}); };
+        ConnectionPage.SaveButton.Click += async delegate { await SaveProfileAsync(); };
+        ConnectionPage.SelectButton.Click += async delegate { await ProfileActionAsync("select-profile",new Dictionary<string,object>{{"profile_id",ConnectionPage.ProfileId}}); };
+        ConnectionPage.TestButton.Click += async delegate { if (testAvailable) await ProfileActionAsync("test-profile",new Dictionary<string,object>{{"profile_id",ConnectionPage.ProfileId}}); };
+        ConnectionPage.ImportButton.Click += async delegate { await ImportProfileDialogAsync(); };
+        ConnectionPage.ExportButton.Click += async delegate { await ExportProfileDialogAsync(); };
+        nextAction.Click += async delegate {
+            if (suggestedAction == "settings") await NavigateAsync(AppPage.Settings);
+            else if (suggestedAction == "connection") await NavigateAsync(AppPage.Connection);
+            else if (suggestedAction == "repair_gateway") await RunAction("repair-gateway",false);
+            else if (suggestedAction == "recover_session") await RunAction("recover-session",false);
+            else if (suggestedAction == "windows_features") { SelectPage(AppPage.Diagnostics); operation.Text = "Нажми «Подготовить этот ПК». Изменение компонентов Windows потребует UAC; перезагрузка выполняется вручную."; operation.Visible = true; }
+            else await RunAction(suggestedAction == "prepare" ? "prepare-components" : "diagnose",suggestedAction != "prepare");
+        };
+        SelectPage(AppPage.Home); Busy(false);
+        if (diagnoseOnShow) Shown += async delegate { StartLifecycleMonitoring(); await RunAction("diagnose",false); };
+    }
+
+    internal void StartLifecycleMonitoring()
+    {
+        if (lifecycleEnabled || !CanUpdate) return;
+        lifecycleEnabled = true;
+        ContextMenuStrip menu = new ContextMenuStrip();
+        ToolStripMenuItem open = new ToolStripMenuItem("Открыть панель");
+        trayStop = new ToolStripMenuItem("Выключить Windows");
+        open.Click += delegate { ShowPanel(false); };
+        trayStop.Click += async delegate { ShowPanel(false); if (stopAvailable) await RunAction("stop",false); };
+        menu.Items.Add(open); menu.Items.Add(trayStop);
+        trayIcon = new NotifyIcon { Icon = Icon ?? SystemIcons.Application, Text = "Windows Claude Portable", ContextMenuStrip = menu };
+        trayIcon.DoubleClick += delegate { ShowPanel(false); };
+        lifecycleTimer.Tick += async delegate { await RefreshRuntimeAsync(); };
+        lifecycleTimer.Start(); UpdateTray();
+    }
+
+    private void UpdateTray()
+    {
+        if (trayIcon == null || !CanUpdate) return;
+        trayIcon.Visible = runtimeActive || panelHiddenForSession;
+        trayStop.Enabled = stopAvailable && !busy && !outcomeUnknown;
+    }
+
+    private void HidePanelForSession()
+    {
+        if (!CanUpdate) return;
+        panelHiddenForSession = true; UpdateTray(); Hide();
+    }
+
+    private void ShowPanel(bool home)
+    {
+        if (!CanUpdate) return;
+        bool wasHidden = !Visible;
+        panelHiddenForSession = false;
+        if (home && wasHidden) SelectPage(AppPage.Home);
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Show(); Activate(); UpdateTray();
+    }
+
+    private void RuntimeRefreshFailed(string message)
+    {
+        ShowPanel(true);
+        status.Text = "Состояние Windows не подтверждено";
+        nextStep.Text = message; operation.Text = message; operation.Visible = true;
+        checkedAt.Text = "Состояние не обновилось. Повтори диагностику.";
+    }
+
+    internal async Task RefreshRuntimeAsync()
+    {
+        if (!lifecycleEnabled || !CanUpdate || busy || runtimePolling
+            || (!runtimeActive && !panelHiddenForSession && !outcomeUnknown)) return;
+        runtimePolling = true;
+        int revision = operationRevision;
+        try
+        {
+            Dictionary<string,object> report = await run("diagnose",null);
+            if (!CanUpdate || busy || revision != operationRevision) return;
+            if (report == null || !report.ContainsKey("checks")) { RuntimeRefreshFailed(Bridge.Message(report)); return; }
+            Dictionary<string,object> state = report.ContainsKey("runtime") ? report["runtime"] as Dictionary<string,object> : null;
+            bool changed = readinessReport == null || state == null || pendingStartReceipt != null
+                || workState != TextValue(state,"work","unknown") || gatewayState != TextValue(state,"gateway","unknown")
+                || Bridge.Ok(report) != Bridge.Ok(readinessReport)
+                || Flag(report,"network_verified") != Flag(readinessReport,"network_verified")
+                || DisplayState(report) != DisplayState(readinessReport)
+                || TextValue(report,"message","") != TextValue(readinessReport,"message","")
+                || (pendingOutcome != null && pendingOutcome.IsCompleted);
+            if (changed) { Display(report); Busy(false); }
+            bool workActive = workState == "running" || workState == "starting" || workState == "restarting" || workState == "stopping";
+            if (panelHiddenForSession && (!workActive || !Bridge.Ok(report) || outcomeUnknown
+                || DisplayState(report) == "failed" || DisplayState(report) == "unconfirmed")) ShowPanel(true);
+            UpdateTray();
+        }
+        catch (Exception)
+        {
+            if (CanUpdate && !busy && revision == operationRevision)
+                RuntimeRefreshFailed("Не удалось обновить состояние. Повтори диагностику.");
+        }
+        finally { runtimePolling = false; }
+    }
+
+    private static string DisplayState(Dictionary<string,object> report)
+    {
+        if (report == null || !report.ContainsKey("windows_display")) return "";
+        var display = report["windows_display"] as Dictionary<string,object>;
+        return TextValue(display,"status","");
+    }
+
+    private void FitCheckRows()
+    {
+        int width = Math.Max(100, checkRows.ClientSize.Width - 34);
+        foreach (Control card in checkRows.Controls)
+        {
+            card.MinimumSize = Size.Empty;
+            card.MaximumSize = new Size(width, 0);
+            card.MinimumSize = new Size(width, 0);
+            card.Width = width;
+            foreach (Label label in card.Controls.OfType<Label>()) label.MaximumSize = new Size(width - 42, 0);
+        }
     }
 
     private void Busy(bool value)
     {
-        StartButton.Enabled = !value && ready;
-        SettingsButton.Enabled = DiagnosticsButton.Enabled = !value;
+        busy = value;
+        StartButton.Enabled = !value && ready && !outcomeUnknown && !runtimeActive;
+        SettingsButton.Enabled = PrepareButton.Enabled = RepairGatewayButton.Enabled = !value && !outcomeUnknown;
+        ConnectionButton.Enabled = DiagnosticsButton.Enabled = overviewButton.Enabled = refreshButton.Enabled = nextAction.Enabled = sessionState.Enabled = !value;
+        PrepareHostButton.Enabled = !value && !outcomeUnknown && File.Exists(Path.Combine(Bridge.Root,"scripts","Prepare-Host.ps1"));
+        StopButton.Enabled = !value && !outcomeUnknown && stopAvailable;
+        StopButton.Visible = stopAvailable;
+        StartButton.Visible = ready && !outcomeUnknown && !runtimeActive;
+        SettingsPage.SaveButton.Enabled = !value && !outcomeUnknown && settingsLoaded;
+        SettingsPage.CancelButton.Enabled = !value && !outcomeUnknown && settingsLoaded;
+        foreach (TextBox field in SettingsPage.Fields.Values) field.Enabled = !value && !outcomeUnknown;
+        SettingsPage.Resolution.Enabled = !value && !outcomeUnknown;
+        ConnectionPage.SetBusy(value || outcomeUnknown);
+        progress.Visible = value;
+        operation.Visible = value || outcomeUnknown || !String.IsNullOrEmpty(operation.Text);
         UseWaitCursor = value;
+        UpdateTray();
     }
+
+    private static string VmState(string state, bool gateway = false)
+    {
+        switch (state) { case "stopped": return gateway ? "выключен" : "выключена"; case "starting": return "запускается"; case "restarting": return "перезагружается"; case "running": return "работает"; case "reconnecting": return "восстанавливает связь"; case "connection-failed": return "ошибка подключения"; case "control-unavailable-guest-running": return "работает без управления"; case "shutdown-unconfirmed": return "выключение не подтверждено"; case "failed": return "ошибка сеанса"; case "stopping": return "выключается"; default: return "состояние неизвестно"; }
+    }
+
+    private static bool ActiveVmState(string state)
+    {
+        return state == "starting" || state == "restarting" || state == "running" || state == "reconnecting"
+            || state == "stopping" || state == "shutdown-unconfirmed" || state == "connection-failed" || state == "control-unavailable-guest-running" || state == "failed";
+    }
+
+    private static string RuntimeHeading(string work, string gateway)
+    {
+        if (ActiveVmState(work))
+            return work == "failed" || work == "connection-failed" ? "Сеанс Windows требует проверки" : "Windows " + VmState(work);
+        if (ActiveVmState(gateway))
+            return gateway == "connection-failed" ? "Ошибка подключения шлюза" : gateway == "failed" ? "Сеанс шлюза требует проверки" : "Шлюз " + VmState(gateway, true);
+        return work == "stopped" && gateway == "stopped" ? "Готово к запуску Windows" : "Сеанс Windows не подтверждён";
+    }
+
+    private static bool Flag(Dictionary<string,object> item,string key) { return item != null && item.ContainsKey(key) && item[key] is bool && (bool)item[key]; }
+
+    private static string TextValue(Dictionary<string, object> value, string key, string fallback)
+    {
+        return value.ContainsKey(key) && value[key] != null ? Convert.ToString(value[key]) : fallback;
+    }
+
+    private List<Dictionary<string, object>> Checks(Dictionary<string, object> result)
+    {
+        List<Dictionary<string, object>> checks = new List<Dictionary<string, object>>();
+        Dictionary<string, object> source = result.ContainsKey("checks") ? result["checks"] as Dictionary<string, object> : null;
+        if (source != null)
+            foreach (KeyValuePair<string, object> item in source)
+            {
+                Dictionary<string, object> check = item.Value as Dictionary<string, object>;
+                if (check == null) continue;
+                Dictionary<string, object> row = new Dictionary<string, object>(check);
+                if (!row.ContainsKey("title")) row["title"] = item.Key;
+                checks.Add(row);
+            }
+        return checks.OrderBy(item => item.ContainsKey("passed") && item["passed"] is bool && (bool)item["passed"]).ToList();
+    }
+
+    internal void DisplayReport(Dictionary<string, object> result) { Display(result); }
 
     private void Display(Dictionary<string, object> result)
     {
-        status.Text = Bridge.Message(result);
-        status.ForeColor = Bridge.Ok(result) ? Color.DarkGreen : Color.DarkRed;
-        List<string> lines = new List<string>();
-        if (result.ContainsKey("checks"))
+        bool isReadiness = result.ContainsKey("checks");
+        if (isReadiness)
         {
-            Dictionary<string, object> checks = (Dictionary<string, object>)result["checks"];
-            foreach (KeyValuePair<string, object> item in checks)
-            {
-                Dictionary<string, object> check = (Dictionary<string, object>)item.Value;
-                lines.Add(((bool)check["passed"] ? "✓ " : "× ") + Convert.ToString(check["detail"]));
-            }
+            readinessReport = result;
             ready = Bridge.Ok(result);
-        }
-        else lines.Add(Bridge.Message(result));
-        details.Text = String.Join(Environment.NewLine + Environment.NewLine, lines);
-    }
-
-    private async Task Action(string action)
-    {
-        Busy(true);
-        status.Text = action == "start" ? "Запуск gateway и Windows… Подтвердите запрос UAC." : "Проверка prerequisites и файлов…";
-        try
-        {
-            Dictionary<string, object> result = await Task.Run(() => Bridge.Run(Bridge.Root, action, null));
-            if (!IsDisposed) Display(result);
-        }
-        catch (Exception)
-        {
-            if (!IsDisposed) Display(Bridge.Failure("Не удалось выполнить действие. Проверьте доступ к папке и целостность runtime."));
-        }
-        finally { if (!IsDisposed) Busy(false); }
-    }
-
-    private async void Settings(object sender, EventArgs args)
-    {
-        Busy(true);
-        try
-        {
-            Dictionary<string, object> current = await Task.Run(() => Bridge.Run(Bridge.Root, "get-settings", null));
-            if (IsDisposed) return;
-            if (!Bridge.Ok(current)) { Display(current); return; }
-            using (SettingsDialog dialog = new SettingsDialog((Dictionary<string, object>)current["settings"]))
+            if (pendingOutcome != null && pendingOutcome.IsCompleted) { outcomeUnknown = false; pendingOutcome = null; }
+            Dictionary<string,object> startup = result.ContainsKey("startup") ? result["startup"] as Dictionary<string,object> : null;
+            if (pendingStartReceipt != null && startup != null && TextValue(startup,"receipt","") == pendingStartReceipt
+                && (TextValue(startup,"phase","") == "ready"
+                    || (!Flag(startup,"supervisor_active") && (TextValue(startup,"phase","") == "stopped" || TextValue(startup,"phase","") == "error"))))
+            { outcomeUnknown = false; pendingStartReceipt = null; }
+            Dictionary<string,object> capabilities = result.ContainsKey("capabilities") ? result["capabilities"] as Dictionary<string,object> : null;
+            stopAvailable = Flag(capabilities,"stop"); testAvailable = Flag(capabilities,"test_profile");
+            ConnectionPage.SetTestAvailable(testAvailable);
+            Dictionary<string,object> runtime = result.ContainsKey("runtime") ? result["runtime"] as Dictionary<string,object> : null;
+            workState = runtime == null ? "unknown" : TextValue(runtime,"work","unknown");
+            gatewayState = runtime == null ? "unknown" : TextValue(runtime,"gateway","unknown");
+            runtimeActive = ActiveVmState(workState) || ActiveVmState(gatewayState);
+            Dictionary<string,object> connection = result.ContainsKey("connection") ? result["connection"] as Dictionary<string,object> : null;
+            Dictionary<string,object> selected = connection != null && connection.ContainsKey("selected_profile") ? connection["selected_profile"] as Dictionary<string,object> : null;
+            if (selected == null)
             {
-                if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                Dictionary<string, object> value = dialog.Value;
-                await SaveSettingsAndDiagnose(value);
+                sessionState.Text = "Добавить подключение"; sessionState.LinkArea = new LinkArea(0,sessionState.Text.Length);
+                sessionState.AccessibleName = "Добавить подключение. Открыть страницу подключения.";
+            }
+            else
+            {
+                string name = TextValue(selected,"name","Профиль"); string shortName = name.Length > 18 ? name.Substring(0,18) + "…" : name;
+                string protocol = TextValue(selected,"protocol","");
+                if (protocol == "hysteria2") protocol = "Hysteria2"; else protocol = protocol.ToUpperInvariant();
+                string heading = shortName + " (" + protocol + ")";
+                string connectionState = Flag(connection,"verified") ? "Подключение проверено" : "Выбрано для следующего запуска";
+                sessionState.Text = heading + ". " + connectionState;
+                sessionState.LinkArea = new LinkArea(0,heading.Length); sessionState.AccessibleName = name + ". " + connectionState;
             }
         }
-        catch (Exception)
+        else
         {
-            if (!IsDisposed) Display(Bridge.Failure("Настройки не подтверждены. Проверьте доступ к папке."));
+            operationResult = result;
+            if (result.ContainsKey("outcome_unknown") && result["outcome_unknown"] is bool && (bool)result["outcome_unknown"])
+                TrackUnknownOutcome(result);
         }
-        finally { if (!IsDisposed) Busy(false); }
+        Dictionary<string, object> report = readinessReport ?? result;
+        List<Dictionary<string, object>> checks = Checks(report);
+        Dictionary<string, object> blocker = null;
+        if (!Bridge.Ok(result))
+        {
+            System.Collections.IEnumerable blockers = result.ContainsKey("blockers") ? result["blockers"] as System.Collections.IEnumerable : null;
+            if (blockers != null) blocker = blockers.Cast<object>().OfType<Dictionary<string, object>>().FirstOrDefault();
+            if (blocker == null && isReadiness) blocker = checks.FirstOrDefault(item => !item.ContainsKey("passed") || !(item["passed"] is bool) || !(bool)item["passed"]);
+        }
+        status.Text = blocker == null ? Bridge.Message(result) : TextValue(blocker, "title", Bridge.Message(result));
+        status.ForeColor = Ink;
+        if (isReadiness && Bridge.Ok(result)) status.Text = RuntimeHeading(workState, gatewayState);
+        nextStep.Text = blocker == null ? (Bridge.Ok(result) ? "Шлюз запустится перед Windows." : "Подробности доступны в разделе диагностики ниже.") : TextValue(blocker, "detail", Bridge.Message(result));
+        if (isReadiness && Bridge.Ok(result)) nextStep.Text = workState == "unknown" && gatewayState == "unknown" ? "Готовность файлов подтверждена." :
+            "Windows: " + VmState(workState) + ". Шлюз: " + VmState(gatewayState, true) + ".";
+        suggestedAction = blocker == null ? "retry" : TextValue(blocker, "action", "retry");
+        nextAction.Text = blocker == null ? "Повторить диагностику" : TextValue(blocker, "action_label", "Повторить диагностику");
+        nextAction.Visible = !Bridge.Ok(result);
+        Dictionary<string, object> settings = report.ContainsKey("settings") ? report["settings"] as Dictionary<string, object> : null;
+        if (settings != null)
+            resources.Text = "Windows: " + TextValue(settings, "work_memory_mib", "—") + " МиБ" + Environment.NewLine + "Процессоры каждой VM: " + TextValue(settings, "vcpus", "—");
+        else if (String.IsNullOrEmpty(resources.Text)) resources.Text = "Параметры появятся после проверки комплекта.";
+        Dictionary<string,object> displaySettings = report.ContainsKey("windows_settings") ? report["windows_settings"] as Dictionary<string,object> : null;
+        if (displaySettings != null)
+        {
+            string size = TextValue(displaySettings,"width","—") + " × " + TextValue(displaySettings,"height","—");
+            string state = DisplayState(report);
+            string detail = state == "applied" ? "применено" : state == "not_running" ? "при следующем запуске" : state == "failed" ? "не применилось" : "ожидаем подтверждения Windows";
+            resources.Text += Environment.NewLine + "Разрешение: " + size + " — " + detail;
+            if (state == "failed" || state == "unconfirmed")
+            {
+                var display = report["windows_display"] as Dictionary<string,object>;
+                var receipt = display != null && display.ContainsKey("receipt") ? display["receipt"] as Dictionary<string,object> : null;
+                if (blocker == null)
+                    nextStep.Text = state == "failed" ? "Windows не применила выбранное разрешение. Выбери другой размер в настройках после выключения." : "Windows ещё не подтвердила разрешение. Проверь подготовку гостевой системы.";
+                if (receipt != null && receipt.ContainsKey("current"))
+                {
+                    var current = receipt["current"] as Dictionary<string,object>;
+                    resources.Text += Environment.NewLine + "Сейчас в Windows: " + TextValue(current,"width","—") + " × " + TextValue(current,"height","—");
+                }
+            }
+        }
+        string warning = TextValue(report, "network_warning", network.Text);
+        network.Text = warning;
+        network.Visible = warning.Length > 0;
+        checkRows.SuspendLayout();
+        while (checkRows.Controls.Count > 0) { Control old = checkRows.Controls[0]; checkRows.Controls.RemoveAt(0); old.Dispose(); }
+        List<string> lines = new List<string>();
+        foreach (Dictionary<string, object> item in checks)
+        {
+            bool passed = item.ContainsKey("passed") && item["passed"] is bool && (bool)item["passed"];
+            string title = TextValue(item, "title", "Проверка");
+            string detail = TextValue(item, "detail", "");
+            lines.Add((passed ? "Готово: " : "Нужно исправить: ") + title + Environment.NewLine + detail);
+            FlowLayoutPanel card = new RoundedFlowPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(20, 16, 20, 18), Margin = new Padding(0, 0, 0, 10), BackColor = Color.White };
+            card.Controls.Add(new Label { Text = (passed ? "Готово: " : "Нужно внимание: ") + title, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = passed ? Ink : Color.FromArgb(165, 63, 45), Margin = new Padding(0, 0, 0, 6) });
+            card.Controls.Add(new Label { Text = detail, AutoSize = true, ForeColor = Muted, Margin = Padding.Empty });
+            checkRows.Controls.Add(card);
+        }
+        if (checks.Count == 0)
+        {
+            lines.Add(Bridge.Message(result));
+            checkRows.Controls.Add(new Label { Text = Bridge.Message(result), AutoSize = true, Padding = new Padding(12), ForeColor = Ink });
+        }
+        if (warning.Length > 0) lines.Add(warning);
+        string reportPath = TextValue(report, "diagnostic_report", "");
+        if (reportPath.Length > 0) lines.Add("Отчёт: " + reportPath);
+        reportLocation.Text = reportPath.Length > 0 ? "Отчёт сохранён: " + reportPath : TextValue(report, "diagnostic_report_error", "");
+        details.Text = String.Join(Environment.NewLine + Environment.NewLine, lines);
+        details.SelectionStart = 0;
+        FitCheckRows();
+        checkRows.ResumeLayout(true);
+        checkRows.AutoScrollPosition = Point.Empty;
+        if (checkRows.Controls.Count > 0) checkRows.ScrollControlIntoView(checkRows.Controls[0]);
+        if (!isReadiness && !Bridge.Ok(result) && checks.Count > 0) lines.Insert(0, Bridge.Message(result));
+        details.Text = String.Join(Environment.NewLine + Environment.NewLine, lines);
+        StartButton.Enabled = !busy && ready && !outcomeUnknown && !runtimeActive;
+        StopButton.Enabled = !busy && !outcomeUnknown && stopAvailable;
+        StartButton.Visible = ready && !outcomeUnknown && !runtimeActive;
+        StopButton.Visible = stopAvailable;
+        ((RoundedButton)nextAction).Primary = !ready || outcomeUnknown;
+    }
+
+    private bool CanUpdate { get { return !closing && !IsDisposed && !Disposing; } }
+
+    private bool BeginOperation(string action)
+    {
+        if (!CanUpdate || busy) return false;
+        if (outcomeUnknown && action != "diagnose" && action != "recover-session")
+        {
+            operation.Text = "Предыдущая операция ещё не подтверждена. Сначала выполни диагностику и проверь состояние.";
+            return false;
+        }
+        activeOperationAction = action;
+        operationRevision++;
+        Busy(true);
+        switch (action)
+        {
+            case "start": operation.Text = "Запускаем шлюз и Windows…"; break;
+            case "stop": operation.Text = "Завершаем работу Windows и шлюза… Дождись штатного выключения."; break;
+            case "repair-gateway": operation.Text = "Восстанавливаем шлюз из комплекта…"; break;
+            case "recover-session": operation.Text = "Восстанавливаем прерванный сеанс… Диск Windows и подключения сохраняются."; break;
+            case "prepare-host": operation.Text = "Готовим этот ПК… Подтверди запрос UAC."; break;
+            case "prepare-components": operation.Text = "Восстанавливаем Python и QEMU…"; break;
+            case "save-settings": operation.Text = "Сохраняем настройки…"; break;
+            case "get-settings": operation.Text = "Загружаем настройки…"; break;
+            case "list-profiles": case "get-profile-view": operation.Text = "Загружаем подключения…"; break;
+            case "save-profile": case "import-profile": operation.Text = "Сохраняем подключение…"; break;
+            case "select-profile": operation.Text = "Выбираем подключение…"; break;
+            case "test-profile": operation.Text = "Проверяем подключение…"; break;
+            case "export-profile": operation.Text = "Экспортируем подключение…"; break;
+            default: operation.Text = "Проверяем готовность к запуску…"; break;
+        }
+        return true;
+    }
+
+    private void TrackUnknownOutcome(Dictionary<string,object> result)
+    {
+        if (activeOperationAction == "diagnose" || activeOperationAction == "get-settings"
+                || activeOperationAction == "list-profiles" || activeOperationAction == "get-profile-view") return;
+        outcomeUnknown = true;
+        if (pendingOutcome == null) pendingOutcome = Bridge.PendingOperation(result);
+        if (activeOperationAction == "start" && result.ContainsKey("receipt")) pendingStartReceipt = TextValue(result,"receipt","");
+    }
+
+    private void FailedAction(string action, Dictionary<string, object> completed)
+    {
+        if (!CanUpdate) return;
+        if (completed != null && Bridge.Ok(completed))
+            Display(Bridge.Unknown(Bridge.Message(completed) + " Не удалось обновить диагностику. Проверь состояние повторно.", "diagnose_failed"));
+        else if (action == "diagnose" || action == "get-settings")
+            Display(Bridge.Failure("Не удалось выполнить диагностику. Проверь доступ к папке и целостность компонентов."));
+        else
+            Display(Bridge.Unknown("Действие не подтверждено. Исход операции неизвестен. Проверь состояние через диагностику.", "operation_failed"));
+        operation.Text = Bridge.Message(operationResult);
+        if (action == "diagnose") checkedAt.Text = "Диагностика не обновилась. Повтори проверку.";
+    }
+
+    private async Task RefreshAfterAsync(Dictionary<string, object> completed)
+    {
+        if (!CanUpdate || (!Bridge.Ok(completed) && !Flag(completed,"outcome_unknown"))) return;
+        Dictionary<string, object> check = await run("diagnose", null);
+        if (!CanUpdate) return;
+        Display(check);
+        operation.Text = Bridge.Message(completed);
+        checkedAt.Text = "Проверено " + DateTime.Now.ToString("HH:mm:ss") + ". Ошибки показаны первыми.";
+    }
+
+    internal async Task RunAction(string action, bool selectDiagnostics)
+    {
+        if (!BeginOperation(action)) return;
+        if (selectDiagnostics) SelectPage(true);
+        Dictionary<string, object> completed = null;
+        try
+        {
+            completed = await run(action, null);
+            if (!CanUpdate) return;
+            if (action == "recover-session" && Bridge.Ok(completed)) { outcomeUnknown = false; pendingOutcome = null; pendingStartReceipt = null; }
+            Display(completed);
+            operation.Text = action == "diagnose" && completed.ContainsKey("checks") ? "" : Bridge.Message(completed);
+            if (action == "prepare-components" || action == "prepare-host" || action == "repair-gateway" || action == "recover-session" || action == "stop" || action == "start") await RefreshAfterAsync(completed);
+            if (action == "prepare-host" && Flag(completed,"restart_required")) operation.Text = "Подготовка завершена. Перезагрузи ПК самостоятельно, затем выполни диагностику. Автоматическая перезагрузка не выполнялась.";
+            else if (action == "diagnose") checkedAt.Text = completed.ContainsKey("checks") ? "Проверено " + DateTime.Now.ToString("HH:mm:ss") + ". Ошибки показаны первыми." : "Диагностика не обновилась. Повтори проверку.";
+        }
+        catch (Exception) { FailedAction(action, completed); }
+        finally
+        {
+            if (CanUpdate)
+            {
+                Busy(false);
+                if (lifecycleEnabled && action == "start" && Bridge.Ok(completed)
+                    && ready && workState == "running" && !outcomeUnknown) HidePanelForSession();
+                else if (lifecycleEnabled && panelHiddenForSession
+                    && (workState == "stopped" || workState == "failed" || outcomeUnknown
+                        || (action == "start" && !Bridge.Ok(completed)))) ShowPanel(true);
+                UpdateTray();
+            }
+        }
     }
 
     internal async Task SaveSettingsAndDiagnose(Dictionary<string, object> value)
     {
-        Dictionary<string, object> saved = await Task.Run(() => Bridge.Run(Bridge.Root, "save-settings", value));
-        if (!IsDisposed) Display(saved);
-        if (!Bridge.Ok(saved)) return;
-        Dictionary<string, object> check = await Task.Run(() => Bridge.Run(Bridge.Root, "diagnose", null));
-        if (!IsDisposed) Display(check);
+        if (displaySettingsLoaded)
+        {
+            Dictionary<string,object> display;
+            if (!SettingsPage.TryGetWindowsValue(out display)) return;
+            value = new Dictionary<string,object>(value); value["windows"] = display;
+        }
+        if (!BeginOperation("save-settings")) return;
+        Dictionary<string, object> completed = null;
+        try
+        {
+            completed = await run("save-settings", value);
+            if (!CanUpdate) return;
+            Display(completed);
+            SettingsPage.Error.Text = Bridge.Ok(completed) ? "" : Bridge.Message(completed);
+            SettingsPage.Error.Visible = !Bridge.Ok(completed);
+            if (Bridge.Ok(completed))
+            {
+                settingsLoaded = true;
+                SettingsPage.LoadValues(completed.ContainsKey("settings") ? (Dictionary<string,object>)completed["settings"] : value,false);
+                if (completed.ContainsKey("windows_settings"))
+                    SettingsPage.LoadWindowsValues((Dictionary<string,object>)completed["windows_settings"],
+                        completed.ContainsKey("windows_disk") ? (Dictionary<string,object>)completed["windows_disk"] : null);
+            }
+            await RefreshAfterAsync(completed);
+        }
+        catch (Exception) { FailedAction("save-settings", completed); if (CanUpdate) { SettingsPage.Error.Text = Bridge.Message(operationResult); SettingsPage.Error.Visible = true; } }
+        finally { if (CanUpdate) Busy(false); }
     }
+
 }
 
 internal static class Program
@@ -291,8 +1073,8 @@ internal static class Program
         string[] buttons;
         using (MainForm form = new MainForm())
         {
-            buttons = new[] { form.StartButton.Text, form.SettingsButton.Text, form.DiagnosticsButton.Text };
-            checks.Add("ui-controls", !form.StartButton.Enabled && buttons.Distinct().Count() == 3);
+            buttons = new[] { "Главная", form.ConnectionButton.Text, form.SettingsButton.Text, form.DiagnosticsButton.Text };
+            checks.Add("ui-controls", !form.StartButton.Enabled && buttons.Distinct().Count() == 4 && form.PrepareButton.Enabled);
         }
         checks.Add("missing-runtime-fails-closed", !Bridge.Ok(Bridge.Run(Path.Combine(root, "missing-runtime"), "get-settings", null)));
         WriteNewJson(reportPath, new Dictionary<string, object> { { "checks", checks }, { "project_root", root }, { "buttons", buttons } });

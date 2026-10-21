@@ -15,7 +15,6 @@ def arguments(role, log_directory, lan_port=31861):
     if role=='gateway':
         return ['-netdev','stream,id=wclan,server=on,'+lan,
                 '-netdev','user,id=wcwan,ipv6=off,net=10.0.2.0/24,host=10.0.2.2',
-                '-object','filter-dump,id=wc-wan-audit,netdev=wcwan,file='+str(path/'wan.pcap'),
                 '-device','virtio-net-pci,id=wcnicwan,netdev=wcwan,mac=52:54:00:77:00:01',
                 '-device','virtio-net-pci,id=wcniclan,netdev=wclan,mac=52:54:00:77:00:02']
     raise ValueError('Known guest role required')
