@@ -29,6 +29,7 @@ internal static class SetupInstaller
         "scripts/profile_store.py", "scripts/gateway_controller.py", "scripts/gateway_package.py",
         "scripts/gateway_profile.py", "scripts/session_carrier.py", "scripts/file_snapshot.py",
         "scripts/runtime_logs.py", "scripts/Start-Runtime.ps1", "scripts/Stop-Runtime.ps1",
+        "scripts/host_file_sharing.py", "scripts/file_share_carrier.py",
         "scripts/Prepare-Dependencies.ps1", "scripts/Prepare-Host.ps1" };
 
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
@@ -58,7 +59,8 @@ internal static class SetupInstaller
     }
     static bool Allowed(string name)
     {
-        return SafeName(name) && (Required.Contains(name) || name=="scripts/windows_guest_settings.py" || name=="config/windows.json"
+        return SafeName(name) && (Required.Contains(name) || name=="scripts/windows_guest_settings.py" || name=="config/windows.json" || name=="config/viewer.json"
+            || Regex.IsMatch(name,@"^runtime/host-files/(HostFiles\.exe|HostFilesGuest\.exe|SMBLibrary\.dll|SMBLibrary\.Win32\.dll|Utilities\.dll|SMBLibrary\.LICENSE\.txt|SMBLibrary-source\.zip|NOTICE\.txt|build-manifest\.json)$")
             || name=="runtime/gateway-recovery.json" || name=="runtime/gateway-recovery.zip"
             || name.StartsWith("runtime/python-3.12.14/",StringComparison.Ordinal)
             || name.StartsWith("runtime/qemu-11.1.0/",StringComparison.Ordinal)

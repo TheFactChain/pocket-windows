@@ -68,9 +68,13 @@ class WorkRebootSequence(unittest.TestCase):
             driver=next(node for node in tree.body if isinstance(node,ast.Try) and any(isinstance(child,ast.While) for child in node.body))
             final=tree.body[-1]
             writer=mock.Mock()
+            files=SimpleNamespace(arguments=[],public={'status':'pending','share_count':1},medium=None,
+                                  healthy=lambda:True,close=mock.Mock())
+            file_api=SimpleNamespace(Session=mock.Mock(return_value=files))
             api=SimpleNamespace(Popen=mock.Mock(side_effect=spawn),PIPE=subprocess.PIPE,CREATE_NO_WINDOW=subprocess.CREATE_NO_WINDOW)
             scope={'runtime':runtime,'normal_runtime':True,'work_reboot_session':True,'output':output,'root':root,'engine':engine,'env':{},
                 'display_settings':None, 'protect_work_window':mock.Mock(return_value=True),
+                'file_sharing':file_api,'files_session':None,
                 'arguments':['-drive','file=images/workvm-empty.qcow2','-no-reboot'],
                 'session_nonce':'a'*32,'controller_identity':controller,'generation':1,'previous_generations':[],
                 'stderr_writer':writer,'stderr':subprocess.PIPE,'start_capped_drain':mock.Mock(return_value=mock.Mock()),
@@ -91,6 +95,9 @@ class WorkRebootSequence(unittest.TestCase):
                 except SystemExit as error:
                     failure=error.code
             report=runtime.read_json(output/'state.json')
+            file_api.Session.assert_called_once_with(root,'a'*32)
+            files.close.assert_called_once_with(guest_stopped=True)
+            self.assertTrue(all(not child.alive for child in children), 'File helper must outlive all Windows generations')
             return report,children,writer,failure
 
     def test_pipe_close_error_still_saves_confirmed_shutdown(self):

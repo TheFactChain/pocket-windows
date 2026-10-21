@@ -19,6 +19,41 @@ if SCRIPT.exists():
 
 
 class PortableAppTests(unittest.TestCase):
+    def test_quiet_status_skips_component_inspection_and_hashing(self):
+        status = getattr(app, 'runtime_status', None)
+        self.assertTrue(callable(status), 'A separate lightweight runtime status is required')
+        with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as held:
+            root = Path(temporary)
+            engine = root / app.RUNTIME_FILES[1]
+            engine.parent.mkdir(parents=True)
+            engine.write_bytes(b'fixture engine')
+            held.enter_context(mock.patch.object(app.runtime, 'discover_guests', return_value={}))
+            held.enter_context(mock.patch.object(app.runtime, 'active_receipt', side_effect=ValueError('No active session')))
+            held.enter_context(mock.patch.object(app, 'ProfileStore')).return_value.selected_summary.return_value = None
+            inspect = held.enter_context(mock.patch.object(app, 'inspect_current'))
+            digest = held.enter_context(mock.patch.object(app.hashlib, 'file_digest'))
+            report = status(root, host=self.facts())
+        inspect.assert_not_called()
+        digest.assert_not_called()
+        self.assertEqual(report['report_kind'], 'runtime_status')
+        self.assertEqual(report['runtime']['work'], 'stopped')
+        self.assertNotIn('engine_identity', report['checks'])
+        self.assertNotIn('gateway_package', report['checks'])
+        self.assertFalse(report['network_requests_made'])
+        self.assertFalse(report['secret_values_exposed'])
+
+    def test_full_preflight_still_verifies_engine_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            engine = root / app.RUNTIME_FILES[1]
+            engine.parent.mkdir(parents=True)
+            engine.write_bytes(b'fixture engine')
+            with mock.patch.object(app, 'ENGINE_SHA256', hashlib.sha256(b'fixture engine').hexdigest()), \
+                    mock.patch.object(app.hashlib, 'file_digest', wraps=hashlib.file_digest) as digest:
+                report = app.preflight(root, host=self.facts())
+            digest.assert_called_once()
+            self.assertTrue(report['checks']['engine_identity']['passed'])
+
     @contextlib.contextmanager
     def connection_boundary(self):
         with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as held:

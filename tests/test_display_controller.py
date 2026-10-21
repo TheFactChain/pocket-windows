@@ -13,6 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import windows_guest_settings as settings
+import runtime_config as config
 
 
 class DisplayControllerTests(unittest.TestCase):
@@ -28,7 +29,8 @@ class DisplayControllerTests(unittest.TestCase):
             output.mkdir(parents=True)
             arguments = ['-display', 'sdl,gl=off', '-serial', 'none']
             scope = dict(root=root, output=output, arguments=arguments, normal_runtime=True,
-                         session_nonce='a' * 32, windows_settings=settings)
+                         session_nonce='a' * 32, windows_settings=settings,
+                         load_viewer_settings=config.load_viewer_settings)
             exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
             medium = json.loads((output / 'display-settings/SETTINGS.JSN').read_bytes())
             self.assertEqual(medium['session_nonce'], 'a' * 32)
@@ -40,6 +42,21 @@ class DisplayControllerTests(unittest.TestCase):
             self.assertEqual(arguments[arguments.index('-display') + 1], 'sdl,gl=off,window-close=off')
             self.assertIn('VGA.xres=1280', arguments)
             self.assertIn('usb-tablet,id=wcabspointer,bus=wcsettingsusb.0', arguments)
+
+    def test_fullscreen_preference_changes_only_the_viewer(self):
+        block = next(node for node in self.tree().body if isinstance(node, ast.If)
+                     and ast.unparse(node.test) == 'normal_runtime')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / 'logs/session'
+            output.mkdir(parents=True)
+            arguments = ['-display', 'sdl,gl=off', '-serial', 'none']
+            scope = dict(root=root, output=output, arguments=arguments, normal_runtime=True,
+                         session_nonce='a' * 32, windows_settings=settings,
+                         load_viewer_settings=lambda root: {'schema': 1, 'start_fullscreen': True, 'remember_window': True})
+            exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
+            self.assertEqual(arguments[arguments.index('-display') + 1],
+                             'sdl,gl=off,window-close=off,full-screen=on')
 
     def test_response_must_confirm_current_nonce_and_actual_resolution(self):
         function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef)

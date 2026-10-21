@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -15,12 +15,29 @@ internal static class ConnectionLayoutRegression
     static bool VisibleInEditor(Control control,Control editor){for(Control item=control;item!=editor;item=item.Parent)if(!(bool)typeof(Control).GetMethod("GetState",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(item,new object[]{2}))return false;return true;}
     static void Layout(Form form){typeof(Control).GetMethod("CreateControl",BindingFlags.Instance|BindingFlags.NonPublic,null,new[]{typeof(bool)},null).Invoke(form,new object[]{true});for(int i=0;i<4;i++){form.PerformLayout();foreach(Control item in Tree(form).Reverse())item.PerformLayout();Application.DoEvents();}}
     static Dictionary<string,object> View(){return new Dictionary<string,object>{{"profile_id","example"},{"name","Мой сервер"},{"protocol","hysteria2"},{"host","proxy.example.com"},{"port",443},{"tls_server_name","tls.example.com"},{"obfs","salamander"},{"auth_present",true},{"needs_credentials",false},{"selected",true},{"verified",false}};}
+    static void BindingCases()
+    {
+        using(ConnectionEditor editor=new ConnectionEditor())
+        {
+            var rows=(Dictionary<string,Control[]>)typeof(ConnectionEditor).GetField("rows",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(editor);
+            var proxy=View();proxy["protocol"]="socks5";proxy["obfs"]="";proxy["tls_server_name"]="";editor.LoadView(proxy);
+            int captionChanges=0;rows["auth"][0].TextChanged+=delegate{captionChanges++;};editor.LoadView(View());
+            Assert(captionChanges<=1,"Loading a view must not display intermediate credential states: "+captionChanges);
+            Dictionary<string,object> request;Assert(editor.TrySaveRequest(out request),"Compatible loaded credentials must be reusable");
+            editor.Obfuscation.Checked=false;Assert(!editor.TrySaveRequest(out request),"Changed obfuscation needs a new password");
+            editor.LoadView(View());editor.Protocol.SelectedIndex=1;Assert(!editor.TrySaveRequest(out request),"Changed protocol needs new credentials");
+            var locked=View();locked["needs_credentials"]=true;editor.LoadView(locked);Assert(!editor.TrySaveRequest(out request),"Unavailable DPAPI credentials must require re-entry");
+            editor.LoadImported(View());Assert(editor.ProfileId==null&&!editor.TrySaveRequest(out request),"Importing a public view must not reuse saved secrets");
+            editor.NewProfile();Assert(editor.ProfileId==null&&editor.Protocol.SelectedIndex==0&&!editor.Obfuscation.Checked&&!editor.ProxyAuth.Checked,"New profile must clear loaded state");
+        }
+    }
     [STAThread]
     static int Main(string[] args)
     {
         try
         {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+            BindingCases();
             foreach(float scale in new[]{1f,1.25f,1.5f,2f})
             using(Form form=new Form{ClientSize=new Size(740,600),AutoScaleMode=AutoScaleMode.Dpi,AutoScaleDimensions=new SizeF(96,96),BackColor=NativeStyle.Background})
             using(ConnectionEditor editor=new ConnectionEditor())
@@ -32,10 +49,11 @@ internal static class ConnectionLayoutRegression
                 Rectangle profile=new Rectangle(Position(editor.Profiles,editor),editor.Profiles.Size);
                 Rectangle tool=new Rectangle(Position(editor.NewButton,editor),editor.NewButton.Size);
                 Assert(profile.Bottom<=tool.Top,"Saved profile selector overlaps action toolbar at scale "+scale+": "+profile+" / "+tool);
-                Assert(Tree(editor).OfType<Label>().Any(item=>item.Text.Contains("поставщика")&&item.Text.Contains("вручную")),"Connection must explain provider settings versus importing a link");
+                Assert(!Tree(editor).OfType<Label>().Any(item=>VisibleInEditor(item,editor)&&item.Text.Contains("вручную")),"Permanent introductory guidance must not consume editor space");
                 Assert(!String.IsNullOrEmpty(editor.Fields["host"].AccessibleDescription)&&editor.Fields["host"].AccessibleDescription.Contains("proxy.example.com"),"Server field needs an accessible hostname example");
                 Assert(editor.Fields["auth"].UseSystemPasswordChar&&editor.Fields["password"].UseSystemPasswordChar,"Secrets must remain masked");
                 var rows=(Dictionary<string,Control[]>)typeof(ConnectionEditor).GetField("rows",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(editor);
+                if(scale==1f)Assert(Position(rows["advanced"][1],editor).Y<380,"Basic settings must stay compact at normal size: "+Position(rows["advanced"][1],editor));
                 foreach(string key in new[]{"name","host","port","auth"})
                 {
                     Control caption=rows[key][0],box=rows[key][1];

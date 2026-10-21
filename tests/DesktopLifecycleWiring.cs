@@ -100,7 +100,7 @@ internal static class DesktopLifecycleWiring
         current["startup"] = new Dictionary<string,object> { { "receipt", receipt }, { "phase", "starting" }, { "supervisor_active", true } };
         int reads = 0;
         using (MainForm form = new MainForm(false, (action, payload) => {
-            if (action == "diagnose") { reads++; return Task.FromResult(current); }
+            if (action == "diagnose" || action == "status") { reads++; return Task.FromResult(current); }
             var reply = Bridge.Unknown("Запуск ещё продолжается", "startup_timeout"); reply["receipt"] = receipt;
             return Task.FromResult(reply);
         }))

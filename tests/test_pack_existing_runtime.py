@@ -98,6 +98,20 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(pack.verify_archive(destination), manifest)
         return destination, manifest
 
+    def test_file_access_components_ship_but_public_archive_excludes_host_paths(self):
+        files = getattr(pack, 'FILE_COMPONENT_FILES', ())
+        self.assertIn('runtime/host-files/HostFiles.exe', files, 'File helpers must be explicitly packaged')
+        for name in files:
+            self.write(name, b'compiled component fixture')
+        self.write('config/files.json', json.dumps({'schema': 1, 'mode': 'selected', 'folders': ['C:\\private-host-folder']}).encode())
+        self.write('config/viewer.json', b'{"schema":1,"start_fullscreen":true,"remember_window":false}')
+        destination, _ = self.archive('files-public.zip', mode='public')
+        with zipfile.ZipFile(destination) as archive:
+            for name in files:
+                self.assertIn(pack.PREFIX + name, archive.namelist())
+            self.assertNotIn(pack.PREFIX + 'config/files.json', archive.namelist())
+            self.assertIn(pack.PREFIX + 'config/viewer.json', archive.namelist())
+
     def test_public_archive_excludes_profiles_without_reading_them(self):
         self.write(pack.PROFILE_FILE, b'{broken private data')
         with mock.patch.object(pack.ProfileStore, '_read', side_effect=AssertionError('private read')):

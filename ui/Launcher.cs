@@ -254,10 +254,20 @@ internal enum AppPage { Home, Connection, Settings, Diagnostics }
 
 internal sealed partial class MainForm : Form
 {
+    private string root = Bridge.Root;
     private static readonly Color Ink = NativeStyle.Ink;
     private static readonly Color Muted = NativeStyle.Muted;
     private static readonly Color Blue = NativeStyle.Accent;
     internal readonly Button StartButton = MakeButton("Запустить Windows", true);
+    internal readonly Button OpenDesktopButton = MakeButton("Открыть Windows", true);
+    internal readonly Button HelpButton = MakeButton("Справка и клавиши", false);
+    private readonly Button copyReportButton = MakeButton("Скопировать отчёт", false);
+    private readonly ToolTip tips = new ToolTip { AutoPopDelay = 12000, InitialDelay = 400, ReshowDelay = 150, ShowAlways = true };
+    private readonly Label keyboardHint = new Label { AutoSize = true, ForeColor = NativeStyle.Muted, Font = new Font("Segoe UI",9),
+        Text = "Полный экран в Windows: Ctrl+Alt+F\nМышь и клавиатура: Ctrl+Alt+G", TextAlign = ContentAlignment.MiddleCenter };
+    private readonly Label diagnosticSummary = new Label { AutoSize = true, Font = new Font("Segoe UI",12,FontStyle.Bold), Text = "Проверка ПК и комплекта", Margin = new Padding(0,0,0,6) };
+    private readonly Label diagnosticScope = new Label { AutoSize = true, ForeColor = NativeStyle.Muted, Margin = new Padding(0,0,0,12),
+        Text = "ПК и комплект проверяются без интернета. Проверка сервера доступна в разделе «Подключение»." };
     internal readonly Button SettingsButton = MakeButton("Настройки", false);
     internal readonly Button DiagnosticsButton = MakeButton("Диагностика", false);
     internal readonly Button PrepareButton = MakeButton("Восстановить Python и QEMU", false);
@@ -290,6 +300,8 @@ internal sealed partial class MainForm : Form
     private readonly Dictionary<AppPage,RoundedButton> navigation = new Dictionary<AppPage,RoundedButton>();
     private bool settingsLoaded;
     private bool displaySettingsLoaded;
+    private bool viewerSettingsLoaded;
+    private Dictionary<string,object> settingsHost;
     private bool profilesLoaded;
     private bool stopAvailable;
     private bool runtimeActive;
@@ -363,6 +375,14 @@ internal sealed partial class MainForm : Form
                     reply.ContainsKey("windows_disk") ? (Dictionary<string,object>)reply["windows_disk"] : null);
                 displaySettingsLoaded = true;
             }
+            if (reply.ContainsKey("viewer_settings"))
+            {
+                SettingsPage.LoadViewerValues((Dictionary<string,object>)reply["viewer_settings"]);
+                viewerSettingsLoaded = true;
+            }
+            SettingsPage.LoadFileSharingValues(reply.ContainsKey("file_settings") ? reply["file_settings"] as Dictionary<string,object> : null);
+            if (reply.ContainsKey("host")) settingsHost = reply["host"] as Dictionary<string,object>;
+            SettingsPage.LoadHostValues(settingsHost);
             settingsLoaded = true; operation.Text = "";
         }
         catch (Exception) { if (CanUpdate) { operation.Text = SettingsPage.Error.Text = "Не удалось загрузить настройки. Повтори после проверки компонентов."; SettingsPage.Error.Visible = true; } }
@@ -380,6 +400,7 @@ internal sealed partial class MainForm : Form
         Text = "Windows Claude Portable";
         Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);
         FormClosing += delegate(object sender,FormClosingEventArgs args) {
+            SavePanelBounds();
             if (lifecycleEnabled && args.CloseReason == CloseReason.UserClosing
                 && (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start")))
             { args.Cancel = true; HidePanelForSession(); return; }
@@ -387,6 +408,7 @@ internal sealed partial class MainForm : Form
         };
         Disposed += delegate {
             closing = true; lifecycleTimer.Stop(); lifecycleTimer.Dispose();
+            tips.Dispose();
             if (trayIcon != null)
             {
                 NotifyIcon icon = trayIcon; trayIcon = null;
@@ -429,39 +451,51 @@ internal sealed partial class MainForm : Form
         body.Controls.Add(nav,0,0); body.Controls.Add(pages,1,0); frame.Controls.Add(body,0,1);
         pageControls.Add(AppPage.Home,overview); pageControls.Add(AppPage.Connection,ConnectionPage); pageControls.Add(AppPage.Settings,SettingsPage); pageControls.Add(AppPage.Diagnostics,diagnostics);
         foreach (Control page in pageControls.Values) { page.Dock = DockStyle.Fill; pages.Controls.Add(page); }
-        TableLayoutPanel home = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty };
+        HelpButton.Font = new Font("Segoe UI",9); HelpButton.MinimumSize = Size.Empty; HelpButton.Padding = new Padding(10,8,10,8); HelpButton.Margin = new Padding(0,18,0,0); nav.Controls.Add(HelpButton);
+        TableLayoutPanel home = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = Padding.Empty };
         home.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        for (int index = 0; index < 3; index++) home.RowStyles.Add(new RowStyle(SizeType.AutoSize)); home.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        RoundedFlowPanel summary = new RoundedFlowPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(16,10,16,10), Margin = new Padding(0,0,0,8), BackColor = Color.White };
-        status.Font = new Font("Segoe UI",12,FontStyle.Bold); status.Margin = new Padding(0,0,0,5); nextStep.Margin = new Padding(0,0,0,6); sessionState.Margin = new Padding(0,0,0,6);
-        summary.Controls.Add(status); summary.Controls.Add(nextStep); summary.Controls.Add(sessionState);
-        FlowLayoutPanel launch = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = Padding.Empty };
-        ((RoundedButton)StartButton).Glyph = AppGlyph.Play; StartButton.Padding = new Padding(14,9,14,9);
-        StopButton.Padding = new Padding(14,9,14,9); launch.Controls.Add(StartButton); launch.Controls.Add(StopButton); summary.Controls.Add(launch);
-        nextAction.Padding = new Padding(10,7,10,7); nextAction.Margin = new Padding(0,8,0,0); summary.Controls.Add(nextAction); home.Controls.Add(summary,0,0);
-        RoundedFlowPanel allocation = new RoundedFlowPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(16,8,16,8), Margin = new Padding(0,0,0,6), BackColor = Color.White };
-        resources.Font = new Font("Segoe UI",9.5f); resources.Margin = Padding.Empty; allocation.Controls.Add(resources); home.Controls.Add(allocation,0,1);
-        network.Font = new Font("Segoe UI",9); network.ForeColor = Muted; network.Margin = new Padding(2,0,2,0); home.Controls.Add(network,0,2);
+        home.RowStyles.Add(new RowStyle(SizeType.Percent,50));
+        for (int index = 0; index < 4; index++) home.RowStyles.Add(new RowStyle(SizeType.AutoSize)); home.RowStyles.Add(new RowStyle(SizeType.Percent,50));
+        RoundedPanel summary = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(20,12,20,12), Margin = new Padding(0,0,0,6), BackColor = Color.White };
+        TableLayoutPanel summaryRows = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
+        summaryRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); for(int index=0;index<5;index++)summaryRows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        status.Font = new Font("Segoe UI",13,FontStyle.Bold); status.Margin = new Padding(0,0,0,3); nextStep.Margin = new Padding(0,0,0,3); sessionState.Margin = new Padding(0,0,0,6);
+        foreach(Label label in new[]{status,nextStep,sessionState}) { label.Anchor = AnchorStyles.None; label.TextAlign = ContentAlignment.MiddleCenter; }
+        summaryRows.Controls.Add(status,0,0); summaryRows.Controls.Add(nextStep,0,1); summaryRows.Controls.Add(sessionState,0,2);
+        FlowLayoutPanel launch = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Anchor = AnchorStyles.None, Margin = Padding.Empty };
+        foreach(Button button in new[]{StartButton,OpenDesktopButton}) { ((RoundedButton)button).Glyph = AppGlyph.Play; button.Padding = new Padding(24,10,24,10); button.MinimumSize = new Size(260,58); button.Margin = new Padding(4); }
+        StopButton.Padding = new Padding(14,9,14,9); StopButton.Margin = new Padding(4); launch.Controls.Add(StartButton); launch.Controls.Add(OpenDesktopButton); launch.Controls.Add(StopButton); summaryRows.Controls.Add(launch,0,3);
+        nextAction.Anchor = AnchorStyles.None; nextAction.Padding = new Padding(10,7,10,7); nextAction.Margin = new Padding(0,10,0,0); summaryRows.Controls.Add(nextAction,0,4); summary.Controls.Add(summaryRows); home.Controls.Add(summary,0,1);
+        resources.Font = new Font("Segoe UI",9.5f); resources.Margin = new Padding(0,0,0,4); resources.Anchor = AnchorStyles.None; resources.TextAlign = ContentAlignment.MiddleCenter; home.Controls.Add(resources,0,2);
+        network.Font = new Font("Segoe UI",9); network.ForeColor = Muted; network.Margin = new Padding(2,0,2,10); network.Anchor = AnchorStyles.None; network.TextAlign = ContentAlignment.MiddleCenter; home.Controls.Add(network,0,3);
+        keyboardHint.Anchor = AnchorStyles.None; keyboardHint.Margin = Padding.Empty; home.Controls.Add(keyboardHint,0,4);
         overview.Controls.Add(home);
-        TableLayoutPanel diagnosticLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
+        TableLayoutPanel diagnosticLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, Margin = Padding.Empty };
         diagnosticLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100)); for(int index=0;index<4;index++)diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         FlowLayoutPanel tools = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true, Margin = new Padding(0,0,0,8) };
         ((RoundedButton)PrepareButton).Glyph = ((RoundedButton)RepairGatewayButton).Glyph = AppGlyph.Repair; ((RoundedButton)refreshButton).Glyph = AppGlyph.Diagnostics;
-        foreach (Button button in new[] {refreshButton,PrepareHostButton,PrepareButton,RepairGatewayButton}) { button.Padding = new Padding(10,7,10,7); tools.Controls.Add(button); }
-        diagnosticLayout.Controls.Add(tools,0,0); preparationHint.Text = "Подготовка ПК включает виртуализацию с запросом UAC. Восстановление Python, QEMU и шлюза использует проверенные файлы из комплекта. Интернет не нужен.";
-        diagnosticLayout.Controls.Add(preparationHint,0,1); diagnosticLayout.Controls.Add(checkRows,0,2); diagnosticLayout.Controls.Add(checkedAt,0,3); diagnosticLayout.Controls.Add(reportLocation,0,4); diagnostics.Controls.Add(diagnosticLayout);
+        foreach (Button button in new[] {refreshButton,copyReportButton,PrepareHostButton,PrepareButton,RepairGatewayButton}) { button.Padding = new Padding(10,7,10,7); tools.Controls.Add(button); }
+        preparationHint.Text = "Восстановление использует локальные файлы. Подготовка ПК запросит права администратора.";
+        diagnosticLayout.Controls.Add(diagnosticSummary,0,0); diagnosticLayout.Controls.Add(diagnosticScope,0,1); diagnosticLayout.Controls.Add(checkRows,0,2); diagnosticLayout.Controls.Add(tools,0,3);
+        diagnosticLayout.Controls.Add(preparationHint,0,4); diagnosticLayout.Controls.Add(checkedAt,0,5); diagnosticLayout.Controls.Add(reportLocation,0,6); diagnostics.Controls.Add(diagnosticLayout);
         operation.Height=operation.Font.Height+4;operation.FontChanged+=delegate{operation.Height=operation.Font.Height+4;};
         frame.Controls.Add(operation,0,2); frame.Controls.Add(progress,0,3); Controls.Add(frame);
         overview.Resize += delegate {
             int width = Math.Max(100,overview.ClientSize.Width-38);
-            foreach (Label label in new[] {status,nextStep,sessionState,resources,network}) label.MaximumSize = new Size(width,0);
+            foreach (Label label in new[] {status,nextStep,sessionState,resources,network,keyboardHint}) label.MaximumSize = new Size(width,0);
             launch.MaximumSize = new Size(width,0);
         };
-        diagnosticLayout.SizeChanged += delegate { preparationHint.MaximumSize = new Size(Math.Max(100,diagnosticLayout.Width),0); };
+        diagnosticLayout.SizeChanged += delegate { foreach(Label label in new[]{preparationHint,diagnosticScope,diagnosticSummary})label.MaximumSize = new Size(Math.Max(100,diagnosticLayout.Width),0); };
         checkRows.SizeChanged += delegate { FitCheckRows(); };
         StartButton.Enabled = false; StopButton.Enabled = false; nextAction.Visible = false;
         StartButton.Click += async delegate { await RunAction("start",false); };
+        OpenDesktopButton.Click += async delegate { await RunAction("show-desktop",false); };
+        HelpButton.Click += delegate { ShowKeyboardHelp(); };
+        copyReportButton.Click += delegate { try { Clipboard.SetText(details.Text); } catch(Exception) { operation.Text = "Не удалось скопировать отчёт. Попробуй ещё раз."; operation.Visible = true; } };
+        tips.SetToolTip(StartButton,"Запустить Windows — Ctrl+Enter"); tips.SetToolTip(OpenDesktopButton,"Открыть уже запущенную Windows — Ctrl+Enter");
+        tips.SetToolTip(StopButton,"Штатно выключить Windows и дождаться завершения."); tips.SetToolTip(refreshButton,"Проверить ПК и комплект — F5"); tips.SetToolTip(HelpButton,"Справка по управлению — F1");
+        for(int index=0;index<buttons.Length;index++)tips.SetToolTip(buttons[index],buttons[index].Text+" — Ctrl+"+(index+1));
         StopButton.Click += async delegate { if (stopAvailable) await RunAction("stop",false); };
         PrepareButton.Click += async delegate { await RunAction("prepare-components",false); };
         PrepareHostButton.Click += async delegate { await RunAction("prepare-host",false); };
@@ -542,15 +576,17 @@ internal sealed partial class MainForm : Form
         int revision = operationRevision;
         try
         {
-            Dictionary<string,object> report = await run("diagnose",null);
+            Dictionary<string,object> report = await run("status",null);
             if (!CanUpdate || busy || revision != operationRevision) return;
             if (report == null || !report.ContainsKey("checks")) { RuntimeRefreshFailed(Bridge.Message(report)); return; }
+            report = MergeRuntimeStatus(report);
             Dictionary<string,object> state = report.ContainsKey("runtime") ? report["runtime"] as Dictionary<string,object> : null;
             bool changed = readinessReport == null || state == null || pendingStartReceipt != null
                 || workState != TextValue(state,"work","unknown") || gatewayState != TextValue(state,"gateway","unknown")
                 || Bridge.Ok(report) != Bridge.Ok(readinessReport)
                 || Flag(report,"network_verified") != Flag(readinessReport,"network_verified")
                 || DisplayState(report) != DisplayState(readinessReport)
+                || FileSharingState(report) != FileSharingState(readinessReport)
                 || TextValue(report,"message","") != TextValue(readinessReport,"message","")
                 || (pendingOutcome != null && pendingOutcome.IsCompleted);
             if (changed) { Display(report); Busy(false); }
@@ -574,6 +610,11 @@ internal sealed partial class MainForm : Form
         return TextValue(display,"status","");
     }
 
+    private static string FileSharingState(Dictionary<string,object> report)
+    {
+        return report != null && report.ContainsKey("host_files") ? TextValue(report["host_files"] as Dictionary<string,object>,"status","") : "";
+    }
+
     private void FitCheckRows()
     {
         int width = Math.Max(100, checkRows.ClientSize.Width - 34);
@@ -591,6 +632,9 @@ internal sealed partial class MainForm : Form
     {
         busy = value;
         StartButton.Enabled = !value && ready && !outcomeUnknown && !runtimeActive;
+        OpenDesktopButton.Visible = workState == "running";
+        OpenDesktopButton.Enabled = !value && !outcomeUnknown && workState == "running";
+        copyReportButton.Enabled = !value && !String.IsNullOrEmpty(details.Text);
         SettingsButton.Enabled = PrepareButton.Enabled = RepairGatewayButton.Enabled = !value && !outcomeUnknown;
         ConnectionButton.Enabled = DiagnosticsButton.Enabled = overviewButton.Enabled = refreshButton.Enabled = nextAction.Enabled = sessionState.Enabled = !value;
         PrepareHostButton.Enabled = !value && !outcomeUnknown && File.Exists(Path.Combine(Bridge.Root,"scripts","Prepare-Host.ps1"));
@@ -601,6 +645,9 @@ internal sealed partial class MainForm : Form
         SettingsPage.CancelButton.Enabled = !value && !outcomeUnknown && settingsLoaded;
         foreach (TextBox field in SettingsPage.Fields.Values) field.Enabled = !value && !outcomeUnknown;
         SettingsPage.Resolution.Enabled = !value && !outcomeUnknown;
+        SettingsPage.StartFullscreen.Enabled = SettingsPage.RememberWindow.Enabled = !value && !outcomeUnknown && viewerSettingsLoaded;
+        SettingsPage.LoadHostValues(settingsHost);
+        if (value || outcomeUnknown) SettingsPage.RecommendedButton.Enabled = false;
         ConnectionPage.SetBusy(value || outcomeUnknown);
         progress.Visible = value;
         operation.Visible = value || outcomeUnknown || !String.IsNullOrEmpty(operation.Text);
@@ -653,12 +700,55 @@ internal sealed partial class MainForm : Form
 
     internal void DisplayReport(Dictionary<string, object> result) { Display(result); }
 
+    private Dictionary<string,object> MergeRuntimeStatus(Dictionary<string,object> update)
+    {
+        if (TextValue(update,"report_kind","") != "runtime_status") return update;
+        bool hasFullCheck = readinessReport != null && TextValue(readinessReport,"report_kind","preflight") == "preflight";
+        var result = readinessReport == null ? new Dictionary<string,object>() : new Dictionary<string,object>(readinessReport);
+        foreach (var item in update)
+            if (item.Key != "checks" && item.Key != "blockers" && item.Key != "ok" && item.Key != "message"
+                && item.Key != "checked_utc" && item.Key != "gateway_version" && item.Key != "report_kind") result[item.Key] = item.Value;
+        var checks = result.ContainsKey("checks") && result["checks"] is Dictionary<string,object>
+            ? new Dictionary<string,object>((Dictionary<string,object>)result["checks"]) : new Dictionary<string,object>();
+        var liveChecks = update["checks"] as Dictionary<string,object>;
+        if (liveChecks != null) foreach (var item in liveChecks) checks[item.Key] = item.Value;
+        if (!hasFullCheck) checks["full_check"] = new Dictionary<string,object>{{"passed",false},{"title","Нужна проверка комплекта"},
+            {"detail","Открой диагностику и проверь готовность перед запуском Windows."},{"action","retry"},{"action_label","Проверить комплект"}};
+        var blockers = new List<Dictionary<string,object>>();
+        foreach (var item in checks)
+        {
+            var check = item.Value as Dictionary<string,object>;
+            if (check == null || Flag(check,"passed")) continue;
+            var blocker = new Dictionary<string,object>(check); blocker["code"] = item.Key; blockers.Add(blocker);
+        }
+        result["checks"] = checks; result["blockers"] = blockers.ToArray(); result["ok"] = blockers.Count == 0;
+        result["message"] = blockers.Count == 0 ? Bridge.Message(update) : TextValue(blockers[0],"title","Нужна проверка");
+        result["report_kind"] = hasFullCheck ? "preflight" : "runtime_status";
+        var capabilities = result.ContainsKey("capabilities") ? result["capabilities"] as Dictionary<string,object> : null;
+        if (capabilities != null)
+        {
+            capabilities = new Dictionary<string,object>(capabilities);
+            var gateway = checks.ContainsKey("gateway_package") ? checks["gateway_package"] as Dictionary<string,object> : null;
+            var runtime = checks.ContainsKey("runtime_state") ? checks["runtime_state"] as Dictionary<string,object> : null;
+            capabilities["test_profile"] = hasFullCheck && Flag(gateway,"passed") && Flag(runtime,"passed") && !Flag(capabilities,"stop");
+            result["capabilities"] = capabilities;
+        }
+        return result;
+    }
+
     private void Display(Dictionary<string, object> result)
     {
+        result = MergeRuntimeStatus(result);
         bool isReadiness = result.ContainsKey("checks");
         if (isReadiness)
         {
             readinessReport = result;
+            if (result.ContainsKey("host"))
+            {
+                settingsHost = result["host"] as Dictionary<string,object>;
+                SettingsPage.LoadHostValues(settingsHost);
+            }
+            if (result.ContainsKey("viewer_settings")) ApplyViewerPreferences(result["viewer_settings"] as Dictionary<string,object>);
             ready = Bridge.Ok(result);
             if (pendingOutcome != null && pendingOutcome.IsCompleted) { outcomeUnknown = false; pendingOutcome = null; }
             Dictionary<string,object> startup = result.ContainsKey("startup") ? result["startup"] as Dictionary<string,object> : null;
@@ -699,6 +789,8 @@ internal sealed partial class MainForm : Form
         }
         Dictionary<string, object> report = readinessReport ?? result;
         List<Dictionary<string, object>> checks = Checks(report);
+        int failedChecks = checks.Count(item => !Flag(item,"passed"));
+        diagnosticSummary.Text = checks.Count == 0 ? "Проверка ПК и комплекта" : "Проверено: " + checks.Count + (failedChecks == 0 ? ". Проблем не найдено." : ". Требует внимания: " + failedChecks + ".");
         Dictionary<string, object> blocker = null;
         if (!Bridge.Ok(result))
         {
@@ -739,6 +831,14 @@ internal sealed partial class MainForm : Form
                 }
             }
         }
+        string filesState=FileSharingState(report);
+        if(filesState.Length>0)
+        {
+            string filesDetail=filesState=="ready"?"подключены":filesState=="off"?"выключены":filesState=="unavailable"?"папки недоступны":filesState=="failed"?"соединение прервано":"ожидаем подключения Windows";
+            resources.Text+=Environment.NewLine+"Файлы ПК: "+filesDetail;
+            if(blocker==null&&filesState=="pending")nextStep.Text="Для первого подключения файлов открой в Windows диск WCPFILES и запусти RUNFILES.CMD.";
+            if(blocker==null&&(filesState=="failed"||filesState=="unavailable"))nextStep.Text="Проверь доступность выбранных папок ПК. Повторное подключение можно выполнить через RUNFILES.CMD на диске WCPFILES в Windows.";
+        }
         string warning = TextValue(report, "network_warning", network.Text);
         network.Text = warning;
         network.Visible = warning.Length > 0;
@@ -774,6 +874,8 @@ internal sealed partial class MainForm : Form
         if (!isReadiness && !Bridge.Ok(result) && checks.Count > 0) lines.Insert(0, Bridge.Message(result));
         details.Text = String.Join(Environment.NewLine + Environment.NewLine, lines);
         StartButton.Enabled = !busy && ready && !outcomeUnknown && !runtimeActive;
+        OpenDesktopButton.Visible = workState == "running";
+        OpenDesktopButton.Enabled = !busy && !outcomeUnknown && workState == "running";
         StopButton.Enabled = !busy && !outcomeUnknown && stopAvailable;
         StartButton.Visible = ready && !outcomeUnknown && !runtimeActive;
         StopButton.Visible = stopAvailable;
@@ -879,12 +981,22 @@ internal sealed partial class MainForm : Form
 
     internal async Task SaveSettingsAndDiagnose(Dictionary<string, object> value)
     {
+        value = new Dictionary<string,object>(value);
         if (displaySettingsLoaded)
         {
             Dictionary<string,object> display;
             if (!SettingsPage.TryGetWindowsValue(out display)) return;
-            value = new Dictionary<string,object>(value); value["windows"] = display;
+            value["windows"] = display;
         }
+        if (viewerSettingsLoaded)
+        {
+            Dictionary<string,object> viewer;
+            if (!SettingsPage.TryGetViewerValue(out viewer)) return;
+            value["viewer"] = viewer;
+        }
+        Dictionary<string,object> files;
+        if (!SettingsPage.TryGetFileSharingValue(out files)) return;
+        value["files"] = files;
         if (!BeginOperation("save-settings")) return;
         Dictionary<string, object> completed = null;
         try
@@ -898,14 +1010,58 @@ internal sealed partial class MainForm : Form
             {
                 settingsLoaded = true;
                 SettingsPage.LoadValues(completed.ContainsKey("settings") ? (Dictionary<string,object>)completed["settings"] : value,false);
+                SettingsPage.LoadFileSharingValues(completed.ContainsKey("file_settings") ? completed["file_settings"] as Dictionary<string,object> : files);
                 if (completed.ContainsKey("windows_settings"))
                     SettingsPage.LoadWindowsValues((Dictionary<string,object>)completed["windows_settings"],
                         completed.ContainsKey("windows_disk") ? (Dictionary<string,object>)completed["windows_disk"] : null);
+                if (completed.ContainsKey("viewer_settings"))
+                {
+                    var viewer = (Dictionary<string,object>)completed["viewer_settings"];
+                    SettingsPage.LoadViewerValues(viewer); ApplyViewerPreferences(viewer);
+                }
             }
             await RefreshAfterAsync(completed);
         }
         catch (Exception) { FailedAction("save-settings", completed); if (CanUpdate) { SettingsPage.Error.Text = Bridge.Message(operationResult); SettingsPage.Error.Visible = true; } }
         finally { if (CanUpdate) Busy(false); }
+    }
+
+    protected override bool ProcessCmdKey(ref Message message,Keys keys)
+    {
+        if (keys == Keys.F1) { ShowKeyboardHelp(); return true; }
+        if ((keys & Keys.Modifiers) == Keys.Control && (int)(keys & Keys.KeyCode) >= (int)Keys.D1 && (int)(keys & Keys.KeyCode) <= (int)Keys.D4)
+        { navigation[(AppPage)((int)(keys & Keys.KeyCode)-(int)Keys.D1)].PerformClick(); return true; }
+        if (keys == (Keys.Control|Keys.Enter) && ActivePage == AppPage.Home)
+        { if (OpenDesktopButton.Enabled) OpenDesktopButton.PerformClick(); else if (StartButton.Enabled) StartButton.PerformClick(); return true; }
+        if (keys == (Keys.Control|Keys.S))
+        { if (ActivePage == AppPage.Connection) ConnectionPage.SaveButton.PerformClick(); else if (ActivePage == AppPage.Settings) SettingsPage.SaveButton.PerformClick(); else return base.ProcessCmdKey(ref message,keys); return true; }
+        if (keys == (Keys.Control|Keys.N) && ActivePage == AppPage.Connection) { ConnectionPage.NewButton.PerformClick(); return true; }
+        if (keys == (Keys.Control|Keys.I) && ActivePage == AppPage.Connection) { ConnectionPage.ImportButton.PerformClick(); return true; }
+        if (keys == Keys.F5) { if (!busy) RefreshFromKeyboard(); return true; }
+        return base.ProcessCmdKey(ref message,keys);
+    }
+
+    private async void RefreshFromKeyboard()
+    {
+        if (ActivePage == AppPage.Connection) await ProfileActionAsync("list-profiles",null);
+        else await RunAction("diagnose",ActivePage == AppPage.Diagnostics);
+    }
+
+    private void ShowKeyboardHelp()
+    {
+        using(var dialog = new Form { Text = "Справка и клавиши", Font = Font, BackColor = NativeStyle.Background,
+            ClientSize = new Size(580,430), MinimumSize = new Size(430,350), StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, MinimizeBox = false, MaximizeBox = false })
+        {
+            var content = new TextBox { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None,
+                BackColor = NativeStyle.Background, ScrollBars = ScrollBars.Vertical, AccessibleName = "Справка по управлению", Text = String.Join(Environment.NewLine,new[]{
+                    "В панели программы", "Ctrl+1…4 — открыть раздел", "Ctrl+Enter — запустить или открыть Windows",
+                    "Ctrl+S — сохранить подключение или настройки", "Ctrl+N — новое подключение", "Ctrl+I — импорт подключения",
+                    "F5 — обновить состояние или список подключений", "F1 — открыть эту справку", "", "В окне виртуальной Windows",
+                    "Ctrl+Alt+F — включить или выключить полный экран", "Ctrl+Alt+G — освободить мышь и клавиатуру", "",
+                    "Выключай Windows кнопкой «Выключить» или через меню питания внутри Windows.", "Закрытие работающей панели оставляет Windows в работе и сворачивает панель в область уведомлений."}) };
+            var close = new RoundedButton { Text = "Понятно", Primary = true, DialogResult = DialogResult.OK, AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(12,8,12,8) };
+            dialog.Padding = new Padding(22); dialog.Controls.Add(content); dialog.Controls.Add(close); dialog.AcceptButton = close; dialog.CancelButton = close; dialog.ShowDialog(this);
+        }
     }
 
 }

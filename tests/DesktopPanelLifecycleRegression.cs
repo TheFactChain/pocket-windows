@@ -36,7 +36,7 @@ internal static class DesktopPanelLifecycleRegression
             TaskCompletionSource<Dictionary<string,object>> pendingRead=null,pendingMutation=null;
             bool failRead=false;
             using(MainForm form=new MainForm(false,(action,payload)=> {
-                if(action=="diagnose") { reads++; if(failRead)throw new InvalidOperationException("Read failed"); return pendingRead==null?Task.FromResult(current):pendingRead.Task; }
+                if(action=="diagnose"||action=="status") { reads++; if(failRead)throw new InvalidOperationException("Read failed"); return pendingRead==null?Task.FromResult(current):pendingRead.Task; }
                 mutations++; return pendingMutation==null?Task.FromResult(new Dictionary<string,object>{{"ok",true},{"message","Готово"}}):pendingMutation.Task;
             }))
             {

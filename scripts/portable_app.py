@@ -15,8 +15,10 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import windows_guest_settings as windows_settings
+import host_file_sharing as file_sharing
 import launch_runtime as runtime
-from runtime_config import DEFAULTS, load_settings, validate_settings
+from runtime_config import (DEFAULTS, VIEWER_DEFAULTS, load_settings, validate_settings,
+                            load_viewer_settings, validate_viewer_settings)
 from connection_profile import import_profile_uri
 from profile_store import ProfileStore, StoreBusy, StoreError, SecretsUnavailable, _pinned_directory, _plain
 from gateway_package import inspect_current
@@ -32,6 +34,7 @@ RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'scripts/gateway_package.py', 'scripts/gateway_profile.py',
                  'scripts/session_carrier.py', 'scripts/file_snapshot.py', 'scripts/runtime_logs.py',
                  'scripts/windows_guest_settings.py',
+                 'scripts/host_file_sharing.py', 'scripts/file_share_carrier.py',
                  'runtime/qemu-11.1.0/qemu-img.exe')
 GUEST_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 CHECK_INFO = {
@@ -53,7 +56,8 @@ CHECK_INFO = {
 
 def host_facts():
     facts = {'windows': os.name == 'nt', 'x64': False,
-             'whpx': False, 'ram_total_mib': 0, 'ram_available_mib': 0, 'admin': False}
+             'whpx': False, 'ram_total_mib': 0, 'ram_available_mib': 0,
+             'logical_processors': os.cpu_count() or 1, 'admin': False}
     if os.name != 'nt':
         return facts
 
@@ -92,7 +96,7 @@ def host_facts():
     return facts
 
 
-def preflight(root, host=None):
+def preflight(root, host=None, *, full=True):
     root = root.resolve(strict=True)
     host = host_facts() if host is None else host
     checks = {}
@@ -116,8 +120,19 @@ def preflight(root, host=None):
     except (OSError, ValueError):
         display_settings = dict(windows_settings.DEFAULTS)
         check('settings', False, 'Некорректное разрешение Windows. Открой настройки и сохрани их заново.')
+    try:
+        viewer_settings = load_viewer_settings(root)
+    except (OSError, ValueError):
+        viewer_settings = dict(VIEWER_DEFAULTS)
+        check('settings', False, 'Некорректные настройки окна. Открой настройки и сохрани их заново.')
+    try:
+        file_settings = file_sharing.load_settings(root)
+    except (OSError, ValueError, RuntimeError):
+        file_settings = file_sharing.validate_settings({})
+        check('settings', False, 'Некорректный доступ к файлам ПК. Открой настройки и сохрани их заново.')
     already_running = False
     guests = {}
+    states = {}
     recovery_available = False
     runtime_state = {'work': 'unknown', 'gateway': 'unknown', 'control_available': False}
     try:
@@ -166,35 +181,36 @@ def preflight(root, host=None):
     free = shutil.disk_usage(root).free
     check('free_space', free >= 2 * 1024 ** 3,
           f'Свободно {free // 1048576} МиБ; для запуска требуется резерв не менее 2048 МиБ.')
-    missing = [name for name in RUNTIME_FILES if name.startswith('runtime/') and not (root / name).is_file()]
-    check('runtime_files', not missing, 'Не хватает: ' + ', '.join(missing) if missing else 'Python и QEMU найдены.')
-    missing = [name for name in RUNTIME_FILES if name.startswith('scripts/') and not (root / name).is_file()]
-    check('application_files', not missing,
-          'Распакуй полный комплект поверх файлов приложения, сохранив личные диски и настройки. Не хватает: ' + ', '.join(missing)
-          if missing else 'Файлы приложения на месте.')
-    missing_guests = [name for name in GUEST_FILES if not (root / name).is_file()]
-    check('guest_files', not missing_guests,
-          'Нужны установленные диски и файл прошивки: ' + ', '.join(missing_guests)
-          if missing_guests else 'Диск Windows и данные прошивки найдены.')
-    engine = root / RUNTIME_FILES[1]
-    valid_engine = False
-    if engine.is_file():
-        try:
-            with engine.open('rb') as reader:
-                valid_engine = hashlib.file_digest(reader, 'sha256').hexdigest() == ENGINE_SHA256
-        except OSError:
-            pass
-    check('engine_identity', valid_engine, 'QEMU 11.1.0 проверен.' if valid_engine else
-          'Файл QEMU отсутствует или повреждён. Нажми «Восстановить Python и QEMU».')
     gateway_version = None
-    try:
-        package = inspect_current(root)
-        gateway_version = package['version']
-        check('gateway_package', True, 'Установлен шлюз ' + gateway_version + '. Структура корректна; полная проверка SHA256 выполняется перед запуском.')
-    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
-        check('gateway_package', False, 'Не найдена исправная версия шлюза. Восстанови её из пакета компонентов.')
-    powershell = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    check('powershell', powershell.is_file(), 'Windows PowerShell найден.' if powershell.is_file() else 'Для запуска нужен встроенный Windows PowerShell 5.1.')
+    if full:
+        missing = [name for name in RUNTIME_FILES if name.startswith('runtime/') and not (root / name).is_file()]
+        check('runtime_files', not missing, 'Не хватает: ' + ', '.join(missing) if missing else 'Python и QEMU найдены.')
+        missing = [name for name in RUNTIME_FILES if name.startswith('scripts/') and not (root / name).is_file()]
+        check('application_files', not missing,
+              'Распакуй полный комплект поверх файлов приложения, сохранив личные диски и настройки. Не хватает: ' + ', '.join(missing)
+              if missing else 'Файлы приложения на месте.')
+        missing_guests = [name for name in GUEST_FILES if not (root / name).is_file()]
+        check('guest_files', not missing_guests,
+              'Нужны установленные диски и файл прошивки: ' + ', '.join(missing_guests)
+              if missing_guests else 'Диск Windows и данные прошивки найдены.')
+        engine = root / RUNTIME_FILES[1]
+        valid_engine = False
+        if engine.is_file():
+            try:
+                with engine.open('rb') as reader:
+                    valid_engine = hashlib.file_digest(reader, 'sha256').hexdigest() == ENGINE_SHA256
+            except OSError:
+                pass
+        check('engine_identity', valid_engine, 'QEMU 11.1.0 проверен.' if valid_engine else
+              'Файл QEMU отсутствует или повреждён. Нажми «Восстановить Python и QEMU».')
+        try:
+            package = inspect_current(root)
+            gateway_version = package['version']
+            check('gateway_package', True, 'Установлен шлюз ' + gateway_version + '. Структура корректна; полная проверка SHA256 выполняется перед запуском.')
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            check('gateway_package', False, 'Не найдена исправная версия шлюза. Восстанови её из пакета компонентов.')
+        powershell = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        check('powershell', powershell.is_file(), 'Windows PowerShell найден.' if powershell.is_file() else 'Для запуска нужен встроенный Windows PowerShell 5.1.')
     connection = {'selected_profile': None, 'applied_revision_id': None, 'verified': False}
     try:
         connection['selected_profile'] = ProfileStore(root / 'profiles').selected_summary()
@@ -236,8 +252,12 @@ def preflight(root, host=None):
     blockers = [{'code': name, 'title': CHECK_INFO[name][1], 'detail': item['detail'],
                  'action': item['action'], 'action_label': item['action_label']}
                 for name, item in checks.items() if not item['passed']]
-    return {'ok': ok, 'message': ('Windows уже запущена.' if already_running else 'Всё готово к запуску Windows.') if ok else blockers[0]['title'],
-            'root': str(root), 'settings': settings, 'windows_settings': display_settings,
+    return {'ok': ok, 'report_kind': 'preflight' if full else 'runtime_status',
+            'message': (('Windows уже запущена.' if already_running else 'Всё готово к запуску Windows.')
+                        if full else 'Состояние сеанса обновлено.') if ok else blockers[0]['title'],
+            'root': str(root), 'settings': settings, 'windows_settings': display_settings, 'viewer_settings': viewer_settings,
+            'file_settings': file_settings,
+            'host_files': states.get('work', {}).get('host_files', {'status': 'off'}) if guests else {'status': 'off'},
             'windows_display': display_state, 'host': host, 'checks': checks,
             'blockers': blockers, 'checked_utc': runtime.utc_now(),
             'already_running': already_running, 'network_verified': network_verified,
@@ -252,6 +272,42 @@ def preflight(root, host=None):
             'network_warning': 'Связь восстанавливается. Windows продолжает работать.' if runtime_state['gateway'] == 'reconnecting' and 'work' in guests else
                                '' if network_verified else 'Подключение будет проверено шлюзом перед запуском Windows.',
             'secret_values_exposed': False, 'network_requests_made': False}
+
+
+def runtime_status(root, host=None):
+    """Observe the session without repeating installation/integrity checks."""
+    return preflight(root, host=host, full=False)
+
+
+def show_desktop(root):
+    work = runtime.discover_guests(root).get('work')
+    identity = work.get('process') if work else None
+    if not identity or not runtime.same_identity(identity, runtime.process_identity(identity['pid'])):
+        return {'ok': False, 'message': 'Работающая Windows не найдена. Обнови состояние панели.'}
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user.SetForegroundWindow.argtypes = [wintypes.HWND]
+    windows = []
+
+    @callback_type
+    def inspect(window, unused):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+        if pid.value == identity['pid'] and user.IsWindowVisible(window):
+            windows.append(window)
+        return True
+
+    user.EnumWindows(inspect, 0)
+    if not windows or not runtime.same_identity(identity, runtime.process_identity(identity['pid'])):
+        return {'ok': False, 'message': 'Окно Windows ещё не появилось. Повтори через несколько секунд.'}
+    user.ShowWindow(windows[0], 9)
+    foreground = bool(user.SetForegroundWindow(windows[0]))
+    return {'ok': True, 'message': 'Рабочий стол Windows открыт.' if foreground else
+            'Окно Windows восстановлено. Выбери его на панели задач.'}
 
 
 def save_diagnostic_report(root, result):
@@ -272,6 +328,8 @@ def save_settings(root, value):
         raise ValueError('Нужен объект настроек.')
     value = dict(value)
     display = windows_settings.validate_settings(value.pop('windows')) if 'windows' in value else None
+    viewer = validate_viewer_settings(value.pop('viewer')) if 'viewer' in value else None
+    files = file_sharing.validate_settings(value.pop('files')) if 'files' in value else None
     settings = validate_settings(value)
     with runtime.ProjectLock(root) as acquired:
         if not acquired:
@@ -300,6 +358,31 @@ def save_settings(root, value):
                 runtime.atomic_json(folder / 'windows.json', display)
             except OSError as error:
                 raise ValueError('Память и процессоры сохранены, но разрешение сохранить не удалось. Проверь доступ к папке и повтори сохранение.') from error
+        if viewer is not None:
+            try:
+                load_viewer_settings(root)
+            except ValueError:
+                backup = folder / ('viewer.invalid-' + uuid.uuid4().hex + '.json')
+                with (folder / 'viewer.json').open('rb') as source, backup.open('xb') as target:
+                    shutil.copyfileobj(source, target)
+            try:
+                runtime.atomic_json(folder / 'viewer.json', viewer)
+            except OSError as error:
+                raise ValueError('Ресурсы сохранены, но настройки окна сохранить не удалось. Проверь доступ к папке и повтори сохранение.') from error
+        if files is not None:
+            with _pinned_directory(folder, create=False):
+                path = folder / 'files.json'
+                _plain(path)
+                try:
+                    file_sharing.load_settings(root)
+                except ValueError:
+                    backup = folder / ('files.invalid-' + uuid.uuid4().hex + '.json')
+                    with path.open('rb') as source, backup.open('xb') as target:
+                        shutil.copyfileobj(source, target)
+                try:
+                    runtime.atomic_json(path, files)
+                except OSError as error:
+                    raise ValueError('Ресурсы сохранены, но доступ к файлам сохранить не удалось. Проверь папку программы и повтори сохранение.') from error
     return settings
 
 
@@ -640,7 +723,7 @@ def profile_error(error):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--action', choices=['diagnose', 'get-settings', 'save-settings', 'start', 'recover-session',
+    parser.add_argument('--action', choices=['diagnose', 'status', 'show-desktop', 'get-settings', 'save-settings', 'start', 'recover-session',
                                             'stop', 'test-profile', 'repair-gateway',
                                             *PROFILE_ACTIONS], required=True)
     args = parser.parse_args()
@@ -657,6 +740,10 @@ def main():
         elif args.action in PROFILE_ACTIONS:
             request = {} if args.action == 'list-profiles' else read_request()
             result = profile_action(root, args.action, request)
+        elif args.action == 'show-desktop':
+            result = show_desktop(root)
+        elif args.action == 'status':
+            result = runtime_status(root)
         elif args.action == 'diagnose':
             result = preflight(root)
             try:
@@ -674,10 +761,23 @@ def main():
             except ValueError:
                 result.update(windows_settings=dict(windows_settings.DEFAULTS), recovery_required=True,
                               message='Настройки разрешения повреждены. При сохранении исходный файл останется рядом.')
+            try:
+                result['viewer_settings'] = load_viewer_settings(root)
+            except ValueError:
+                result.update(viewer_settings=dict(VIEWER_DEFAULTS), recovery_required=True,
+                              message='Настройки окна повреждены. При сохранении исходный файл останется рядом.')
+            result['host'] = host_facts()
+            try:
+                result['file_settings'] = file_sharing.load_settings(root)
+            except ValueError:
+                result.update(file_settings=file_sharing.validate_settings({}), recovery_required=True,
+                              message='Настройки файлов повреждены. При сохранении исходный файл останется рядом.')
         elif args.action == 'save-settings':
             result = {'ok': True, 'settings': save_settings(root, read_request()),
                       'message': 'Настройки сохранены для следующего запуска.'}
             result.update(windows_preferences(root))
+            result['viewer_settings'] = load_viewer_settings(root)
+            result['file_settings'] = file_sharing.load_settings(root)
         else:
             result = start(root)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:

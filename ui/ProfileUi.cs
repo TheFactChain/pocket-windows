@@ -30,16 +30,11 @@ internal sealed partial class MainForm
             if (result.ContainsKey("profile")) ConnectionPage.LoadView((Dictionary<string,object>)result["profile"]);
             if (action == "list-profiles")
             {
+                bool openSelected = !profilesLoaded && ConnectionPage.ProfileId == null;
                 profilesLoaded = true;
                 ConnectionPage.LoadProfiles(result.ContainsKey("profiles") ? result["profiles"] : null);
-                string id = ConnectionPage.PickedId;
-                if (id != null)
-                {
-                    Dictionary<string,object> view = await run("get-profile-view",new Dictionary<string,object>{{"profile_id",id}});
-                    if (!CanUpdate) return result;
-                    if (Bridge.Ok(view)) ConnectionPage.LoadView((Dictionary<string,object>)view["profile"]);
-                    else { ConnectionPage.RestoreLoadedSelection(); ConnectionPage.Error.Text = Bridge.Message(view); }
-                }
+                if (openSelected && ConnectionPage.PickedView != null) ConnectionPage.LoadView(ConnectionPage.PickedView);
+                else ConnectionPage.RestoreLoadedSelection();
             }
             else if (action == "save-profile" || action == "select-profile" || action == "import-profile")
             {
@@ -83,12 +78,12 @@ internal sealed partial class MainForm
         if (!CanUpdate) return;
         try
         {
-            Dictionary<string,object> report = await run("diagnose",null);
+            Dictionary<string,object> report = await run("status",null);
             if (!CanUpdate) return;
             if (report != null && report.ContainsKey("checks")) Display(report);
-            else warning += " Изменение сохранено, но диагностика не обновилась. Повтори проверку состояния.";
+            else warning += " Изменение сохранено, но состояние не обновилось. Повтори проверку состояния.";
         }
-        catch (Exception) { warning += " Изменение сохранено, но диагностика не обновилась. Повтори проверку состояния."; }
+        catch (Exception) { warning += " Изменение сохранено, но состояние не обновилось. Повтори проверку состояния."; }
         if (!CanUpdate) return;
         operationResult = completed;
         operation.Text = Bridge.Message(completed);

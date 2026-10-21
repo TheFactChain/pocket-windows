@@ -19,6 +19,8 @@ from file_snapshot import locked_read, remove_owned_file
 from profile_store import ProfileStore, _pinned_directory, _plain
 from runtime_config import validate_settings
 import windows_guest_settings
+from runtime_config import validate_viewer_settings
+import host_file_sharing
 import gateway_package
 import launch_runtime as runtime
 
@@ -30,9 +32,13 @@ APP_FILES = tuple('scripts/' + name for name in (
     'runtime_network_plan.py', 'runtime_config.py', 'connection_profile.py',
     'profile_store.py', 'gateway_controller.py', 'gateway_package.py',
     'gateway_profile.py', 'session_carrier.py', 'file_snapshot.py', 'runtime_logs.py', 'windows_guest_settings.py',
+    'host_file_sharing.py', 'file_share_carrier.py',
     'Start-Runtime.ps1', 'Stop-Runtime.ps1', 'Prepare-Dependencies.ps1', 'Prepare-Host.ps1'))
 COMPONENT_FILES = ('runtime/components-manifest.json', 'runtime/components-recovery.zip')
 GATEWAY_RECOVERY = ('runtime/gateway-recovery.json', 'runtime/gateway-recovery.zip')
+FILE_COMPONENT_FILES = tuple('runtime/host-files/' + name for name in (
+    'HostFiles.exe', 'HostFilesGuest.exe', 'SMBLibrary.dll', 'SMBLibrary.Win32.dll', 'Utilities.dll',
+    'SMBLibrary.LICENSE.txt', 'SMBLibrary-source.zip', 'NOTICE.txt', 'build-manifest.json'))
 PROFILE_FILE = 'profiles/profiles.json'
 RUNTIME_PREFIXES = ('runtime/python-3.12.14/', 'runtime/qemu-11.1.0/')
 CHUNK = 4 * 1024 * 1024
@@ -49,7 +55,8 @@ def safe_name(name):
 
 def allowed(name):
     return safe_name(name) and (name in (*DATA_FILES, *PUBLIC_FILES, *APP_FILES, *COMPONENT_FILES,
-        *GATEWAY_RECOVERY, PROFILE_FILE, 'gateway/packages/current.json', 'config/windows.json')
+        *GATEWAY_RECOVERY, *FILE_COMPONENT_FILES, PROFILE_FILE, 'gateway/packages/current.json',
+        'config/windows.json', 'config/viewer.json', 'config/files.json')
         or name.startswith(RUNTIME_PREFIXES)
         or re.fullmatch(r'gateway/packages/releases/[a-z0-9][a-z0-9._-]{0,63}/(manifest.json|gateway.qcow2)', name))
 
@@ -102,6 +109,10 @@ def validate_public_file(name, reader):
         validate_settings(_json(reader, 65536))
     elif name == 'config/windows.json':
         windows_guest_settings.validate_settings(_json(reader, 8192))
+    elif name == 'config/viewer.json':
+        validate_viewer_settings(_json(reader, 16384))
+    elif name == 'config/files.json':
+        host_file_sharing.validate_settings(_json(reader, 65536))
     elif name == 'Launcher.exe':
         header = reader.read(64)
         if len(header) != 64 or header[:2] != b'MZ':
@@ -187,6 +198,16 @@ def collect(project, source=None, mode='personal'):
             add(name)
         if _optional_file(project, 'config/windows.json'):
             add('config/windows.json')
+        if _optional_file(project, 'config/viewer.json'):
+            add('config/viewer.json')
+        if mode == 'personal' and _optional_file(project, 'config/files.json'):
+            add('config/files.json')
+        file_components = [_optional_file(project, name) for name in FILE_COMPONENT_FILES]
+        if any(file_components) and not all(file_components):
+            raise ValueError('File-sharing components must be complete')
+        if all(file_components):
+            for name in FILE_COMPONENT_FILES:
+                add(name)
         with locked_read(entries[COMPONENT_FILES[0]]) as reader:
             components = _json(reader)
         if (type(components) is not dict or set(components) != {'schema', 'files'}
@@ -274,8 +295,8 @@ def write_archive(entries, destination, commit=None):
                         for name, path in sorted(entries.items()):
                             if not allowed(name):
                                 raise ValueError('Unexpected payload path')
-                            if entries.mode == 'public' and name == PROFILE_FILE:
-                                raise ValueError('Public archives must not include profiles')
+                            if entries.mode == 'public' and name in (PROFILE_FILE, 'config/files.json'):
+                                raise ValueError('Public archives must not include profiles or host folder paths')
                             with ExitStack() as context:
                                 context.enter_context(_pinned_directory(path.parent, create=False))
                                 reader = held.get(name) or context.enter_context(locked_read(file_under(entries.project, name)))
@@ -338,7 +359,7 @@ def verify_archive(path):
             raise ValueError('Archive member set differs from its manifest')
         payload = {row['path'] for row in rows}
         if manifest['kind'] == 'public_distribution' and (
-                PROFILE_FILE in payload or manifest['encrypted_profiles_included'] is not False
+                PROFILE_FILE in payload or 'config/files.json' in payload or manifest['encrypted_profiles_included'] is not False
                 or manifest['credentials_portability'] != 'No connection profiles included.'):
             raise ValueError('Public archives must not include profiles')
         if (not set((*DATA_FILES, *PUBLIC_FILES, *APP_FILES, *COMPONENT_FILES, 'gateway/packages/current.json')) <= payload

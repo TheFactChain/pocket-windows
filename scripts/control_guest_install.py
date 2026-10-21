@@ -16,9 +16,10 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 from runtime_network_plan import arguments as network_arguments
 from collections import deque
 from runtime_logs import start_capped_drain, CappedWriter
-from runtime_config import load_settings
+from runtime_config import load_settings, load_viewer_settings
 import launch_runtime as runtime
 import windows_guest_settings as windows_settings
+import host_file_sharing as file_sharing
 
 def sha(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
@@ -126,6 +127,7 @@ env=os.environ.copy();env['PATH']=str(engine.parent)+';'+os.environ['SystemRoot'
 work_reboot_session = args.guest == 'work-boot' and args.network == 'isolated-lan'
 normal_runtime = work_reboot_session and not args.work_test_media
 session_nonce=uuid.uuid4().hex if work_reboot_session else None
+files_session = None
 display_settings = None
 if normal_runtime:
     display_settings = windows_settings.load_settings(root)
@@ -139,7 +141,9 @@ if normal_runtime:
                   '-chardev', 'ringbuf,id=wcdisplay,size=8192']
     arguments[arguments.index('-serial') + 1] = 'chardev:wcdisplay'
     # SDL's close button otherwise cuts guest power without an ACPI shutdown.
-    arguments[arguments.index('-display') + 1] = 'sdl,gl=off,window-close=off'
+    viewer_settings = load_viewer_settings(root)
+    arguments[arguments.index('-display') + 1] = ('sdl,gl=off,window-close=off'
+        + (',full-screen=on' if viewer_settings['start_fullscreen'] else ''))
     setup = root / 'state/display-setup'
     if setup.exists():
         from profile_store import _plain
@@ -187,6 +191,8 @@ def spawn_generation():
         report.update(session_nonce=session_nonce,generation=generation,previous_generations=list(previous_generations))
     if display_settings is not None:
         report['windows_display'] = {'status': 'pending', 'requested': display_settings}
+    if files_session is not None:
+        report['host_files'] = dict(files_session.public, generation=generation)
     report['writers']=[report['process'],report['controller']]
     inbox=queue.Queue();qmp_events=deque(maxlen=64);sequence=0
     save()
@@ -296,6 +302,36 @@ def protect_work_window():
         return True
     user.EnumWindows(callback_type(visit), 0)
     return bool(found)
+
+
+def read_file_receipt():
+    global files_buffer
+    state = report['host_files']
+    if not files_session.healthy():
+        if state['status'] != 'failed':
+            state.update(status='failed', code='FILE_SERVER_STOPPED')
+            save()
+        return
+    if files_session.medium is None:
+        return
+    try:
+        data = command('ringbuf-read', {'device': 'wcfilesreceipt', 'size': 16384, 'format': 'utf8'})
+        if not isinstance(data, str) or len(files_buffer) + len(data) > 32768:
+            raise ValueError('Invalid file-sharing channel')
+        files_buffer += data
+        while '\n' in files_buffer:
+            line, files_buffer = files_buffer.split('\n', 1)
+            receipt = file_sharing.validate_receipt(line.strip(), files_session.config)
+            state.update(status=('ready' if state['share_count'] else files_session.public['status'])
+                         if receipt['success'] else 'failed', receipt=receipt)
+            save()
+    except (OSError, ValueError, RuntimeError, TimeoutError, queue.Empty):
+        files_buffer = ''
+        if state['status'] != 'unconfirmed':
+            state['status'] = 'unconfirmed'
+            save()
+
+
 def handle_control(control):
     action=None
     try:
@@ -348,6 +384,9 @@ def handle_control(control):
         save()
 
 try:
+    if normal_runtime:
+        files_session = file_sharing.Session(root, session_nonce)
+        arguments += files_session.arguments
     while True:
         if not spawn_generation():
             report.update(status='exited',stop_requested=True)
@@ -365,6 +404,7 @@ try:
             # Capture only on explicit request, so a user's local password entry is never polled.
             targets=iter([]);target=next(targets,None)
             display_buffer = ''
+            files_buffer = ''
             display_poll = time.monotonic() + 5
             protected_window = False
             while process.poll() is None:
@@ -376,6 +416,8 @@ try:
                         report['windows_display'] = {'status': 'unconfirmed', 'requested': display_settings}
                         save()
                     display_poll = time.monotonic() + 3
+                    if files_session is not None:
+                        read_file_receipt()
                 if target is not None and time.monotonic()-begin>=target:
                     capture('boot-'+str(target))
                     if work and install and target==2:
@@ -442,6 +484,8 @@ except Exception:
         save()
     raise
 finally:
+    if files_session is not None:
+        files_session.close(guest_stopped='process' not in globals() or process.poll() is not None)
     if stderr_writer:
         stderr_writer.close()
     elif stderr != subprocess.PIPE:

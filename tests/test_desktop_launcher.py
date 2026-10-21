@@ -12,10 +12,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DesktopLauncherTests(unittest.TestCase):
+    def test_home_diagnostics_and_keyboard_flow(self):
+        compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+        with tempfile.TemporaryDirectory(prefix='desktop-usability-') as temporary:
+            executable = Path(temporary) / 'DesktopUsabilityRegression.exe'
+            command = [str(compiler), '/nologo', '/target:exe', '/platform:x64',
+                       '/main:DesktopUsabilityRegression', '/reference:System.Windows.Forms.dll',
+                       '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll',
+                       '/win32manifest:' + str(ROOT / 'ui/app.manifest'), '/out:' + str(executable),
+                       *map(str, sorted((ROOT / 'ui').glob('*.cs'))), str(ROOT / 'tests/DesktopUsabilityRegression.cs')]
+            build = subprocess.run(command, capture_output=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
+            result = subprocess.run([str(executable), temporary], capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
+
+    def test_lightweight_runtime_status_preserves_full_readiness(self):
+        compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+        with tempfile.TemporaryDirectory(prefix='desktop-quiet-status-') as temporary:
+            executable = Path(temporary) / 'RuntimeStatusRegression.exe'
+            command = [str(compiler), '/nologo', '/target:exe', '/platform:x64',
+                       '/main:RuntimeStatusRegression', '/reference:System.Windows.Forms.dll',
+                       '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll',
+                       '/win32manifest:' + str(ROOT / 'ui/app.manifest'), '/out:' + str(executable),
+                       *map(str, sorted((ROOT / 'ui').glob('*.cs'))), str(ROOT / 'tests/RuntimeStatusRegression.cs')]
+            build = subprocess.run(command, capture_output=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
+            result = subprocess.run([str(executable)], capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
+
     def test_reported_visual_regressions(self):
         compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
         for name in ('DesktopShellRegression', 'SettingsLayoutRegression', 'ConnectionLayoutRegression',
-                     'DesktopPanelLifecycleRegression', 'ProfileDialogsRegression'):
+                     'DesktopPanelLifecycleRegression', 'ProfileDialogsRegression', 'WindowPreferencesRegression', 'FileSharingSettingsRegression'):
             with self.subTest(harness=name), tempfile.TemporaryDirectory(prefix='desktop-reported-') as temporary:
                 executable = Path(temporary) / (name + '.exe')
                 command = [str(compiler), '/nologo', '/target:exe', '/platform:x64', '/main:' + name,
