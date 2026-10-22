@@ -276,6 +276,10 @@ internal sealed partial class MainForm : Form
     private readonly TextBox details = new TextBox { Multiline = true, ReadOnly = true, Visible = false };
     private readonly Label nextStep = new Label { AutoSize = true, ForeColor = Muted };
     private readonly Label resources = new Label { AutoSize = true, Font = new Font("Segoe UI", 11), ForeColor = Ink };
+    private readonly Label stateChip = new Label { AutoSize = true, Font = new Font("Segoe UI",9.5f), Padding = new Padding(12,5,12,5), BackColor = Color.FromArgb(229,229,234), ForeColor = Color.FromArgb(58,58,60), Text = "Состояние уточняется" };
+    private readonly Label[] stepLabels = new[]{"Шлюз","VPN","Windows","Файлы ПК"}.Select(name => new Label { Text = name, AutoSize = true, Padding = new Padding(14,7,14,7), TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI",9.5f), BackColor = Color.FromArgb(245,245,248), ForeColor = NativeStyle.Muted, AccessibleName = "Шаг запуска: " + name }).ToArray();
+    private readonly Label[] cardValues = Enumerable.Range(0,3).Select(index => new Label { AutoSize = true, Font = new Font("Segoe UI",11.5f,FontStyle.Bold), ForeColor = NativeStyle.Ink, Text = "—", Margin = new Padding(0,0,0,2) }).ToArray();
+    private readonly Label[] cardDetails = Enumerable.Range(0,3).Select(index => new Label { AutoSize = true, Font = new Font("Segoe UI",9.5f), ForeColor = NativeStyle.Muted, Text = "", Margin = Padding.Empty }).ToArray();
     private readonly Label network = new Label { AutoSize = true, ForeColor = Color.FromArgb(130, 100, 32) };
     private readonly Label checkedAt = new Label { AutoSize = true, ForeColor = Muted, Text = "Диагностика ещё не выполнена" };
     private readonly Label reportLocation = new Label { AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9) };
@@ -452,23 +456,46 @@ internal sealed partial class MainForm : Form
         pageControls.Add(AppPage.Home,overview); pageControls.Add(AppPage.Connection,ConnectionPage); pageControls.Add(AppPage.Settings,SettingsPage); pageControls.Add(AppPage.Diagnostics,diagnostics);
         foreach (Control page in pageControls.Values) { page.Dock = DockStyle.Fill; pages.Controls.Add(page); }
         HelpButton.Font = new Font("Segoe UI",9); HelpButton.MinimumSize = Size.Empty; HelpButton.Padding = new Padding(10,8,10,8); HelpButton.Margin = new Padding(0,18,0,0); nav.Controls.Add(HelpButton);
-        TableLayoutPanel home = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Margin = Padding.Empty };
+        // Home: one status card with the launch actions and steps, then three short info cards.
+        TableLayoutPanel home = homeLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty };
         home.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        home.RowStyles.Add(new RowStyle(SizeType.Percent,50));
-        for (int index = 0; index < 4; index++) home.RowStyles.Add(new RowStyle(SizeType.AutoSize)); home.RowStyles.Add(new RowStyle(SizeType.Percent,50));
-        RoundedPanel summary = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(20,12,20,12), Margin = new Padding(0,0,0,6), BackColor = Color.White };
-        TableLayoutPanel summaryRows = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
-        summaryRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); for(int index=0;index<5;index++)summaryRows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        status.Font = new Font("Segoe UI",13,FontStyle.Bold); status.Margin = new Padding(0,0,0,3); nextStep.Margin = new Padding(0,0,0,3); sessionState.Margin = new Padding(0,0,0,6);
-        foreach(Label label in new[]{status,nextStep,sessionState}) { label.Anchor = AnchorStyles.None; label.TextAlign = ContentAlignment.MiddleCenter; }
-        summaryRows.Controls.Add(status,0,0); summaryRows.Controls.Add(nextStep,0,1); summaryRows.Controls.Add(sessionState,0,2);
-        FlowLayoutPanel launch = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Anchor = AnchorStyles.None, Margin = Padding.Empty };
-        foreach(Button button in new[]{StartButton,OpenDesktopButton}) { ((RoundedButton)button).Glyph = AppGlyph.Play; button.Padding = new Padding(24,10,24,10); button.MinimumSize = new Size(260,58); button.Margin = new Padding(4); }
-        StopButton.Padding = new Padding(14,9,14,9); StopButton.Margin = new Padding(4); launch.Controls.Add(StartButton); launch.Controls.Add(OpenDesktopButton); launch.Controls.Add(StopButton); summaryRows.Controls.Add(launch,0,3);
-        nextAction.Anchor = AnchorStyles.None; nextAction.Padding = new Padding(10,7,10,7); nextAction.Margin = new Padding(0,10,0,0); summaryRows.Controls.Add(nextAction,0,4); summary.Controls.Add(summaryRows); home.Controls.Add(summary,0,1);
-        resources.Font = new Font("Segoe UI",9.5f); resources.Margin = new Padding(0,0,0,4); resources.Anchor = AnchorStyles.None; resources.TextAlign = ContentAlignment.MiddleCenter; home.Controls.Add(resources,0,2);
-        network.Font = new Font("Segoe UI",9); network.ForeColor = Muted; network.Margin = new Padding(2,0,2,10); network.Anchor = AnchorStyles.None; network.TextAlign = ContentAlignment.MiddleCenter; home.Controls.Add(network,0,3);
-        keyboardHint.Anchor = AnchorStyles.None; keyboardHint.Margin = Padding.Empty; home.Controls.Add(keyboardHint,0,4);
+        for (int index = 0; index < 4; index++) home.RowStyles.Add(index == 2 ? new RowStyle(SizeType.Percent,100) : new RowStyle(SizeType.AutoSize));
+        RoundedPanel summary = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(22,14,22,14), Margin = new Padding(0,0,0,10), BackColor = Color.White };
+        // Centred status and the one primary action, as agreed earlier; steps sit underneath.
+        TableLayoutPanel summaryRows = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 4, Margin = Padding.Empty, BackColor = Color.White };
+        summaryRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        for(int index=0;index<4;index++)summaryRows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        TableLayoutPanel texts = new TableLayoutPanel { Anchor = AnchorStyles.None, AutoSize = true, ColumnCount = 1, RowCount = 4, Margin = new Padding(0,0,0,14), BackColor = Color.White };
+        texts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); for(int index=0;index<4;index++)texts.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        status.Font = new Font("Segoe UI",14,FontStyle.Bold); status.Margin = new Padding(0,0,0,4); nextStep.Margin = new Padding(0,0,0,4); sessionState.Margin = new Padding(0,0,0,2);
+        network.Font = new Font("Segoe UI",9); network.Margin = new Padding(0,4,0,0);
+        foreach(Label label in new Label[]{status,nextStep,sessionState,network}) { label.Anchor = AnchorStyles.None; label.TextAlign = ContentAlignment.MiddleCenter; }
+        texts.Controls.Add(status,0,0); texts.Controls.Add(nextStep,0,1); texts.Controls.Add(sessionState,0,2); texts.Controls.Add(network,0,3);
+        summaryRows.Controls.Add(texts,0,0);
+        FlowLayoutPanel launch = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Anchor = AnchorStyles.None, Margin = Padding.Empty, BackColor = Color.White };
+        foreach(Button button in new[]{StartButton,OpenDesktopButton}) { ((RoundedButton)button).Glyph = AppGlyph.Play; button.Padding = new Padding(20,10,20,10); button.MinimumSize = new Size(220,48); button.Margin = new Padding(4); }
+        StopButton.Padding = new Padding(14,9,14,9); StopButton.MinimumSize = new Size(0,48); StopButton.Margin = new Padding(4);
+        launch.Controls.Add(StartButton); launch.Controls.Add(OpenDesktopButton); launch.Controls.Add(StopButton); summaryRows.Controls.Add(launch,0,1);
+        FlowLayoutPanel steps = homeSteps = new FlowLayoutPanel { Anchor = AnchorStyles.None, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = new Padding(0,12,0,0), BackColor = Color.White };
+        foreach(Label step in stepLabels) { step.Margin = new Padding(4); steps.Controls.Add(step); }
+        nextAction.Anchor = AnchorStyles.None; nextAction.Padding = new Padding(10,7,10,7); nextAction.Margin = new Padding(0,10,0,0); summaryRows.Controls.Add(nextAction,0,2);
+        summaryRows.Controls.Add(steps,0,3);
+        summary.Controls.Add(summaryRows); home.Controls.Add(summary,0,0);
+        TableLayoutPanel cards = homeCards = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+        for(int index=0;index<3;index++)
+        {
+            cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33.33f));
+            RoundedPanel card = new RoundedPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.White, Padding = new Padding(16,12,16,12), Margin = new Padding(index==0?0:6,0,index==2?0:6,0) };
+            TableLayoutPanel lines = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, BackColor = Color.White };
+            lines.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); for(int row=0;row<3;row++)lines.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            lines.Controls.Add(new Label { Text = new[]{"ПОДКЛЮЧЕНИЕ","ЭКРАН И РЕСУРСЫ","ФАЙЛЫ ПК"}[index], AutoSize = true, Font = new Font("Segoe UI",8.5f), ForeColor = Muted, Margin = new Padding(0,0,0,4) },0,0);
+            lines.Controls.Add(cardValues[index],0,1); lines.Controls.Add(cardDetails[index],0,2);
+            card.Controls.Add(lines); cards.Controls.Add(card,index,0);
+            lines.SizeChanged += delegate { foreach(Label label in lines.Controls.OfType<Label>()) label.MaximumSize = new Size(Math.Max(60,lines.ClientSize.Width),0); };
+        }
+        cards.RowStyles.Add(new RowStyle(SizeType.AutoSize)); home.Controls.Add(cards,0,1);
+        keyboardHint.Text = "Ctrl+Enter — запустить или открыть, Ctrl+Alt+F — полный экран, Ctrl+Alt+G — освободить мышь, F1 — справка";
+        keyboardHint.Anchor = AnchorStyles.Left; keyboardHint.TextAlign = ContentAlignment.MiddleLeft; keyboardHint.Margin = new Padding(0,8,0,0); home.Controls.Add(keyboardHint,0,3);
         overview.Controls.Add(home);
         TableLayoutPanel diagnosticLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, Margin = Padding.Empty };
         diagnosticLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
@@ -481,10 +508,14 @@ internal sealed partial class MainForm : Form
         diagnosticLayout.Controls.Add(preparationHint,0,4); diagnosticLayout.Controls.Add(checkedAt,0,5); diagnosticLayout.Controls.Add(reportLocation,0,6); diagnostics.Controls.Add(diagnosticLayout);
         operation.Height=operation.Font.Height+4;operation.FontChanged+=delegate{operation.Height=operation.Font.Height+4;};
         frame.Controls.Add(operation,0,2); frame.Controls.Add(progress,0,3); Controls.Add(frame);
+        overview.Layout += delegate { FitHome(); }; homeLayout.Layout += delegate { FitHome(); };
         overview.Resize += delegate {
             int width = Math.Max(100,overview.ClientSize.Width-38);
-            foreach (Label label in new[] {status,nextStep,sessionState,resources,network,keyboardHint}) label.MaximumSize = new Size(width,0);
-            launch.MaximumSize = new Size(width,0);
+            steps.MaximumSize = new Size(Math.Max(100,width-48),0);
+            foreach (Label label in new[] {status,nextStep,sessionState,network}) label.MaximumSize = new Size(Math.Max(100,width-48),0);
+            launch.MaximumSize = new Size(Math.Max(100,width-48),0);
+            keyboardHint.MaximumSize = resources.MaximumSize = new Size(width,0);
+            FitHome();
         };
         diagnosticLayout.SizeChanged += delegate { foreach(Label label in new[]{preparationHint,diagnosticScope,diagnosticSummary})label.MaximumSize = new Size(Math.Max(100,diagnosticLayout.Width),0); };
         checkRows.SizeChanged += delegate { FitCheckRows(); };
@@ -608,6 +639,66 @@ internal sealed partial class MainForm : Form
         if (report == null || !report.ContainsKey("windows_display")) return "";
         var display = report["windows_display"] as Dictionary<string,object>;
         return TextValue(display,"status","");
+    }
+
+    private TableLayoutPanel homeLayout, homeCards;
+    private FlowLayoutPanel homeSteps;
+    private bool fittingHome;
+    // Large text on a small window: drop the secondary parts first, never the status or the main action.
+    private void FitHome()
+    {
+        if (homeLayout == null || fittingHome || overview.ClientSize.Height < 50) return;
+        fittingHome = true;
+        try
+        {
+            // Row heights read inside a layout pass are stale, so measure preferred sizes instead.
+            Control[] optional = {keyboardHint, homeCards, homeSteps};
+            foreach (Control item in optional) item.Visible = true;
+            int width = homeLayout.ClientSize.Width;
+            // Visible reads false while the window itself is hidden, so track what was dropped here.
+            HashSet<Control> dropped = new HashSet<Control>();
+            Func<int> needed = () => homeLayout.Controls.Cast<Control>().Where(item => !dropped.Contains(item))
+                .Sum(item => item.GetPreferredSize(new Size(width - item.Margin.Horizontal,0)).Height + item.Margin.Vertical);
+            foreach (Control item in optional)
+            {
+                if (needed() <= homeLayout.ClientSize.Height) break;
+                item.Visible = false; dropped.Add(item);
+            }
+        }
+        finally { fittingHome = false; }
+    }
+
+    private void UpdateHomeCards(Dictionary<string,object> report,Dictionary<string,object> settings,Dictionary<string,object> displaySettings,string filesState)
+    {
+        bool running = workState == "running", starting = ActiveVmState(workState) && !running;
+        stateChip.Text = running ? "Windows работает" : starting ? "Windows " + VmState(workState) : workState == "stopped" ? "Windows выключена" : "Состояние уточняется";
+        stateChip.BackColor = running ? Color.FromArgb(223,243,228) : starting ? Color.FromArgb(232,242,251) : Color.FromArgb(229,229,234);
+        stateChip.ForeColor = running ? Color.FromArgb(30,107,52) : starting ? Color.FromArgb(28,78,120) : Color.FromArgb(58,58,60);
+        bool[] done = { gatewayState == "running", Flag(report,"network_verified"), running, filesState == "ready" };
+        bool[] active = { ActiveVmState(gatewayState) && gatewayState != "running", gatewayState == "running" && !done[1], starting, running && filesState != "ready" && filesState != "off" && filesState.Length > 0 };
+        for(int index=0;index<4;index++)
+        {
+            string name = new[]{"Шлюз","VPN","Windows","Файлы ПК"}[index];
+            bool off = index == 3 && filesState == "off";
+            stepLabels[index].Text = (done[index] ? "✓ " : active[index] ? "… " : "") + name + (off ? " — выкл." : "");
+            stepLabels[index].BackColor = done[index] ? Color.FromArgb(238,248,241) : active[index] ? Color.FromArgb(232,242,251) : Color.FromArgb(245,245,248);
+            stepLabels[index].ForeColor = done[index] ? Color.FromArgb(30,107,52) : active[index] ? Color.FromArgb(28,78,120) : NativeStyle.Muted;
+        }
+        cardValues[0].Text = sessionState.Text.Contains("(") ? sessionState.Text.Substring(0,sessionState.Text.IndexOf(" (")) : "Не выбрано";
+        cardDetails[0].Text = !sessionState.Text.Contains("(") ? "Добавь в «Подключении»" : sessionState.Text.Contains("проверено") ? "Проверено" : "Для следующего запуска";
+        int memory; string gib = settings != null && Int32.TryParse(TextValue(settings,"work_memory_mib","0"),out memory) && memory > 0 ? ((decimal)memory/1024).ToString("0.#",System.Globalization.CultureInfo.CurrentCulture) + " ГиБ" : "—";
+        cardValues[1].Text = gib + ", " + (settings != null ? TextValue(settings,"vcpus","—") : "—") + " проц.";
+        string screen = "";
+        if (displaySettings != null)
+        {
+            var shown = report.ContainsKey("windows_display") ? report["windows_display"] as Dictionary<string,object> : null;
+            var requested = shown != null && shown.ContainsKey("requested") ? shown["requested"] as Dictionary<string,object> : null;
+            screen = TextValue(displaySettings,"fit","True") == "True" ? "Экран как у ПК" + (requested != null ? ": " + TextValue(requested,"width","") + " × " + TextValue(requested,"height","") : "")
+                : "Экран " + TextValue(displaySettings,"width","—") + " × " + TextValue(displaySettings,"height","—");
+        }
+        cardDetails[1].Text = screen;
+        if (filesState.Length == 0) { cardValues[2].Text = "Выключены"; cardDetails[2].Text = "Включить в настройках"; }
+        FitHome();
     }
 
     private static string FileSharingState(Dictionary<string,object> report)
@@ -845,9 +936,11 @@ internal sealed partial class MainForm : Form
             if(filesReport!=null&&filesReport.TryGetValue("unavailable",out skipped)&&skipped is System.Collections.ICollection&&((System.Collections.ICollection)skipped).Count>0)
                 filesDetail+="; пропущено папок: "+((System.Collections.ICollection)skipped).Count;
             resources.Text+=Environment.NewLine+"Файлы ПК: "+filesDetail;
-            if(blocker==null&&filesState=="pending")nextStep.Text="Для первого подключения файлов открой в Windows диск WCPFILES и запусти RUNFILES.CMD.";
-            if(blocker==null&&(filesState=="failed"||filesState=="unavailable"))nextStep.Text="Проверь доступность выбранных папок ПК. Повторное подключение можно выполнить через RUNFILES.CMD на диске WCPFILES в Windows.";
+            if(blocker==null&&(filesState=="failed"||filesState=="unavailable"))nextStep.Text="Проверь доступность выбранных папок ПК в настройках. Windows подключит их снова при следующем входе.";
+            cardValues[2].Text=filesState=="ready"?"Подключены":filesState=="off"?"Выключены":filesState=="unavailable"?"Недоступны":filesState=="failed"?"Нет связи":"Подключатся при входе";
+            cardDetails[2].Text=filesDetail;
         }
+        UpdateHomeCards(report, settings, displaySettings, filesState);
         string warning = TextValue(report, "network_warning", network.Text);
         network.Text = warning;
         network.Visible = warning.Length > 0;

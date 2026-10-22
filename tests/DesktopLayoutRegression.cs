@@ -22,6 +22,8 @@ internal static class DesktopLayoutRegression
         Assert(control.Height>=preferred.Height,scenario+": clipped caption '"+control.Text+"' actual="+control.Size+" preferred="+preferred);
         Assert(control.Parent.ClientRectangle.Contains(control.Bounds),scenario+": caption outside parent '"+control.Text+"'");
     }
+    // Home drops secondary parts on purpose when large text would not fit; those are not on screen.
+    static bool Shown(Control control){for(Control item=control;item!=null&&!(item is Form);item=item.Parent)if(!(bool)typeof(Control).GetMethod("GetState",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(item,new object[]{2}))return false;return true;}
     static void Inside(Control control,Form form,string scenario)
     {
         Point point=control.Location;for(Control parent=control.Parent;parent!=form;parent=parent.Parent)point.Offset(parent.Location);
@@ -56,7 +58,7 @@ internal static class DesktopLayoutRegression
                 }
                 Control home=(Control)typeof(MainForm).GetField("overview",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(form);
                 if(factor==2f)using(Bitmap image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save(Path.Combine(args[0],"ui-layout-home-font-200.png"));}
-                foreach(Label label in Tree(home).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text))){TextFits(label,scenario);Inside(label,form,scenario);}
+                foreach(Label label in Tree(home).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text)&&Shown(item))){TextFits(label,scenario);Inside(label,form,scenario);}
                 Assert(!(home is ScrollableControl)||!((ScrollableControl)home).AutoScroll,"Home must not use scrolling");
                 foreach(Control item in Tree(form))Assert(item.Text.IndexOfAny(new[]{'\u2022','\u00b7','\u2219'})<0,"Decorative separators are not allowed");
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());Pump(form.NavigateAsync(AppPage.Settings));Layout(form);

@@ -14,6 +14,8 @@ internal static class DesktopPagesRegression
 {
     static void Assert(bool condition,string message){if(!condition)throw new Exception(message);}
     static IEnumerable<Control> Tree(Control root){yield return root;foreach(Control child in root.Controls)foreach(Control nested in Tree(child))yield return nested;}
+    // The form is never shown, so Control.Visible is false everywhere; read each control's own flag instead.
+    static bool Shown(Control control){for(Control item=control;item!=null&&!(item is Form);item=item.Parent)if(!(bool)typeof(Control).GetMethod("GetState",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(item,new object[]{2}))return false;return true;}
     static void Layout(Control root){typeof(Control).GetMethod("CreateControl",BindingFlags.Instance|BindingFlags.NonPublic,null,new[]{typeof(bool)},null).Invoke(root,new object[]{true});root.PerformLayout();}
     static void Pump(Task task){Stopwatch elapsed=Stopwatch.StartNew();while(!task.IsCompleted&&elapsed.ElapsedMilliseconds<8000){Application.DoEvents();Thread.Sleep(5);}Assert(task.IsCompleted,"UI action timed out");task.GetAwaiter().GetResult();}
     static void Context(){SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());}
@@ -66,7 +68,8 @@ internal static class DesktopPagesRegression
             foreach(string name in navigation){Button button=Tree(form).OfType<Button>().Single(item=>item.Text==name);Inside(button,form,name);Assert(button.Width-54>=TextRenderer.MeasureText(button.Text,button.Font).Width,"Navigation caption clipped: "+name+" scale "+scale+" size="+button.Size+" pref="+button.GetPreferredSize(Size.Empty));}
             Inside(form.StartButton,form,"Start");
             Control home=(Control)typeof(MainForm).GetField("overview",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(form);
-            foreach(Label label in Tree(home).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text)))
+            if(scale>1f){Directory.CreateDirectory(logs);Render(form,Path.Combine(logs,"ui-pages-home-font"+(int)(scale*100)+".png"));}
+            foreach(Label label in Tree(home).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text)&&Shown(item)))
             {Inside(label,form,"Ready Home label "+label.Text+" scale "+scale);Assert(label.Height>=label.GetPreferredSize(new Size(label.Width,0)).Height,"Ready Home label clipped "+scale+": "+label.Text+" actual="+label.Size+" preferred="+label.GetPreferredSize(new Size(label.Width,0))); }
             Context();Pump(form.NavigateAsync(AppPage.Settings));Layout(form);
             Inside(form.SettingsPage.SaveButton,form,"Settings save at font scale "+scale);
