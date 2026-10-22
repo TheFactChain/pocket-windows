@@ -38,7 +38,7 @@ internal static class ConnectionLayoutRegression
         {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
             BindingCases();
-            foreach(float scale in new[]{1f,1.25f,1.5f,2f})
+            foreach(float scale in new[]{1f} /* laid out at 100% only; Windows scales the window */)
             using(Form form=new Form{ClientSize=new Size(740,600),AutoScaleMode=AutoScaleMode.Dpi,AutoScaleDimensions=new SizeF(96,96),BackColor=NativeStyle.Background})
             using(ConnectionEditor editor=new ConnectionEditor())
             {

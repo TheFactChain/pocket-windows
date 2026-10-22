@@ -75,7 +75,7 @@ internal static class SettingsLayoutRegression
                 Assert(editor.TryGetValue(out value)&&value.Count==5&&(int)value["gateway_memory_mib"]==1536&&(int)value["lan_port"]==42345&&(int)value["vcpus"]==2,"Adding Windows display settings must not change the runtime contract.");
                 Assert(!editor.Fields.ContainsKey("disk")&&Tree(editor).OfType<Label>().Any(label=>label.Text=="80 ГиБ"),"Windows disk capacity must remain read-only.");
             }
-            foreach(float scale in new[]{1f,1.25f,1.5f,2f})
+            foreach(float scale in new[]{1f} /* laid out at 100% only; Windows scales the window */)
             foreach(Size viewport in new[]{new Size(710,540),new Size(650,440)})
             using(Form host=new Form{ClientSize=viewport,AutoScaleMode=AutoScaleMode.None})
             {

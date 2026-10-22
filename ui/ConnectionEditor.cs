@@ -57,17 +57,7 @@ internal sealed class ConnectionEditor : UserControl
         Error.TextChanged+=delegate{Error.Visible=!String.IsNullOrEmpty(Error.Text);};
         TableLayoutPanel root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        Panel header=new Panel{Dock=DockStyle.Top,Height=40,Margin=new Padding(0,0,0,10)};
-        Label title=new Label{Text="Подключение",AutoSize=true,Location=Point.Empty,Font=new Font("Segoe UI",15,FontStyle.Bold),Margin=Padding.Empty};
-        FlowLayoutPanel tools=new FlowLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,WrapContents=false,Anchor=AnchorStyles.Top|AnchorStyles.Right,Margin=Padding.Empty};
-        foreach(Button button in new[]{ImportButton,NewButton}){button.Margin=new Padding(6,0,0,0);tools.Controls.Add(button);}
-        header.Controls.Add(title);header.Controls.Add(tools);root.Controls.Add(header,0,0);
-        // Actions sit on the right; the menu already names this page, so with very large text the title gives way.
-        root.Layout+=delegate{
-            Size actions=tools.PreferredSize;int width=root.ClientSize.Width,height=Math.Max(title.PreferredHeight,actions.Height);
-            header.Height=height;tools.Bounds=new Rectangle(Math.Max(0,width-actions.Width),(height-actions.Height)/2,actions.Width,actions.Height);
-            title.Location=new Point(0,(height-title.PreferredHeight)/2);title.Visible=title.PreferredWidth+actions.Width+16<=width;
-        };
+        root.Controls.Add(NativeStyle.PageHeader(root,"Подключение",ImportButton,NewButton),0,0);
         // Body: saved connections on the left (only when there are any), the open one on the right.
         body.ColumnStyles.Add(listWidth);body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));body.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         ProfileList.Margin=new Padding(0,0,12,0);body.Controls.Add(ProfileList,0,0);
@@ -117,26 +107,8 @@ internal sealed class ConnectionEditor : UserControl
         ProfileList.DrawItem+=delegate(object sender,DrawItemEventArgs args){DrawProfile(args);};
         ProfileList.FontChanged+=delegate{ProfileList.ItemHeight=Math.Min(255,ProfileList.Font.Height*2+26);FitList();};ProfileList.ItemHeight=ProfileList.Font.Height*2+26;
         body.SizeChanged+=delegate{FitList();};
-        fields.Layout+=delegate{AlignPairs();};
         editor.SizeChanged+=delegate{State.MaximumSize=Error.MaximumSize=new Size(Math.Max(100,editor.ClientSize.Width),0);};
         NewButton.Click+=delegate{NewProfile();};Controls.Add(root);Controls.Add(Profiles);Controls.Add(Protocol);NewProfile();
-    }
-    // Paired fields share a row; a caption that wraps must not push its box below its neighbour.
-    private bool aligning;
-    private void AlignPairs()
-    {
-        if(aligning)return;aligning=true;
-        try
-        {
-            foreach(string[] pair in new[]{new[]{"host","port"},new[]{"username","password"}})
-            {
-                Label[] captions={(Label)rows[pair[0]][0],(Label)rows[pair[1]][0]};
-                foreach(Label caption in captions)caption.MinimumSize=Size.Empty;
-                int height=captions.Max(caption=>caption.GetPreferredSize(new Size(Math.Max(1,caption.Width),0)).Height);
-                foreach(Label caption in captions)if(caption.Height!=height)caption.MinimumSize=new Size(0,height);
-            }
-        }
-        finally{aligning=false;}
     }
     private void FitList()
     {

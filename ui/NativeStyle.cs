@@ -30,6 +30,42 @@ internal static class NativeStyle
         using (GraphicsPath shape = Rounded(new Rectangle(0, 0, control.Width - 1, control.Height - 1), radius))
         using (Brush fill = new SolidBrush(control.BackColor)) graphics.FillPath(fill, shape);
     }
+
+    // Page title on the left, actions on the right. The menu already names the page,
+    // so with very large text the title gives way instead of pushing the actions off screen.
+    internal static Panel PageHeader(Control owner, string title, params Button[] actions)
+    {
+        Panel header = new Panel { Dock = DockStyle.Top, Height = 40, Margin = new Padding(0, 0, 0, 10) };
+        Label caption = new Label { Text = title, AutoSize = true, Font = new Font("Segoe UI", 15, FontStyle.Bold), Margin = Padding.Empty };
+        FlowLayoutPanel tools = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = Padding.Empty };
+        foreach (Button button in actions) { button.Margin = new Padding(6, 0, 0, 0); tools.Controls.Add(button); }
+        header.Controls.Add(caption); header.Controls.Add(tools);
+        // Decided in the owner's layout, before the header itself is laid out.
+        owner.Layout += delegate
+        {
+            int width = owner.ClientSize.Width; tools.WrapContents = false; Size wanted = tools.PreferredSize;
+            // Actions wider than the page wrap onto a second line rather than leave the window.
+            if (wanted.Width > width) { tools.WrapContents = true; wanted = tools.GetPreferredSize(new Size(Math.Max(1, width), 0)); wanted.Width = Math.Min(wanted.Width, width); }
+            int height = Math.Max(caption.PreferredHeight, wanted.Height);
+            header.Height = height; tools.Bounds = new Rectangle(Math.Max(0, width - wanted.Width), (height - wanted.Height) / 2, wanted.Width, wanted.Height);
+            caption.Location = new Point(0, (height - caption.PreferredHeight) / 2); caption.Visible = caption.PreferredWidth + wanted.Width + 16 <= width;
+        };
+        return header;
+    }
+
+    // A filled circle with a check mark (passed), an exclamation mark (failed) or a grey check (not checked yet).
+    internal static void StatusMark(Graphics graphics, Rectangle bounds, bool? passed)
+    {
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        Color fill = passed == null ? Color.FromArgb(174, 174, 178) : passed.Value ? Color.FromArgb(46, 158, 79) : Color.FromArgb(214, 110, 40);
+        using (Brush brush = new SolidBrush(fill)) graphics.FillEllipse(brush, bounds);
+        float x = bounds.X, y = bounds.Y, size = bounds.Width;
+        using (Pen pen = new Pen(Color.White, Math.Max(2f, size / 9f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+        {
+            if (passed != false) graphics.DrawLines(pen, new[] { new PointF(x + size * 0.28f, y + size * 0.52f), new PointF(x + size * 0.44f, y + size * 0.67f), new PointF(x + size * 0.73f, y + size * 0.36f) });
+            else { graphics.DrawLine(pen, x + size / 2, y + size * 0.26f, x + size / 2, y + size * 0.55f); graphics.DrawLine(pen, x + size / 2, y + size * 0.73f, x + size / 2, y + size * 0.74f); }
+        }
+    }
 }
 
 internal sealed class RoundedButton : Button

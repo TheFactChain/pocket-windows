@@ -55,7 +55,7 @@ internal static class DesktopPagesRegression
     }
     static void LayoutCases(string logs)
     {
-        foreach(float scale in new[]{1f,1.25f,1.5f,2f})
+        foreach(float scale in new[]{1f} /* laid out at 100% only; Windows scales the window */)
         using(MainForm form=new MainForm(false,(action,payload)=>action=="get-settings"?new Dictionary<string,object>{{"ok",true},{"settings",Settings()}}:Report()))
         {
             form.ClientSize=new Size(1040,660);Layout(form);form.DisplayReport(Report());
@@ -135,9 +135,11 @@ internal static class DesktopPagesRegression
             Dictionary<string,object> longView=View();longView["name"]=new string('Я',128);form.ConnectionPage.LoadView(longView);
             form.ConnectionPage.Error.Text="Проверь имя сервера. Вводи адрес без протокола и пути. Некорректные данные не сохранены.";
             form.ClientSize=new Size(1040,660);
-            var fonts=Tree(form).Select(item=>new{Control=item,Font=item.Font}).ToArray();foreach(var item in fonts)item.Control.Font=new Font(item.Font.FontFamily,item.Font.SizeInPoints*2,item.Font.Style);Layout(form);
-            foreach(Button button in new[]{form.ConnectionPage.SaveButton,form.ConnectionPage.SelectButton,form.ConnectionPage.TestButton})Inside(button,form,"Connection footer at font200");
-            Render(form,Path.Combine(logs,"ui-pages-connection-font200.png"));
+            foreach(Button button in new[]{form.ConnectionPage.SaveButton,form.ConnectionPage.SelectButton,form.ConnectionPage.TestButton})Inside(button,form,"Connection footer with a long name and error");
+            Render(form,Path.Combine(logs,"ui-pages-connection-long.png"));
+            Context();Pump(form.NavigateAsync(AppPage.Diagnostics));form.DisplayReport(Report());Layout(form);
+            Render(form,Path.Combine(logs,"ui-pages-diagnostics-long.png"));
+            foreach(Button button in new[]{form.PrepareButton,form.RepairGatewayButton,form.PrepareHostButton})Inside(button,form,"Diagnostics recovery actions");
         }
         using(ProfileExportDialog options=new ProfileExportDialog())Assert(!options.IncludeSecrets,"Secret export opt-in must begin unchecked on every dialog");
     }

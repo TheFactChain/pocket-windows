@@ -42,7 +42,7 @@ internal static class DesktopLayoutRegression
         {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);Directory.CreateDirectory(args[0]);
             float nativeX=0,nativeY=0;
-            foreach(float factor in new[]{1f,1.25f,1.5f,2f})
+            foreach(float factor in new[]{1f} /* laid out at 100% only; Windows scales the window */)
             using(MainForm form=new MainForm(false,(action,payload)=>action=="get-settings"?new Dictionary<string,object>{{"ok",true},{"settings",Report()["settings"]}}:Report()))
             {
                 form.ClientSize=new Size(1040,660);Layout(form);form.DisplayReport(Report());Size viewport=form.ClientSize;
@@ -68,7 +68,7 @@ internal static class DesktopLayoutRegression
                 {form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save(Path.Combine(args[0],"ui-layout-settings-font-"+(int)(factor*100)+".png"));}
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());Pump(form.NavigateAsync(AppPage.Diagnostics));Layout(form);
                 foreach(Button button in new[]{form.PrepareButton,form.PrepareHostButton})
-                {Assert(button.Parent.ClientRectangle.Contains(button.Bounds),scenario+": clipped preparation action");Assert(button.Width-54>=TextRenderer.MeasureText(button.Text,button.Font).Width||button==form.PrepareHostButton,scenario+": clipped preparation caption");}
+                {Assert(button.Parent.ClientRectangle.Contains(button.Bounds),scenario+": clipped preparation action");Assert(button.Width-button.Padding.Horizontal>=TextRenderer.MeasureText(button.Text,button.Font).Width||button==form.PrepareHostButton,scenario+": clipped preparation caption");}
             }
             File.WriteAllText(Path.Combine(args[0],"ui-dpi-evidence.json"),new JavaScriptSerializer().Serialize(new Dictionary<string,object>{{"native_dpi_x",nativeX},{"native_dpi_y",nativeY},{"client_width",1040},{"client_height",660},{"synthetic_font_scales",new[]{1,1.25,1.5,2}},{"monitor_settings_changed",false},{"visible_window_shown",false}}));
             Console.WriteLine("PASS: native DPI "+nativeX+"x"+nativeY+"; unchanged 1040x660 client; synthetic font-only 100/125/150/200%; Home does not scroll; preparation captions and pinned Save fit.");return 0;

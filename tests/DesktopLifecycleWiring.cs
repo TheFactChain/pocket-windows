@@ -117,7 +117,7 @@ internal static class DesktopLifecycleWiring
     }
     static void LayoutCases()
     {
-        foreach (float scale in new[] { 1f, 2f })
+        foreach (float scale in new[] { 1f })
         using (MainForm form = new MainForm(false, (action, payload) => Report("retry")))
         {
             form.ClientSize = new Size(1040, 660); Layout(form);

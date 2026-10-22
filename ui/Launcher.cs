@@ -265,9 +265,9 @@ internal sealed partial class MainForm : Form
     private readonly ToolTip tips = new ToolTip { AutoPopDelay = 12000, InitialDelay = 400, ReshowDelay = 150, ShowAlways = true };
     private readonly Label keyboardHint = new Label { AutoSize = true, ForeColor = NativeStyle.Muted, Font = new Font("Segoe UI",9),
         Text = "Полный экран в Windows: Ctrl+Alt+F\nМышь и клавиатура: Ctrl+Alt+G", TextAlign = ContentAlignment.MiddleCenter };
-    private readonly Label diagnosticSummary = new Label { AutoSize = true, Font = new Font("Segoe UI",12,FontStyle.Bold), Text = "Проверка ПК и комплекта", Margin = new Padding(0,0,0,6) };
-    private readonly Label diagnosticScope = new Label { AutoSize = true, ForeColor = NativeStyle.Muted, Margin = new Padding(0,0,0,12),
-        Text = "ПК и комплект проверяются без интернета. Проверка сервера доступна в разделе «Подключение»." };
+    private readonly Label diagnosticSummary = new Label { AutoSize = true, Font = new Font("Segoe UI",13,FontStyle.Bold), Text = "Проверка ПК и комплекта", Margin = new Padding(0,0,0,2) };
+    private readonly Label diagnosticScope = new Label { AutoSize = true, ForeColor = NativeStyle.Muted, Margin = new Padding(0,2,0,0), Font = new Font("Segoe UI",9),
+        Text = "ПК и комплект проверяются без интернета, сервер проверяется в разделе «Подключение»." };
     internal readonly Button SettingsButton = MakeButton("Настройки", false);
     internal readonly Button DiagnosticsButton = MakeButton("Диагностика", false);
     internal readonly Button PrepareButton = MakeButton("Восстановить Python и QEMU", false);
@@ -314,7 +314,15 @@ internal sealed partial class MainForm : Form
     private bool testAvailable;
     internal AppPage ActivePage { get; private set; }
     private bool showingDiagnostics;
-    private readonly FlowLayoutPanel checkRows = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(0, 0, 12, 0) };
+    // Checks as a grid of small cards; it scrolls only as a last resort with very large text.
+    private readonly FlowLayoutPanel checkRows = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true, Padding = Padding.Empty, Margin = Padding.Empty };
+    private TableLayoutPanel diagnosticsLayout;
+    private RoundedPanel diagnosticsCard;
+    private readonly List<TableLayoutPanel> recoveryItems = new List<TableLayoutPanel>();
+    private TableLayoutPanel recoveryActions;
+    private bool recoveryInRow = true;
+    private int diagnosticsFailed = -1;
+    private bool fittingDiagnostics;
     private readonly Button nextAction = MakeButton("Изменить настройки", false);
     private readonly Func<string, object, Task<Dictionary<string, object>>> run;
     private Dictionary<string, object> readinessReport;
@@ -497,15 +505,39 @@ internal sealed partial class MainForm : Form
         keyboardHint.Text = "Ctrl+Enter — запустить или открыть, Ctrl+Alt+F — полный экран, Ctrl+Alt+G — освободить мышь, F1 — справка";
         keyboardHint.Anchor = AnchorStyles.Left; keyboardHint.TextAlign = ContentAlignment.MiddleLeft; keyboardHint.Margin = new Padding(0,8,0,0); home.Controls.Add(keyboardHint,0,3);
         overview.Controls.Add(home);
-        TableLayoutPanel diagnosticLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, Margin = Padding.Empty };
+        // Diagnostics: the outcome in one card, the checks as a grid, then recovery actions that say what they do.
+        TableLayoutPanel diagnosticLayout = diagnosticsLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
         diagnosticLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100)); for(int index=0;index<4;index++)diagnosticLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        FlowLayoutPanel tools = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true, Margin = new Padding(0,0,0,8) };
-        ((RoundedButton)PrepareButton).Glyph = ((RoundedButton)RepairGatewayButton).Glyph = AppGlyph.Repair; ((RoundedButton)refreshButton).Glyph = AppGlyph.Diagnostics;
-        foreach (Button button in new[] {refreshButton,copyReportButton,PrepareHostButton,PrepareButton,RepairGatewayButton}) { button.Padding = new Padding(10,7,10,7); tools.Controls.Add(button); }
-        preparationHint.Text = "Восстановление использует локальные файлы. Подготовка ПК запросит права администратора.";
-        diagnosticLayout.Controls.Add(diagnosticSummary,0,0); diagnosticLayout.Controls.Add(diagnosticScope,0,1); diagnosticLayout.Controls.Add(checkRows,0,2); diagnosticLayout.Controls.Add(tools,0,3);
-        diagnosticLayout.Controls.Add(preparationHint,0,4); diagnosticLayout.Controls.Add(checkedAt,0,5); diagnosticLayout.Controls.Add(reportLocation,0,6); diagnostics.Controls.Add(diagnosticLayout);
+        for (int index = 0; index < 5; index++) diagnosticLayout.RowStyles.Add(index == 2 ? new RowStyle(SizeType.Percent,100) : new RowStyle(SizeType.AutoSize));
+        ((RoundedButton)refreshButton).Glyph = AppGlyph.Diagnostics;
+        foreach (Button button in new[] {refreshButton,copyReportButton,PrepareHostButton,PrepareButton,RepairGatewayButton}) button.Padding = new Padding(10,7,10,7);
+        diagnosticLayout.Controls.Add(NativeStyle.PageHeader(diagnosticLayout,"Диагностика",copyReportButton,refreshButton),0,0);
+        RoundedPanel outcome = diagnosticsCard = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.White, Padding = new Padding(64,14,18,14), Margin = new Padding(0,0,0,12) };
+        TableLayoutPanel outcomeLines = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, BackColor = Color.White };
+        outcomeLines.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); for (int index = 0; index < 3; index++) outcomeLines.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        checkedAt.Margin = Padding.Empty; outcomeLines.Controls.Add(diagnosticSummary,0,0); outcomeLines.Controls.Add(checkedAt,0,1); outcomeLines.Controls.Add(diagnosticScope,0,2);
+        outcome.Controls.Add(outcomeLines);
+        outcome.Paint += delegate(object sender, PaintEventArgs args) { int size = Math.Min(32, outcome.Height - 20); NativeStyle.StatusMark(args.Graphics, new Rectangle(20,(outcome.Height-size)/2,size,size), diagnosticsFailed < 0 ? (bool?)null : diagnosticsFailed == 0); };
+        diagnosticLayout.Controls.Add(outcome,0,1); diagnosticLayout.Controls.Add(checkRows,0,2);
+        TableLayoutPanel recovery = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = new Padding(0,8,0,0) };
+        recovery.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); recovery.RowStyles.Add(new RowStyle(SizeType.AutoSize)); recovery.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        FlowLayoutPanel recoveryTitle = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Top, Margin = new Padding(0,0,0,6) };
+        recoveryTitle.Controls.Add(new Label { Text = "Восстановление", AutoSize = true, Font = new Font("Segoe UI",10.5f,FontStyle.Bold), Margin = new Padding(0,0,10,0) });
+        preparationHint.Text = "Нужно, только если проверка нашла проблему. Работает без интернета."; preparationHint.Margin = new Padding(0,2,0,0); recoveryTitle.Controls.Add(preparationHint);
+        TableLayoutPanel actions = recoveryActions = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+        for (int index = 0; index < 3; index++) actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int index = 0; index < 3; index++) actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        string[] captions = { "Из локальных файлов комплекта", "Подключения и Windows сохранятся", "Включит виртуализацию, нужны права администратора" };
+        Button[] repairs = { PrepareButton, RepairGatewayButton, PrepareHostButton };
+        for (int index = 0; index < repairs.Length; index++)
+        {
+            TableLayoutPanel item = new TableLayoutPanel { AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = new Padding(0,0,10,6) };
+            Button button = repairs[index]; button.Margin = Padding.Empty; button.Dock = DockStyle.Top;
+            Label caption = new Label { Text = captions[index], AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI",9), Margin = new Padding(6,4,0,0) };
+            recoveryItems.Add(item); item.Controls.Add(button,0,0); item.Controls.Add(caption,0,1); actions.Controls.Add(item,index,0);
+        }
+        recovery.Controls.Add(recoveryTitle,0,0); recovery.Controls.Add(actions,0,1);
+        diagnosticLayout.Controls.Add(recovery,0,3); reportLocation.Margin = new Padding(0,4,0,0); diagnosticLayout.Controls.Add(reportLocation,0,4); diagnostics.Controls.Add(diagnosticLayout);
         operation.Height=operation.Font.Height+4;operation.FontChanged+=delegate{operation.Height=operation.Font.Height+4;};
         frame.Controls.Add(operation,0,2); frame.Controls.Add(progress,0,3); Controls.Add(frame);
         overview.Layout += delegate { FitHome(); }; homeLayout.Layout += delegate { FitHome(); };
@@ -517,8 +549,12 @@ internal sealed partial class MainForm : Form
             keyboardHint.MaximumSize = resources.MaximumSize = new Size(width,0);
             FitHome();
         };
-        diagnosticLayout.SizeChanged += delegate { foreach(Label label in new[]{preparationHint,diagnosticScope,diagnosticSummary})label.MaximumSize = new Size(Math.Max(100,diagnosticLayout.Width),0); };
-        checkRows.SizeChanged += delegate { FitCheckRows(); };
+        diagnosticLayout.SizeChanged += delegate {
+            foreach(Label label in new[]{diagnosticScope,diagnosticSummary,checkedAt})label.MaximumSize = new Size(Math.Max(100,diagnosticLayout.Width-90),0);
+            preparationHint.MaximumSize = reportLocation.MaximumSize = new Size(Math.Max(100,diagnosticLayout.Width),0);
+        };
+        checkRows.SizeChanged += delegate { FitCheckRows(); }; checkRows.ClientSizeChanged += delegate { FitCheckRows(); }; checkRows.FontChanged += delegate { FitCheckRows(); };
+        diagnosticLayout.Layout += delegate { FitDiagnostics(); };
         StartButton.Enabled = false; StopButton.Enabled = false; nextAction.Visible = false;
         StartButton.Click += async delegate { await RunAction("start",false); };
         OpenDesktopButton.Click += async delegate { await RunAction("show-desktop",false); };
@@ -706,17 +742,62 @@ internal sealed partial class MainForm : Form
         return report != null && report.ContainsKey("host_files") ? TextValue(report["host_files"] as Dictionary<string,object>,"status","") : "";
     }
 
+    // Two columns when there is room for them, one otherwise; cards in a row share a height.
+    private bool fittingChecks;
     private void FitCheckRows()
     {
-        int width = Math.Max(100, checkRows.ClientSize.Width - 34);
-        foreach (Control card in checkRows.Controls)
+        if (fittingChecks) return;
+        fittingChecks = true;
+        try
         {
-            card.MinimumSize = Size.Empty;
-            card.MaximumSize = new Size(width, 0);
-            card.MinimumSize = new Size(width, 0);
-            card.Width = width;
-            foreach (Label label in card.Controls.OfType<Label>()) label.MaximumSize = new Size(width - 42, 0);
+            int available = Math.Max(100, checkRows.ClientSize.Width - 2);
+            int columns = available >= checkRows.Font.Height * 28 ? 2 : 1, gap = 10;
+            int width = (available - gap * columns) / columns;
+            List<Control> cards = checkRows.Controls.Cast<Control>().ToList();
+            for (int start = 0; start < cards.Count; start += columns)
+            {
+                int height = 0;
+                for (int index = start; index < Math.Min(cards.Count, start + columns); index++)
+                {
+                    Control card = cards[index];
+                    if (!(card is RoundedPanel)) { ((Label)card).MaximumSize = new Size(available, 0); height = Math.Max(height, card.PreferredSize.Height); continue; }
+                    Control text = card.Controls[0];
+                    foreach (Label label in text.Controls.OfType<Label>()) label.MaximumSize = new Size(Math.Max(40, width - card.Padding.Horizontal), 0);
+                    height = Math.Max(height, text.GetPreferredSize(new Size(Math.Max(40, width - card.Padding.Horizontal), 0)).Height + card.Padding.Vertical);
+                }
+                for (int index = start; index < Math.Min(cards.Count, start + columns); index++)
+                    if (cards[index] is RoundedPanel) cards[index].Size = new Size(width, height);
+            }
         }
+        finally { fittingChecks = false; }
+    }
+
+    // Recovery actions side by side when the window is wide enough, one under another otherwise.
+    private void FitDiagnostics()
+    {
+        if (diagnosticsLayout == null || fittingDiagnostics || diagnosticsLayout.ClientSize.Height < 50) return;
+        fittingDiagnostics = true;
+        try
+        {
+            int width = diagnosticsLayout.ClientSize.Width;
+            int column = (width - 10 * recoveryItems.Count) / Math.Max(1, recoveryItems.Count);
+            foreach (TableLayoutPanel item in recoveryItems) item.Controls[0].MinimumSize = Size.Empty;
+            bool even = recoveryItems.All(item => item.Controls[0].PreferredSize.Width <= column);
+            int[] own = recoveryItems.Select(item => even ? column : Math.Min(width - 10, Math.Max(item.Controls[0].PreferredSize.Width,
+                TextRenderer.MeasureText("Подключения и Windows", item.Controls[1].Font).Width + 12))).ToArray();
+            bool inRow = own.Sum() + 10 * own.Length <= width;
+            for (int index = 0; index < recoveryItems.Count; index++)
+            {
+                TableLayoutPanel item = recoveryItems[index]; int size = inRow ? own[index] : Math.Min(width - 10, item.Controls[0].PreferredSize.Width);
+                item.Controls[0].MinimumSize = new Size(size, 0); item.Controls[1].MaximumSize = new Size(Math.Max(40, Math.Max(size, own[index]) - 6), 0);
+            }
+            if (inRow != recoveryInRow)
+            {
+                recoveryInRow = inRow;
+                for (int index = 0; index < recoveryItems.Count; index++) recoveryActions.SetCellPosition(recoveryItems[index], new TableLayoutPanelCellPosition(inRow ? index : 0, inRow ? 0 : index));
+            }
+        }
+        finally { fittingDiagnostics = false; }
     }
 
     private void Busy(bool value)
@@ -881,7 +962,8 @@ internal sealed partial class MainForm : Form
         Dictionary<string, object> report = readinessReport ?? result;
         List<Dictionary<string, object>> checks = Checks(report);
         int failedChecks = checks.Count(item => !Flag(item,"passed"));
-        diagnosticSummary.Text = checks.Count == 0 ? "Проверка ПК и комплекта" : "Проверено: " + checks.Count + (failedChecks == 0 ? ". Проблем не найдено." : ". Требует внимания: " + failedChecks + ".");
+        diagnosticSummary.Text = checks.Count == 0 ? "Проверка ПК и комплекта" : failedChecks == 0 ? "Проблем не найдено" : "Требует внимания: " + failedChecks + " из " + checks.Count;
+        diagnosticsFailed = checks.Count == 0 ? -1 : failedChecks; if (diagnosticsCard != null) diagnosticsCard.Invalidate();
         Dictionary<string, object> blocker = null;
         if (!Bridge.Ok(result))
         {
@@ -953,9 +1035,13 @@ internal sealed partial class MainForm : Form
             string title = TextValue(item, "title", "Проверка");
             string detail = TextValue(item, "detail", "");
             lines.Add((passed ? "Готово: " : "Нужно исправить: ") + title + Environment.NewLine + detail);
-            FlowLayoutPanel card = new RoundedFlowPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(20, 16, 20, 18), Margin = new Padding(0, 0, 0, 10), BackColor = Color.White };
-            card.Controls.Add(new Label { Text = (passed ? "Готово: " : "Нужно внимание: ") + title, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = passed ? Ink : Color.FromArgb(165, 63, 45), Margin = new Padding(0, 0, 0, 6) });
-            card.Controls.Add(new Label { Text = detail, AutoSize = true, ForeColor = Muted, Margin = Padding.Empty });
+            RoundedPanel card = new RoundedPanel { BackColor = Color.White, Padding = new Padding(44, 10, 12, 10), Margin = new Padding(0, 0, 10, 10), AccessibleName = (passed ? "Готово: " : "Нужно внимание: ") + title };
+            TableLayoutPanel text = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, BackColor = Color.White };
+            text.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); text.RowStyles.Add(new RowStyle(SizeType.AutoSize)); text.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            text.Controls.Add(new Label { Text = title, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = passed ? Ink : Color.FromArgb(165, 63, 45), Margin = new Padding(0, 0, 0, 2) },0,0);
+            text.Controls.Add(new Label { Text = detail, AutoSize = true, ForeColor = Muted, Font = new Font("Segoe UI", 9.5f), Margin = Padding.Empty },0,1);
+            card.Controls.Add(text);
+            card.Paint += delegate(object sender, PaintEventArgs args) { NativeStyle.StatusMark(args.Graphics, new Rectangle(14, 12, 20, 20), passed); };
             checkRows.Controls.Add(card);
         }
         if (checks.Count == 0)
@@ -971,6 +1057,7 @@ internal sealed partial class MainForm : Form
         details.SelectionStart = 0;
         FitCheckRows();
         checkRows.ResumeLayout(true);
+        if (diagnosticsLayout != null) diagnosticsLayout.PerformLayout();
         checkRows.AutoScrollPosition = Point.Empty;
         if (checkRows.Controls.Count > 0) checkRows.ScrollControlIntoView(checkRows.Controls[0]);
         if (!isReadiness && !Bridge.Ok(result) && checks.Count > 0) lines.Insert(0, Bridge.Message(result));
@@ -1046,7 +1133,7 @@ internal sealed partial class MainForm : Form
         if (!CanUpdate) return;
         Display(check);
         operation.Text = Bridge.Message(completed);
-        checkedAt.Text = "Проверено " + DateTime.Now.ToString("HH:mm:ss") + ". Ошибки показаны первыми.";
+        checkedAt.Text = "Проверено в " + DateTime.Now.ToString("HH:mm") + ", ошибки показаны первыми.";
     }
 
     internal async Task RunAction(string action, bool selectDiagnostics)
@@ -1063,7 +1150,7 @@ internal sealed partial class MainForm : Form
             operation.Text = action == "diagnose" && completed.ContainsKey("checks") ? "" : Bridge.Message(completed);
             if (action == "prepare-components" || action == "prepare-host" || action == "repair-gateway" || action == "recover-session" || action == "stop" || action == "start") await RefreshAfterAsync(completed);
             if (action == "prepare-host" && Flag(completed,"restart_required")) operation.Text = "Подготовка завершена. Перезагрузи ПК самостоятельно, затем выполни диагностику. Автоматическая перезагрузка не выполнялась.";
-            else if (action == "diagnose") checkedAt.Text = completed.ContainsKey("checks") ? "Проверено " + DateTime.Now.ToString("HH:mm:ss") + ". Ошибки показаны первыми." : "Диагностика не обновилась. Повтори проверку.";
+            else if (action == "diagnose") checkedAt.Text = completed.ContainsKey("checks") ? "Проверено в " + DateTime.Now.ToString("HH:mm") + ", ошибки показаны первыми." : "Диагностика не обновилась. Повтори проверку.";
         }
         catch (Exception) { FailedAction(action, completed); }
         finally
