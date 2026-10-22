@@ -4,13 +4,16 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 internal sealed class ConnectionEditor : UserControl
 {
-    internal readonly ComboBox Profiles = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, AccessibleName = "Сохранённые подключения" };
+    // The hidden combo boxes stay the single source of the choice; the list and the segment buttons mirror them.
+    internal readonly ComboBox Profiles = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Visible = false, AccessibleName = "Сохранённые подключения" };
+    internal readonly ListBox ProfileList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, DrawMode = DrawMode.OwnerDrawFixed, BorderStyle = BorderStyle.None, BackColor = NativeStyle.Background, Visible = false, AccessibleName = "Сохранённые подключения" };
     internal readonly Dictionary<string,TextBox> Fields = new Dictionary<string,TextBox>();
-    internal readonly ComboBox Protocol = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, AccessibleName = "Протокол" };
+    internal readonly ComboBox Protocol = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Visible = false, AccessibleName = "Протокол" };
     internal readonly CheckBox ProxyAuth = new CheckBox { Text = "Нужны логин и пароль", AutoSize = true };
     internal readonly CheckBox Obfuscation = new CheckBox { Text = "Включить Salamander", AutoSize = true };
     internal readonly Label State = new Label { AutoSize = true, Dock = DockStyle.Fill, ForeColor = NativeStyle.Muted, Visible = false };
@@ -18,9 +21,9 @@ internal sealed class ConnectionEditor : UserControl
     internal readonly Button SaveButton = Button("Сохранить",true);
     internal readonly Button SelectButton = Button("Выбрать",false);
     internal readonly Button TestButton = Button("Проверить",false);
-    internal readonly Button NewButton = Button("Новый",false);
-    internal readonly Button ImportButton = Button("Импорт",false);
-    internal readonly Button ExportButton = Button("Экспорт",false);
+    internal readonly Button NewButton = Button("+ Новое",false);
+    internal readonly Button ImportButton = Button("Импорт…",false);
+    internal readonly Button ExportButton = Button("Экспорт…",false);
     internal string ProfileId;
     internal event Action<string> ProfilePicked;
     private bool binding;
@@ -31,7 +34,11 @@ internal sealed class ConnectionEditor : UserControl
     private string loadedObfuscation;
     private bool testAvailable;
     private readonly CheckBox advanced = new CheckBox { Text = "Дополнительные параметры", AutoSize = true, ForeColor = NativeStyle.Accent, Margin = new Padding(0,2,0,0) };
-    private readonly RowStyle profileHeight = new RowStyle(SizeType.Absolute,0);
+    private readonly ColumnStyle listWidth = new ColumnStyle(SizeType.Absolute,0);
+    private readonly List<RoundedButton> protocolButtons = new List<RoundedButton>();
+    private readonly TableLayoutPanel body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+    private bool syncing;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wide, string text);
     private readonly TableLayoutPanel fields = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = Padding.Empty };
     private readonly Dictionary<string,Control[]> rows = new Dictionary<string,Control[]>();
     private readonly List<RoundedPanel> inputBoxes = new List<RoundedPanel>();
@@ -48,30 +55,122 @@ internal sealed class ConnectionEditor : UserControl
         Dock=DockStyle.Fill;Font=new Font("Segoe UI",10);BackColor=NativeStyle.Background;
         State.TextChanged+=delegate{State.Visible=!String.IsNullOrEmpty(State.Text);};
         Error.TextChanged+=delegate{Error.Visible=!String.IsNullOrEmpty(Error.Text);};
-        TableLayoutPanel root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=6,Margin=Padding.Empty};root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.Controls.Add(new Label{Text="Подключение",AutoSize=true,Font=new Font("Segoe UI",15,FontStyle.Bold),Margin=new Padding(0,0,0,8)},0,0);
-        TableLayoutPanel pick=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,ColumnCount=1,RowCount=2,Margin=Padding.Empty};pick.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));pick.RowStyles.Add(profileHeight);pick.RowStyles.Add(new RowStyle(SizeType.AutoSize));pick.Controls.Add(Profiles,0,0);
-        Profiles.Margin=new Padding(0,0,0,8);
-        Profiles.Visible=false;
-        Profiles.SizeChanged+=delegate{profileHeight.Height=Profiles.Items.Count>0?Profiles.Height+Profiles.Margin.Vertical:0;};
-        FlowLayoutPanel tools=new FlowLayoutPanel{AutoSize=true,WrapContents=false,Dock=DockStyle.Fill,Margin=Padding.Empty};foreach(Button button in new[]{NewButton,ImportButton,ExportButton})tools.Controls.Add(button);pick.Controls.Add(tools,0,1);root.Controls.Add(pick,0,1);
-        State.Margin=new Padding(0,4,0,4);root.Controls.Add(State,0,2);
+        TableLayoutPanel root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        Panel header=new Panel{Dock=DockStyle.Top,Height=40,Margin=new Padding(0,0,0,10)};
+        Label title=new Label{Text="Подключение",AutoSize=true,Location=Point.Empty,Font=new Font("Segoe UI",15,FontStyle.Bold),Margin=Padding.Empty};
+        FlowLayoutPanel tools=new FlowLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,WrapContents=false,Anchor=AnchorStyles.Top|AnchorStyles.Right,Margin=Padding.Empty};
+        foreach(Button button in new[]{ImportButton,NewButton}){button.Margin=new Padding(6,0,0,0);tools.Controls.Add(button);}
+        header.Controls.Add(title);header.Controls.Add(tools);root.Controls.Add(header,0,0);
+        // Actions sit on the right; the menu already names this page, so with very large text the title gives way.
+        root.Layout+=delegate{
+            Size actions=tools.PreferredSize;int width=root.ClientSize.Width,height=Math.Max(title.PreferredHeight,actions.Height);
+            header.Height=height;tools.Bounds=new Rectangle(Math.Max(0,width-actions.Width),(height-actions.Height)/2,actions.Width,actions.Height);
+            title.Location=new Point(0,(height-title.PreferredHeight)/2);title.Visible=title.PreferredWidth+actions.Width+16<=width;
+        };
+        // Body: saved connections on the left (only when there are any), the open one on the right.
+        body.ColumnStyles.Add(listWidth);body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));body.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        ProfileList.Margin=new Padding(0,0,12,0);body.Controls.Add(ProfileList,0,0);
+        TableLayoutPanel editor=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};RowStyle cardRow=new RowStyle(SizeType.Absolute,0);editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));editor.RowStyles.Add(cardRow);editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));editor.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        State.Margin=new Padding(0,0,0,8);editor.Controls.Add(State,0,0);
+        // The card scrolls only as a last resort, with very large text in a small window.
         Panel scroll=new Panel{Dock=DockStyle.Fill,AutoScroll=true,BackColor=NativeStyle.Background,Margin=Padding.Empty};
-        RoundedPanel card=new RoundedPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Padding=new Padding(12),BackColor=Color.White,Margin=new Padding(0,10,0,0)};
+        RoundedPanel card=new RoundedPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Padding=new Padding(16,14,16,6),BackColor=Color.White,Margin=Padding.Empty};
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
         for(int row=0;row<10;row++)fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        AddField("name","Название",false,"Любое удобное имя, например «Мой сервер».",0,0,false);AddControl("protocol","Тип подключения",InputBox(Protocol),1,0,false);
-        AddField("host","Адрес сервера",false,"Например proxy.example.com или 203.0.113.10, без https:// и пути.",0,1,false);AddField("port","Порт",false,"Число из настроек поставщика, например 443.",1,1,false);
-        AddField("auth","Пароль Hysteria2",true,"Пароль подключения, выданный поставщиком сервера.",0,2,true);AddControl("proxy_auth","",ProxyAuth,0,3,true);AddField("username","Логин",false,"Имя пользователя из настроек прокси.",0,4,false);AddField("password","Пароль прокси",true,"Пароль пользователя прокси.",1,4,false);
-        AddControl("advanced","",advanced,0,5,true);AddField("tls_server_name","Имя TLS (SNI)",false,"Необязательно. Заполни, только если поставщик указал отдельное имя TLS.",0,6,true);
-        AddControl("obfs","",Obfuscation,0,7,true);AddField("obfs_password","Пароль маскировки",true,"Отдельный пароль Salamander из настроек сервера.",0,8,true);
-        card.Controls.Add(fields);scroll.Controls.Add(card);root.Controls.Add(scroll,0,3);Error.Margin=new Padding(0,4,0,4);root.Controls.Add(Error,0,4);
-        FlowLayoutPanel footer=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Margin=new Padding(0,10,0,0)};foreach(Button button in new[]{SaveButton,SelectButton,TestButton})footer.Controls.Add(button);root.Controls.Add(footer,0,5);
+        RoundedPanel protocols=new RoundedPanel{Dock=DockStyle.Top,Height=40,BackColor=Color.FromArgb(227,227,232),Padding=new Padding(3),Margin=Padding.Empty,AccessibleName="Протокол",AccessibleRole=AccessibleRole.PageTabList};
+        TableLayoutPanel protocolRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=4,RowCount=1,Margin=Padding.Empty,BackColor=protocols.BackColor};protocolRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        string[] protocolNames={"Hysteria2","SOCKS5","HTTP","HTTPS"};
+        for(int index=0;index<4;index++)
+        {
+            int choice=index;protocolRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,25));
+            RoundedButton button=new RoundedButton{Text=protocolNames[index],Segment=true,CenterText=true,Dock=DockStyle.Fill,Margin=Padding.Empty,AccessibleName=protocolNames[index]};
+            button.Click+=delegate{Protocol.SelectedIndex=choice;};protocolButtons.Add(button);protocolRow.Controls.Add(button,index,0);
+        }
+        protocols.Controls.Add(protocolRow);inputBoxes.Add(protocols);
+        AddControl("protocol","Тип подключения",protocols,0,0,true);
+        AddField("name","Название",false,"Любое удобное имя, например «Мой сервер».",0,1,true);
+        AddField("host","Адрес сервера",false,"Например proxy.example.com или 203.0.113.10, без https:// и пути.",0,2,false);AddField("port","Порт",false,"Число из настроек поставщика, например 443.",1,2,false);
+        AddField("auth","Пароль Hysteria2",true,"Пароль подключения, выданный поставщиком сервера.",0,3,true);AddControl("proxy_auth","",ProxyAuth,0,4,true);AddField("username","Логин",false,"Имя пользователя из настроек прокси.",0,5,false);AddField("password","Пароль прокси",true,"Пароль пользователя прокси.",1,5,false);
+        AddControl("advanced","",advanced,0,6,true);AddField("tls_server_name","Имя TLS (SNI)",false,"Необязательно. Заполни, только если поставщик указал отдельное имя TLS.",0,7,true);
+        AddControl("obfs","",Obfuscation,0,8,true);AddField("obfs_password","Пароль маскировки",true,"Отдельный пароль Salamander из настроек сервера.",0,9,true);
+        card.Controls.Add(fields);scroll.Controls.Add(card);editor.Controls.Add(scroll,0,1);
+        Error.Margin=new Padding(0,8,0,0);editor.Controls.Add(Error,0,2);
+        FlowLayoutPanel footer=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Margin=new Padding(0,10,0,0)};foreach(Button button in new[]{SaveButton,SelectButton,TestButton,ExportButton})footer.Controls.Add(button);editor.Controls.Add(footer,0,3);
+        body.Controls.Add(editor,1,0);root.Controls.Add(body,0,1);
+        // The buttons follow the card directly; the card takes only the height it needs, and scrolls only when even that does not fit.
+        editor.Layout+=delegate{
+            int width=editor.ClientSize.Width;Func<Control,int> need=item=>item.GetPreferredSize(new Size(Math.Max(1,width-item.Margin.Horizontal),0)).Height+item.Margin.Vertical;
+            int other=need(footer)+(String.IsNullOrEmpty(State.Text)?0:need(State))+(String.IsNullOrEmpty(Error.Text)?0:need(Error));
+            int wanted=Math.Max(0,Math.Min(card.GetPreferredSize(new Size(width,0)).Height,editor.ClientSize.Height-other));
+            if(cardRow.Height!=wanted)cardRow.Height=wanted;
+        };
         StyleCombo(Profiles);StyleCombo(Protocol);Protocol.SizeChanged+=delegate{FitInputHeights();};Protocol.FontChanged+=delegate{FitInputHeights();};FitInputHeights();
-        Protocol.Items.AddRange(new object[]{"Hysteria2","SOCKS5","HTTP","HTTPS CONNECT"});Protocol.SelectedIndexChanged+=delegate{UpdateRows();};Obfuscation.CheckedChanged+=delegate{UpdateRows();};ProxyAuth.CheckedChanged+=delegate{UpdateRows();};advanced.CheckedChanged+=delegate{UpdateRows();};
-        Profiles.SelectedIndexChanged+=delegate{if(!binding&&Profiles.SelectedItem is Entry&&ProfilePicked!=null)ProfilePicked(Text(((Entry)Profiles.SelectedItem).Value,"profile_id",""));};
-        NewButton.Click+=delegate{NewProfile();};root.SizeChanged+=delegate{State.MaximumSize=Error.MaximumSize=new Size(Math.Max(100,root.ClientSize.Width),0);};Controls.Add(root);NewProfile();
+        Protocol.Items.AddRange(new object[]{"Hysteria2","SOCKS5","HTTP","HTTPS CONNECT"});Protocol.SelectedIndexChanged+=delegate{for(int index=0;index<protocolButtons.Count;index++)protocolButtons[index].Selected=index==Protocol.SelectedIndex;UpdateRows();};
+        Obfuscation.CheckedChanged+=delegate{UpdateRows();};ProxyAuth.CheckedChanged+=delegate{UpdateRows();};advanced.CheckedChanged+=delegate{UpdateRows();};
+        Profiles.SelectedIndexChanged+=delegate{
+            syncing=true;try{ProfileList.SelectedIndex=Profiles.SelectedIndex;}finally{syncing=false;}
+            if(!binding&&Profiles.SelectedItem is Entry&&ProfilePicked!=null)ProfilePicked(Text(((Entry)Profiles.SelectedItem).Value,"profile_id",""));
+        };
+        ProfileList.SelectedIndexChanged+=delegate{if(!syncing&&ProfileList.SelectedIndex>=0&&ProfileList.SelectedIndex!=Profiles.SelectedIndex)Profiles.SelectedIndex=ProfileList.SelectedIndex;};
+        ProfileList.DrawItem+=delegate(object sender,DrawItemEventArgs args){DrawProfile(args);};
+        ProfileList.FontChanged+=delegate{ProfileList.ItemHeight=Math.Min(255,ProfileList.Font.Height*2+26);FitList();};ProfileList.ItemHeight=ProfileList.Font.Height*2+26;
+        body.SizeChanged+=delegate{FitList();};
+        fields.Layout+=delegate{AlignPairs();};
+        editor.SizeChanged+=delegate{State.MaximumSize=Error.MaximumSize=new Size(Math.Max(100,editor.ClientSize.Width),0);};
+        NewButton.Click+=delegate{NewProfile();};Controls.Add(root);Controls.Add(Profiles);Controls.Add(Protocol);NewProfile();
+    }
+    // Paired fields share a row; a caption that wraps must not push its box below its neighbour.
+    private bool aligning;
+    private void AlignPairs()
+    {
+        if(aligning)return;aligning=true;
+        try
+        {
+            foreach(string[] pair in new[]{new[]{"host","port"},new[]{"username","password"}})
+            {
+                Label[] captions={(Label)rows[pair[0]][0],(Label)rows[pair[1]][0]};
+                foreach(Label caption in captions)caption.MinimumSize=Size.Empty;
+                int height=captions.Max(caption=>caption.GetPreferredSize(new Size(Math.Max(1,caption.Width),0)).Height);
+                foreach(Label caption in captions)if(caption.Height!=height)caption.MinimumSize=new Size(0,height);
+            }
+        }
+        finally{aligning=false;}
+    }
+    private void FitList()
+    {
+        int wanted=ProfileList.Items.Count==0?0:Math.Min(body.ClientSize.Width*34/100,Math.Max(190,ProfileList.Font.Height*12));
+        ProfileList.Visible=wanted>0;if(listWidth.Width!=wanted)listWidth.Width=wanted;
+    }
+    private static string ProtocolName(string value)
+    {
+        int index=Array.IndexOf(new[]{"hysteria2","socks5","http","https"},value);return index<0?value:new[]{"Hysteria2","SOCKS5","HTTP","HTTPS"}[index];
+    }
+    private void DrawProfile(DrawItemEventArgs args)
+    {
+        using(Brush back=new SolidBrush(ProfileList.BackColor))args.Graphics.FillRectangle(back,args.Bounds);
+        if(args.Index<0||args.Index>=ProfileList.Items.Count)return;
+        Dictionary<string,object> value=((Entry)ProfileList.Items[args.Index]).Value;
+        Rectangle card=new Rectangle(args.Bounds.X,args.Bounds.Y+3,args.Bounds.Width-1,args.Bounds.Height-6);
+        if((args.State&DrawItemState.Selected)!=0)
+        {
+            args.Graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using(System.Drawing.Drawing2D.GraphicsPath shape=NativeStyle.Rounded(card,10))using(Brush fill=new SolidBrush(Color.White))args.Graphics.FillPath(fill,shape);
+            using(Brush mark=new SolidBrush(NativeStyle.Accent))args.Graphics.FillRectangle(mark,card.X+1,card.Y+10,3,card.Height-20);
+        }
+        bool used=Flag(value,"selected"),locked=Flag(value,"needs_credentials");
+        string state=locked?"нужен пароль":used?(Flag(value,"verified")?"используется, проверено":"используется"):"не выбрано";
+        TextFormatFlags flags=TextFormatFlags.Left|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix|TextFormatFlags.SingleLine;
+        int line=ProfileList.Font.Height,top=card.Y+(card.Height-line*2-4)/2;
+        using(Font bold=new Font(ProfileList.Font,FontStyle.Bold))TextRenderer.DrawText(args.Graphics,Text(value,"name","Без названия"),bold,new Rectangle(card.X+14,top,card.Width-24,line+2),NativeStyle.Ink,flags);
+        Color tone=locked?Color.FromArgb(175,59,48):used?Color.FromArgb(30,107,52):NativeStyle.Muted;
+        TextRenderer.DrawText(args.Graphics,ProtocolName(Text(value,"protocol",""))+", "+state,ProfileList.Font,new Rectangle(card.X+14,top+line+4,card.Width-24,line+2),tone,flags);
+    }
+    // A grey hint inside an empty password box instead of a second caption line.
+    private static void Cue(TextBox box,string text)
+    {
+        box.Tag=text;if(box.IsHandleCreated)SendMessage(box.Handle,0x1501,(IntPtr)1,text);
     }
     private void StyleCombo(ComboBox combo)
     {
@@ -102,7 +201,7 @@ internal sealed class ConnectionEditor : UserControl
     private void AddField(string key,string title,bool secret,string help,int column,int row,bool wide)
     {
         TextBox field=new TextBox{BorderStyle=BorderStyle.None,BackColor=NativeStyle.Background,UseSystemPasswordChar=secret,AccessibleName=title,AccessibleDescription=help,Margin=Padding.Empty};
-        Fields.Add(key,field);field.FontChanged+=delegate{FitInputHeights();};AddControl(key,title,InputBox(field),column,row,wide);
+        Fields.Add(key,field);field.FontChanged+=delegate{FitInputHeights();};field.HandleCreated+=delegate{if(field.Tag is string)Cue(field,(string)field.Tag);};AddControl(key,title,InputBox(field),column,row,wide);
     }
     private void AddControl(string key,string title,Control control,int column,int row,bool wide)
     {
@@ -115,8 +214,8 @@ internal sealed class ConnectionEditor : UserControl
         if(binding)return;
         bool hy=Protocol.SelectedIndex==0;bool tls=hy||Protocol.SelectedIndex==3;
         bool preserve=CanReuseCredentials;
-        ((Label)rows["auth"][0]).Text="Пароль Hysteria2"+(preserve?"\nПусто — прежний пароль":"");
-        ((Label)rows["password"][0]).Text="Пароль прокси"+(preserve?"\nПусто — прежний пароль":"");
+        Cue(Fields["auth"],preserve?"Сохранён. Оставь пустым, чтобы не менять":"");
+        Cue(Fields["password"],preserve?"Сохранён. Оставь пустым, чтобы не менять":"");
         SetRowVisibility("advanced",tls);SetRowVisibility("tls_server_name",tls&&advanced.Checked);
         SetRowVisibility("obfs",hy&&advanced.Checked);SetRowVisibility("auth",hy);
         SetRowVisibility("obfs_password",hy&&advanced.Checked&&Obfuscation.Checked);SetRowVisibility("proxy_auth",!hy);
@@ -142,15 +241,15 @@ internal sealed class ConnectionEditor : UserControl
 
     internal void LoadProfiles(object collection)
     {
-        binding=true;Profiles.Items.Clear();IEnumerable values=collection as IEnumerable;
-        if(values!=null)foreach(object value in values){Dictionary<string,object> item=value as Dictionary<string,object>;if(item!=null)Profiles.Items.Add(new Entry{Value=item});}
+        binding=true;Profiles.Items.Clear();ProfileList.Items.Clear();IEnumerable values=collection as IEnumerable;
+        if(values!=null)foreach(object value in values){Dictionary<string,object> item=value as Dictionary<string,object>;if(item!=null){Entry entry=new Entry{Value=item};Profiles.Items.Add(entry);ProfileList.Items.Add(entry);}}
         if(Profiles.Items.Count>0)
         {
             int selected=0;for(int index=0;index<Profiles.Items.Count;index++)if(Flag(((Entry)Profiles.Items[index]).Value,"selected"))selected=index;
             for(int index=0;index<Profiles.Items.Count;index++)if(Text(((Entry)Profiles.Items[index]).Value,"profile_id","")==ProfileId){selected=index;break;}
             Profiles.SelectedIndex=selected;
         }
-        Profiles.Visible=Profiles.Items.Count>0;profileHeight.Height=Profiles.Items.Count>0?Profiles.Height+Profiles.Margin.Vertical:0;
+        FitList();ProfileList.Invalidate();
         binding=false;
     }
     internal string PickedId {get{return Profiles.SelectedItem is Entry?Text(((Entry)Profiles.SelectedItem).Value,"profile_id",""):null;}}
@@ -184,7 +283,7 @@ internal sealed class ConnectionEditor : UserControl
             string protocol=Text(view,"protocol","hysteria2");Protocol.SelectedIndex=Array.IndexOf(new[]{"hysteria2","socks5","http","https"},protocol);if(Protocol.SelectedIndex<0)Protocol.SelectedIndex=0;
             Obfuscation.Checked=Text(view,"obfs","")=="salamander";
             advanced.Checked=Obfuscation.Checked||!String.IsNullOrWhiteSpace(Fields["tls_server_name"].Text);
-            State.Text=needsCredentials?"Нужно ввести пароль заново для этого пользователя Windows.":Flag(view,"selected")?"Выбрано для следующего запуска. Текущий сеанс не изменён.":"Сохранено. Профиль ещё не выбран для запуска.";
+            State.Text=needsCredentials?"Нужно ввести пароль заново для этого пользователя Windows.":Flag(view,"selected")?"Выбрано для следующего запуска Windows, работающий сеанс не меняется.":"Сохранено. Профиль ещё не выбран для запуска.";
             State.AccessibleName=Text(view,"name","Профиль");
             State.Text+=Flag(view,"verified")?" Проверка подключения пройдена.":" Сеть не проверена.";
             Error.Text="";
@@ -241,7 +340,7 @@ internal sealed class ConnectionEditor : UserControl
         busy=value;
         foreach(Button button in new[]{SaveButton,NewButton,ImportButton})button.Enabled=!value;
         SelectButton.Enabled=ExportButton.Enabled=!value&&ProfileId!=null;TestButton.Enabled=!value&&ProfileId!=null&&testAvailable;
-        Profiles.Enabled=!value;
+        Profiles.Enabled=ProfileList.Enabled=!value;foreach(RoundedButton button in protocolButtons)button.Enabled=!value;
         foreach(TextBox field in Fields.Values)field.Enabled=!value;
         Protocol.Enabled=ProxyAuth.Enabled=Obfuscation.Enabled=advanced.Enabled=!value;
     }

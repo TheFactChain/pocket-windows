@@ -44,11 +44,15 @@ internal static class ConnectionLayoutRegression
             {
                 form.Controls.Add(editor);Layout(form);form.ClientSize=new Size(740,600);Layout(form);
                 var fonts=Tree(editor).Select(item=>new{Control=item,Font=item.Font}).ToArray();foreach(var item in fonts)item.Control.Font=new Font(item.Font.FontFamily,item.Font.SizeInPoints*scale,item.Font.Style);Layout(form);
-                Assert(!VisibleInEditor(editor.Profiles,editor),"An empty saved-profile selector must not be shown");
+                Assert(!VisibleInEditor(editor.ProfileList,editor),"An empty saved-profile selector must not be shown");
                 editor.LoadProfiles(new object[]{View()});Layout(form);
-                Rectangle profile=new Rectangle(Position(editor.Profiles,editor),editor.Profiles.Size);
+                Assert(VisibleInEditor(editor.ProfileList,editor),"Saved profiles must be listed");
+                Rectangle profile=new Rectangle(Position(editor.ProfileList,editor),editor.ProfileList.Size);
                 Rectangle tool=new Rectangle(Position(editor.NewButton,editor),editor.NewButton.Size);
-                Assert(profile.Bottom<=tool.Top,"Saved profile selector overlaps action toolbar at scale "+scale+": "+profile+" / "+tool);
+                Rectangle name=new Rectangle(Position(editor.Fields["name"],editor),editor.Fields["name"].Size);
+                Assert(profile.Bottom<=tool.Top||!profile.IntersectsWith(tool),"Saved profile list overlaps action toolbar at scale "+scale+": "+profile+" / "+tool);
+                Assert(profile.Right<=name.Left,"Saved profile list overlaps the editor at scale "+scale+": "+profile+" / "+name);
+                Assert(editor.ProfileList.ItemHeight>=editor.ProfileList.Font.Height*2,"Each saved profile needs room for its name and state");
                 Assert(!Tree(editor).OfType<Label>().Any(item=>VisibleInEditor(item,editor)&&item.Text.Contains("вручную")),"Permanent introductory guidance must not consume editor space");
                 Assert(!String.IsNullOrEmpty(editor.Fields["host"].AccessibleDescription)&&editor.Fields["host"].AccessibleDescription.Contains("proxy.example.com"),"Server field needs an accessible hostname example");
                 Assert(editor.Fields["auth"].UseSystemPasswordChar&&editor.Fields["password"].UseSystemPasswordChar,"Secrets must remain masked");
@@ -61,7 +65,7 @@ internal static class ConnectionLayoutRegression
                     Assert(Position(caption,editor).X==Position(box,editor).X,"Caption and field must share a left edge: "+key);
                 }
                 Assert(rows["name"][1].Height==rows["protocol"][1].Height&&rows["host"][1].Height==rows["port"][1].Height,"All inputs must share the same height");
-                Assert(Position(rows["host"][1],editor).Y==Position(rows["port"][1],editor).Y,"Address and port must align on the same row");
+                Assert(Position(rows["host"][1],editor).Y==Position(rows["port"][1],editor).Y,"Address and port must align on the same row at scale "+scale+": "+Position(rows["host"][1],editor)+" / "+Position(rows["port"][1],editor)+" captions "+rows["host"][0].Bounds+" / "+rows["port"][0].Bounds);
                 foreach(Button button in new[]{editor.SaveButton,editor.SelectButton,editor.TestButton})Assert(form.ClientRectangle.Contains(new Rectangle(Position(button,form),button.Size)),"Footer clipped at scale "+scale);
                 foreach(TextBox field in editor.Fields.Values.Where(item=>VisibleInEditor(item,editor)))Assert(field.Height<=field.Font.Height*2,"Input stretched vertically: "+field.AccessibleName);
                 editor.LoadView(View());Layout(form);

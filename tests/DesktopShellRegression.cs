@@ -56,8 +56,8 @@ internal static class DesktopShellRegression
                 Render(form,args,"connection");
                 form.ConnectionPage.LoadProfiles(new object[]{new Dictionary<string,object>{{"name","Тестовое подключение"},{"profile_id","fixture"},{"selected",true}}});
                 Application.DoEvents(); form.PerformLayout();
-                Rectangle picker=Bounds(form.ConnectionPage.Profiles,form);
-                Assert(form.ConnectionPage.Profiles.Visible,"Saved profiles must remain selectable.");
+                Rectangle picker=Bounds(form.ConnectionPage.ProfileList,form);
+                Assert(form.ConnectionPage.ProfileList.Visible,"Saved profiles must remain selectable.");
                 foreach(Button button in new[]{form.ConnectionPage.NewButton,form.ConnectionPage.ImportButton,form.ConnectionPage.ExportButton})
                     Assert(!picker.IntersectsWith(Bounds(button,form)),"Hosted profile picker overlaps toolbar: "+button.Text);
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext()); Pump(form.RunAction("diagnose",true));
