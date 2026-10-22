@@ -141,6 +141,17 @@ internal static class DesktopPagesRegression
             Render(form,Path.Combine(logs,"ui-pages-diagnostics-long.png"));
             foreach(Button button in new[]{form.PrepareButton,form.RepairGatewayButton,form.PrepareHostButton})Inside(button,form,"Diagnostics recovery actions");
         }
+        using(Form help=MainForm.BuildHelp(new Font("Segoe UI",10)))
+        {
+            Render(help,Path.Combine(logs,"ui-help.png"));
+            Assert(!Tree(help).OfType<TextBox>().Any()&&!Tree(help).OfType<ScrollableControl>().Any(item=>item.AutoScroll),"Help must not scroll");
+            foreach(Label label in Tree(help).OfType<Label>().Where(item=>item.Text.Length>0))
+            {
+                Rectangle bounds=label.Bounds;for(Control parent=label.Parent;parent!=help;parent=parent.Parent){Assert(new Rectangle(Point.Empty,parent.ClientSize).Contains(bounds),"Help text clipped: "+label.Text);bounds.Offset(parent.Location);}
+                Assert(label.Height>=label.GetPreferredSize(new Size(label.Width,0)).Height,"Help text cut short: "+label.Text);
+            }
+            Assert(Tree(help).OfType<Label>().Any(item=>item.Text=="Ctrl+Alt+F")&&Tree(help).OfType<Label>().Any(item=>item.Text=="Ctrl+Enter"),"Help must list the keys");
+        }
         using(ProfileExportDialog options=new ProfileExportDialog())Assert(!options.IncludeSecrets,"Secret export opt-in must begin unchecked on every dialog");
     }
     [STAThread]

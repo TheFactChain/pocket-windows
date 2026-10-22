@@ -1238,22 +1238,58 @@ internal sealed partial class MainForm : Form
 
     private void ShowKeyboardHelp()
     {
-        using(var dialog = new Form { Text = "Справка и клавиши", Font = Font, BackColor = NativeStyle.Background,
-            ClientSize = new Size(580,430), MinimumSize = new Size(430,350), StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, MinimizeBox = false, MaximizeBox = false })
+        using (Form dialog = BuildHelp(Font)) dialog.ShowDialog(this);
+    }
+
+    // Help: four short cards, keys as chips; fits its window without scrolling.
+    internal static Form BuildHelp(Font font)
+    {
+        Form dialog = new Form { Text = "Справка и клавиши", Font = font, BackColor = NativeStyle.Background, ClientSize = new Size(760,500),
+            FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, MinimizeBox = false, MaximizeBox = false, Padding = new Padding(20) };
+        TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty, AccessibleName = "Справка по управлению" };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent,50)); grid.RowStyles.Add(new RowStyle(SizeType.Percent,50));
+        grid.Controls.Add(HelpCard("Клавиши панели", new[]{
+            new[]{"Ctrl+1…4","разделы панели"}, new[]{"Ctrl+Enter","запустить или открыть Windows"}, new[]{"Ctrl+S","сохранить"},
+            new[]{"Ctrl+N","новое подключение"}, new[]{"F5","обновить состояние"}}, null),0,0);
+        grid.Controls.Add(HelpCard("В окне Windows", new[]{
+            new[]{"Ctrl+Alt+F","полный экран и обратно"}, new[]{"Ctrl+Alt+G","освободить мышь и клавиатуру"}},
+            "Окно открывается в пропорциях монитора, без чёрных полос."),1,0);
+        grid.Controls.Add(HelpCard("Файлы ПК", null,
+            "Режим и папки выбираются в «Настройки → Файлы ПК». Windows подключает папки сама при входе, они видны в Проводнике.\n\nПапка программы и автозагрузка ПК из Windows недоступны."),0,1);
+        grid.Controls.Add(HelpCard("Выключение и перенос", null,
+            "Выключай кнопкой «Выключить» или из меню «Пуск» в Windows. Закрытие панели Windows не выключает.\n\nДля переноса скопируй всю папку программы после выключения."),1,1);
+        RoundedButton close = new RoundedButton { Text = "Понятно", Primary = true, DialogResult = DialogResult.OK, AutoSize = true, Anchor = AnchorStyles.Right, Padding = new Padding(16,8,16,8), Margin = new Padding(0,12,0,0) };
+        TableLayoutPanel frame = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+        frame.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); frame.RowStyles.Add(new RowStyle(SizeType.Percent,100)); frame.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        frame.Controls.Add(grid,0,0); frame.Controls.Add(close,0,1);
+        dialog.Controls.Add(frame); dialog.AcceptButton = close; dialog.CancelButton = close;
+        return dialog;
+    }
+
+    private static RoundedPanel HelpCard(string title, string[][] keys, string note)
+    {
+        RoundedPanel card = new RoundedPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(16,12,16,12), Margin = new Padding(0,0,10,10) };
+        TableLayoutPanel lines = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty, BackColor = Color.White };
+        lines.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); lines.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        int row = 0;
+        Label heading = new Label { Text = title, AutoSize = true, Font = new Font("Segoe UI",10.5f,FontStyle.Bold), Margin = new Padding(0,0,0,8) };
+        lines.RowStyles.Add(new RowStyle(SizeType.AutoSize)); lines.Controls.Add(heading,0,row); lines.SetColumnSpan(heading,2); row++;
+        foreach (string[] key in keys ?? new string[0][])
         {
-            var content = new TextBox { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None,
-                BackColor = NativeStyle.Background, ScrollBars = ScrollBars.Vertical, AccessibleName = "Справка по управлению", Text = String.Join(Environment.NewLine,new[]{
-                    "В панели программы", "Ctrl+1…4 — открыть раздел", "Ctrl+Enter — запустить или открыть Windows",
-                    "Ctrl+S — сохранить подключение или настройки", "Ctrl+N — новое подключение", "Ctrl+I — импорт подключения",
-                    "F5 — обновить состояние или список подключений", "F1 — открыть эту справку", "", "В окне виртуальной Windows",
-                    "Ctrl+Alt+F — включить или выключить полный экран", "Ctrl+Alt+G — освободить мышь и клавиатуру", "",
-                    "Файлы ПК в Windows", "Режим и папки выбираются в настройках и применяются при следующем запуске Windows.",
-                    "Первый раз открой в Windows диск WCPFILES, запусти RUNFILES.CMD и подтверди запрос администратора.",
-                    "Папка программы, её служебные данные и автозагрузка ПК из Windows недоступны.", "",
-                    "Выключай Windows кнопкой «Выключить» или через меню питания внутри Windows.", "Закрытие работающей панели оставляет Windows в работе и сворачивает панель в область уведомлений."}) };
-            var close = new RoundedButton { Text = "Понятно", Primary = true, DialogResult = DialogResult.OK, AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(12,8,12,8) };
-            dialog.Padding = new Padding(22); dialog.Controls.Add(content); dialog.Controls.Add(close); dialog.AcceptButton = close; dialog.CancelButton = close; dialog.ShowDialog(this);
+            lines.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            lines.Controls.Add(new Label { Text = key[0], AutoSize = true, Font = new Font("Segoe UI",9), BackColor = Color.FromArgb(235,235,240), Padding = new Padding(6,2,6,2), Margin = new Padding(0,0,12,8), Anchor = AnchorStyles.Left },0,row);
+            lines.Controls.Add(new Label { Text = key[1], AutoSize = true, Margin = new Padding(0,0,0,8), Anchor = AnchorStyles.Left },1,row); row++;
         }
+        if (note != null)
+        {
+            Label text = new Label { Text = note, AutoSize = true, ForeColor = keys == null ? NativeStyle.Ink : NativeStyle.Muted, Font = new Font("Segoe UI", keys == null ? 9.5f : 9), Margin = new Padding(0,keys == null ? 0 : 6,0,0) };
+            lines.RowStyles.Add(new RowStyle(SizeType.AutoSize)); lines.Controls.Add(text,0,row); lines.SetColumnSpan(text,2);
+            lines.SizeChanged += delegate { text.MaximumSize = new Size(Math.Max(60,lines.ClientSize.Width),0); };
+        }
+        lines.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        card.Controls.Add(lines);
+        return card;
     }
 
 }
