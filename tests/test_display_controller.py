@@ -47,7 +47,7 @@ class DisplayControllerTests(unittest.TestCase):
             self.assertIn('VGA.xres=1752', arguments)
             self.assertIn('VGA.yres=1096', arguments)
             self.assertIn('usb-tablet,id=wcabspointer,bus=wcsettingsusb.0', arguments)
-            # No PS/2 controller: the pointer never switches mode, so QEMU's SDL never retitles from a vCPU.
+            # No PS/2 controller: the pointer never switches back to relative mode (QEMU SDL deadlock).
             self.assertEqual(arguments[arguments.index('-machine') + 1], 'q35,i8042=off')
             self.assertIn('usb-kbd,id=wckeyboard,bus=wcsettingsusb.0', arguments)
 

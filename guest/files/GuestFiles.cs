@@ -226,6 +226,7 @@ namespace WindowsClaude.GuestFiles
         {
             NoReparse(path);using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){if(stream.Length>32768)throw Invalid();using(var reader=new StreamReader(stream,new UTF8Encoding(false,true),true))return reader.ReadToEnd();}
         }
+        static string mediumRoot;
         static string FindConfig()
         {
             string found=null;
@@ -233,7 +234,7 @@ namespace WindowsClaude.GuestFiles
             {
                 if(!drive.IsReady||drive.VolumeLabel!="WCPFILES")continue;if(found!=null)throw new InvalidOperationException("AMBIGUOUS_MEDIUM");
                 uint serial,length,flags;if(!GetVolumeInformation(drive.RootDirectory.FullName,null,0,out serial,out length,out flags,null,0))throw new InvalidOperationException("MEDIUM_INSPECTION_FAILED");
-                if(!drive.DriveFormat.StartsWith("FAT",StringComparison.OrdinalIgnoreCase)||(flags&0x80000)==0)throw new InvalidOperationException("MEDIUM_NOT_READONLY_FAT");found=Path.Combine(drive.RootDirectory.FullName,"HOSTFILS.JSN");
+                if(!drive.DriveFormat.StartsWith("FAT",StringComparison.OrdinalIgnoreCase)||(flags&0x80000)==0)throw new InvalidOperationException("MEDIUM_NOT_READONLY_FAT");found=Path.Combine(drive.RootDirectory.FullName,"HOSTFILS.JSN");mediumRoot=drive.RootDirectory.FullName;
             }
             if(found==null)throw new InvalidOperationException("MEDIUM_NOT_FOUND");return ReadBounded(found);
         }
@@ -430,6 +431,10 @@ namespace WindowsClaude.GuestFiles
                 config=ParseConfig(FindConfig());
                 if(Elevated())throw new InvalidOperationException("ORDINARY_TOKEN_REQUIRED");
                 if(!Environment.UserInteractive||Process.GetCurrentProcess().SessionId==0)throw new InvalidOperationException("INTERACTIVE_USER_REQUIRED");
+                // The panel ships each new helper on its medium: switch to it at logon, nothing to click.
+                if(args[0]=="--apply"&&UpdateFromMedium())return 0;
+                // The desktop takes the adapter's own mode, which the panel sized to the window: no black bars.
+                FitDisplay();
                 using(var mutex=new Mutex(false,@"Local\WindowsClaude.HostFiles."+WindowsIdentity.GetCurrent().User.Value))
                 {
                     bool held;try{held=mutex.WaitOne(0);}catch(AbandonedMutexException){held=true;}if(!held)throw new InvalidOperationException("APPLY_ALREADY_RUNNING");
@@ -459,6 +464,55 @@ namespace WindowsClaude.GuestFiles
             if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code)+detail,"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
             return !sent?3:outcome.Success?0:2;
         }
+        public static int NativeMode(IList<int[]> modes)
+        {
+            // [width,height,bits,frequency]: the largest true-colour mode is the one QEMU's adapter offers for this window.
+            int best=-1;
+            for(int index=0;index<modes.Count;index++)
+            {
+                int[] mode=modes[index];if(mode[2]<32)continue;
+                if(best<0||(long)mode[0]*mode[1]>(long)modes[best][0]*modes[best][1]||((long)mode[0]*mode[1]==(long)modes[best][0]*modes[best][1]&&mode[3]>modes[best][3]))best=index;
+            }
+            return best;
+        }
+        static DevMode NewMode(){return new DevMode{dmSize=(short)Marshal.SizeOf(typeof(DevMode))};}
+        static void FitDisplay()
+        {
+            try
+            {
+                var found=new List<DevMode>();var shapes=new List<int[]>();
+                for(int index=0;index<4096;index++){DevMode mode=NewMode();if(!EnumDisplaySettings(null,index,ref mode))break;found.Add(mode);shapes.Add(new[]{mode.dmPelsWidth,mode.dmPelsHeight,mode.dmBitsPerPel,mode.dmDisplayFrequency});}
+                int best=NativeMode(shapes);DevMode current=NewMode();
+                if(best<0||!EnumDisplaySettings(null,-1,ref current)||(current.dmPelsWidth==found[best].dmPelsWidth&&current.dmPelsHeight==found[best].dmPelsHeight))return;
+                DevMode target=found[best];
+                // Saved for this display when Windows allows it; otherwise applied for this logon (repeated at the next).
+                if(ChangeDisplaySettingsEx(null,ref target,IntPtr.Zero,1,IntPtr.Zero)!=0)ChangeDisplaySettingsEx(null,ref target,IntPtr.Zero,0,IntPtr.Zero);
+            }
+            catch(Exception){}  // Cosmetic: file access must not depend on the desktop size.
+        }
+        static bool UpdateFromMedium()
+        {
+            if(mediumRoot==null)return false;
+            string current=Assembly.GetExecutingAssembly().Location,medium=Path.Combine(mediumRoot,"HOSTFILS.EXE");
+            if(!File.Exists(medium)||Hash(medium)==Hash(current))return false;
+            string directory=DirectoryPath(),startup=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup),"WindowsClaude Host Files.lnk"),staged=null;
+            StageHelper(medium,directory,destination=>{StartupShortcut(startup,destination,directory);staged=destination;});
+            using(Process.Start(new ProcessStartInfo(staged,"--apply"){UseShellExecute=false})){}
+            return true;
+        }
+        [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
+        struct DevMode
+        {
+            [MarshalAs(UnmanagedType.ByValTStr,SizeConst=32)]public string dmDeviceName;
+            public short dmSpecVersion,dmDriverVersion,dmSize,dmDriverExtra;
+            public int dmFields,dmPositionX,dmPositionY,dmDisplayOrientation,dmDisplayFixedOutput;
+            public short dmColor,dmDuplex,dmYResolution,dmTTOption,dmCollate;
+            [MarshalAs(UnmanagedType.ByValTStr,SizeConst=32)]public string dmFormName;
+            public short dmLogPixels;
+            public int dmBitsPerPel,dmPelsWidth,dmPelsHeight,dmDisplayFlags,dmDisplayFrequency,dmICMMethod,dmICMIntent,dmMediaType,dmDitherType,dmReserved1,dmReserved2,dmPanningWidth,dmPanningHeight;
+        }
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern bool EnumDisplaySettings(string device,int mode,ref DevMode settings);
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int ChangeDisplaySettingsEx(string device,ref DevMode settings,IntPtr window,uint flags,IntPtr parameter);
         [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]struct NetResource {public uint Scope,Type,DisplayType,Usage;public string Local,Remote,Comment,Provider;}
         [DllImport("mpr.dll",CharSet=CharSet.Unicode)]static extern int WNetAddConnection2(ref NetResource resource,string password,string username,uint flags);
         [DllImport("mpr.dll",CharSet=CharSet.Unicode)]static extern int WNetGetConnection(string local,StringBuilder remote,ref int length);

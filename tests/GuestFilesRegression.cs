@@ -122,6 +122,9 @@ internal static class GuestFilesRegression
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15","192.168.234.16"},Masks=new[]{"255.255.255.0","255.255.255.0"}}),"Extra IPv4 addresses must fail exact bootstrap validation");
             BootstrapRegression();
             LinkRegression();
+            var modes=new List<int[]>{new[]{1280,800,32,60},new[]{1864,1048,32,60},new[]{1864,1048,16,75},new[]{1864,1048,32,75},new[]{800,600,32,60}};
+            Assert(Program.NativeMode(modes)==3,"The desktop must take the largest true-colour adapter mode (the window-sized one), highest refresh on ties");
+            Assert(Program.NativeMode(new List<int[]>{new[]{1024,768,16,60}})==-1&&Program.NativeMode(new List<int[]>())==-1,"No true-colour mode leaves the desktop unchanged");
             ExplorerLabelRegression();
             FakeNet net=new FakeNet();net.Used.Add("C");Outcome outcome=Apply(config,new List<Mapping>(),net);Assert(outcome.Success&&outcome.Mappings.Single().Letter=="Z"&&net.Adds==1,"Normal temporary mapping");
             var second=new Share{Name="PC_second",Label="second",PreferredLetter="Z"};config.Shares.Add(second);net=new FakeNet();outcome=Apply(config,new List<Mapping>(),net);Assert(outcome.Mappings[0].Letter=="Z"&&outcome.Mappings[1].Letter=="Y","Preferred-letter conflicts must pick a different free letter");config.Shares.RemoveAt(1);

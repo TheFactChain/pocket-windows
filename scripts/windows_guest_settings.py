@@ -65,26 +65,47 @@ def fit_size(screen, work, frame, caption, fullscreen):
 
 
 def host_display():
-    """Primary monitor in the 96-DPI units an unaware QEMU SDL window is laid out in."""
+    """The monitor under the cursor (where Start was clicked) in 96-DPI units, as an unaware QEMU SDL
+    window on it is laid out; 'monitor' is its physical work area for placing that window."""
     import ctypes
     from ctypes import wintypes
+
+    class MonitorInfo(ctypes.Structure):
+        _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT), ('rcWork', wintypes.RECT), ('dwFlags', wintypes.DWORD)]
     user = ctypes.WinDLL('user32', use_last_error=True)
-    dpi = user.GetDpiForSystem() if hasattr(user, 'GetDpiForSystem') else 96
-    scale = 96 / dpi if dpi else 1.0
-    metric = lambda index: round(user.GetSystemMetrics(index) * scale)
-    area = wintypes.RECT()
-    if not user.SystemParametersInfoW(0x30, 0, ctypes.byref(area), 0) or not metric(0) or not metric(1):
-        raise OSError('Screen size is unavailable')
-    return {'screen': (metric(0), metric(1)),
-            'work': (round((area.right - area.left) * scale), round((area.bottom - area.top) * scale)),
-            'frame': metric(32) + metric(92), 'caption': metric(4)}
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.MonitorFromPoint.restype = wintypes.HMONITOR
+    user.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    previous = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor v2: physical pixels
+    try:
+        point = wintypes.POINT()
+        user.GetCursorPos(ctypes.byref(point))
+        monitor = user.MonitorFromPoint(point, 2)  # MONITOR_DEFAULTTONEAREST
+        info = MonitorInfo(cbSize=ctypes.sizeof(MonitorInfo))
+        if not monitor or not user.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            raise OSError('Screen size is unavailable')
+        dpi_x, dpi_y = wintypes.UINT(96), wintypes.UINT(96)
+        if ctypes.WinDLL('shcore').GetDpiForMonitor(monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) != 0 or not dpi_x.value:
+            dpi_x.value = 96
+    finally:
+        if previous:
+            user.SetThreadDpiAwarenessContext(ctypes.c_void_p(previous))
+    scale = 96 / dpi_x.value
+    size = lambda rect: (round((rect.right - rect.left) * scale), round((rect.bottom - rect.top) * scale))
+    metric = (lambda index: user.GetSystemMetricsForDpi(index, 96)) if hasattr(user, 'GetSystemMetricsForDpi') else user.GetSystemMetrics
+    work = info.rcWork
+    return {'screen': size(info.rcMonitor), 'work': size(work), 'frame': metric(32) + metric(92), 'caption': metric(4),
+            'monitor': (work.left, work.top, work.right, work.bottom)}
 
 
 def effective_settings(settings, fullscreen, display=None):
     settings = validate_settings(settings)
     if not settings['fit']:
         return settings
-    width, height = fit_size(fullscreen=fullscreen, **(display or host_display()))
+    display = dict(display or host_display())
+    display.pop('monitor', None)
+    width, height = fit_size(fullscreen=fullscreen, **display)
     return validate_request(dict(settings, width=width, height=height))
 
 
