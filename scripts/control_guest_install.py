@@ -22,6 +22,8 @@ import windows_guest_settings as windows_settings
 import windows_hardware
 import host_file_sharing as file_sharing
 
+ENGINE_SHA256 = '8a0feb6045e7493c16579ffefcc2d840074fe1e4af1c99193dee8c6fabf03a86'
+
 def sha(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
 
@@ -61,7 +63,7 @@ settings=load_settings(root)
 if args.guest != 'work-boot':
     assert ctypes.windll.shell32.IsUserAnAdmin(), 'Use the authorized administrator CLI; no automatic elevation.'
 engine=root/'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
-assert sha(engine)=='8a0feb6045e7493c16579ffefcc2d840074fe1e4af1c99193dee8c6fabf03a86'
+assert sha(engine)==ENGINE_SHA256
 work=args.guest.startswith('work-')
 install=args.guest.endswith('-install')
 assert not args.gateway_stage or args.guest=='gateway-boot'
