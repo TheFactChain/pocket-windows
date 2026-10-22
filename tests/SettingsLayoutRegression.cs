@@ -11,6 +11,7 @@ internal static class SettingsLayoutRegression
 {
     static void Assert(bool value,string message) { if(!value) throw new Exception(message); }
     static IEnumerable<Control> Tree(Control root) { yield return root; foreach(Control child in root.Controls) foreach(Control item in Tree(child)) yield return item; }
+    static bool OwnVisible(Control control) { return (bool)typeof(Control).GetMethod("GetState",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(control,new object[]{2}); }
     static void Layout(Control root)
     {
         typeof(Control).GetMethod("CreateControl",BindingFlags.Instance|BindingFlags.NonPublic,null,new[]{typeof(bool)},null).Invoke(root,new object[]{true});
@@ -138,7 +139,7 @@ internal static class SettingsLayoutRegression
                 Dictionary<string,object> value;
                 Assert(editor.TryGetValue(out value)&&(int)value["gateway_memory_mib"]==1536&&(int)value["lan_port"]==42345,"Hidden loaded settings changed");
                 editor.Fields["work_memory_mib"].Text="";Assert(!editor.TryGetValue(out value),"Empty memory accepted");Layout(host);Inside(editor.SaveButton,host,"Save after validation");
-                foreach(Label label in Tree(editor).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text)))
+                foreach(Label label in Tree(editor).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text)&&OwnVisible(item)))
                     Assert(label.Height>=label.GetPreferredSize(new Size(label.Width,0)).Height,"Settings label clipped: "+label.Text);
             }
             Console.WriteLine("PASS: viewer defaults/save/cancel; host recommendations/caps/low-memory/hidden-values; compact resources/resolution, separate Windows schema, allowed modes/default/cancel/unsupported validation, read-only disk, fixed viewports/font100-200, pinned Save and hidden runtime preservation.");return 0;

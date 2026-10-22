@@ -27,6 +27,24 @@ internal sealed class ConnectionEditor : UserControl
     internal string ProfileId;
     internal event Action<string> ProfilePicked;
     private bool binding;
+    internal bool Dirty { get; private set; }
+    internal bool Loading { get; private set; }
+    private Control content;
+    private readonly Label loading = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Text = "Загружаем подключения…", AccessibleName = "Состояние загрузки подключений", Visible = false };
+    internal void SetLoading(bool value,string message = null)
+    {
+        loading.Text=message ?? "Загружаем подключения…";
+        if(Loading==value)return;
+        SuspendLayout();
+        try
+        {
+            Loading=value;
+            Control next=value?(Control)loading:content;
+            next.Visible=true;next.BringToFront();
+            (value?content:loading).Visible=false;
+        }
+        finally { ResumeLayout(true); }
+    }
     private bool busy;
     private bool needsCredentials;
     private bool hadCredentials;
@@ -117,7 +135,10 @@ internal sealed class ConnectionEditor : UserControl
         ProfileList.FontChanged+=delegate{ProfileList.ItemHeight=Math.Min(255,ProfileList.Font.Height*3+34);FitList();};ProfileList.ItemHeight=ProfileList.Font.Height*3+34;
         body.SizeChanged+=delegate{FitList();};
         editor.SizeChanged+=delegate{State.MaximumSize=Error.MaximumSize=new Size(Math.Max(100,editor.ClientSize.Width),0);};
-        NewButton.Click+=delegate{NewProfile();};Controls.Add(root);Controls.Add(Profiles);Controls.Add(Protocol);NewProfile();
+        NewButton.Click+=delegate{NewProfile();};content=root;Controls.Add(root);Controls.Add(loading);Controls.Add(Profiles);Controls.Add(Protocol);NewProfile();
+        foreach(TextBox field in Fields.Values)field.TextChanged+=delegate{if(!binding)Dirty=true;};
+        Protocol.SelectedIndexChanged+=delegate{if(!binding)Dirty=true;};
+        ProxyAuth.CheckedChanged+=delegate{if(!binding)Dirty=true;};Obfuscation.CheckedChanged+=delegate{if(!binding)Dirty=true;};
     }
     private void FitList()
     {
@@ -199,6 +220,9 @@ internal sealed class ConnectionEditor : UserControl
     private void UpdateRows()
     {
         if(binding)return;
+        fields.SuspendLayout();
+        try
+        {
         bool hy=Protocol.SelectedIndex==0;bool tls=hy||Protocol.SelectedIndex==3;
         bool preserve=CanReuseCredentials;
         Cue(Fields["auth"],preserve?"Сохранён. Оставь пустым, чтобы не менять":"");
@@ -208,6 +232,8 @@ internal sealed class ConnectionEditor : UserControl
         SetRowVisibility("obfs_password",hy&&advanced.Checked&&Obfuscation.Checked);SetRowVisibility("proxy_auth",!hy);
         SetRowVisibility("username",!hy&&ProxyAuth.Checked);SetRowVisibility("password",!hy&&ProxyAuth.Checked);
         rows["protocol"][0].Text=hy?"Протокол: TCP и UDP":"Протокол: только TCP, без UDP";
+        }
+        finally { fields.ResumeLayout(true); }
     }
     private void SetRowVisibility(string key,bool visible)
     {
@@ -223,21 +249,30 @@ internal sealed class ConnectionEditor : UserControl
             foreach(TextBox field in Fields.Values)field.Clear();Fields["name"].Text="Моё подключение";Fields["port"].Text="443";Protocol.SelectedIndex=0;Obfuscation.Checked=false;Error.Text="";State.Text="";
         }
         finally{binding=false;}
-        UpdateRows();SetBusy(busy);
+        Dirty=false;UpdateRows();SetBusy(busy);
     }
 
     internal void LoadProfiles(object collection)
     {
-        binding=true;Profiles.Items.Clear();ProfileList.Items.Clear();IEnumerable values=collection as IEnumerable;
-        if(values!=null)foreach(object value in values){Dictionary<string,object> item=value as Dictionary<string,object>;if(item!=null){Entry entry=new Entry{Value=item};Profiles.Items.Add(entry);ProfileList.Items.Add(entry);}}
-        if(Profiles.Items.Count>0)
+        bool wasBinding=binding;binding=true;
+        body.SuspendLayout();Profiles.BeginUpdate();ProfileList.BeginUpdate();
+        try
         {
-            int selected=0;for(int index=0;index<Profiles.Items.Count;index++)if(Flag(((Entry)Profiles.Items[index]).Value,"selected"))selected=index;
-            for(int index=0;index<Profiles.Items.Count;index++)if(Text(((Entry)Profiles.Items[index]).Value,"profile_id","")==ProfileId){selected=index;break;}
-            Profiles.SelectedIndex=selected;
+            Profiles.Items.Clear();ProfileList.Items.Clear();IEnumerable values=collection as IEnumerable;
+            if(values!=null)foreach(object value in values){Dictionary<string,object> item=value as Dictionary<string,object>;if(item!=null){Entry entry=new Entry{Value=item};Profiles.Items.Add(entry);ProfileList.Items.Add(entry);}}
+            if(Profiles.Items.Count>0)
+            {
+                int selected=0;for(int index=0;index<Profiles.Items.Count;index++)if(Flag(((Entry)Profiles.Items[index]).Value,"selected"))selected=index;
+                for(int index=0;index<Profiles.Items.Count;index++)if(Text(((Entry)Profiles.Items[index]).Value,"profile_id","")==ProfileId){selected=index;break;}
+                Profiles.SelectedIndex=selected;
+            }
+            FitList();
         }
-        FitList();ProfileList.Invalidate();
-        binding=false;
+        finally
+        {
+            binding=wasBinding;
+            ProfileList.EndUpdate();Profiles.EndUpdate();body.ResumeLayout(true);
+        }
     }
     internal string PickedId {get{return Profiles.SelectedItem is Entry?Text(((Entry)Profiles.SelectedItem).Value,"profile_id",""):null;}}
     internal Dictionary<string,object> PickedView {get{return Profiles.SelectedItem is Entry?((Entry)Profiles.SelectedItem).Value:null;}}
@@ -276,7 +311,7 @@ internal sealed class ConnectionEditor : UserControl
             Error.Text="";
         }
         finally{binding=wasBinding;}
-        UpdateRows();SetBusy(busy);
+        Dirty=false;UpdateRows();SetBusy(busy);
     }
     internal void LoadImported(Dictionary<string,object> profile)
     {
@@ -288,7 +323,7 @@ internal sealed class ConnectionEditor : UserControl
             needsCredentials=Protocol.SelectedIndex==0;RestoreLoadedSelection();State.Text="Импорт заполнен в редакторе. Проверь поля, введи пароль и сохрани.";
         }
         finally{binding=false;}
-        UpdateRows();SetBusy(busy);
+        Dirty=true;UpdateRows();SetBusy(busy);
     }
 
     internal bool TrySaveRequest(out Dictionary<string,object> request)

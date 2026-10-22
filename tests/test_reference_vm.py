@@ -34,7 +34,7 @@ class ReferenceVmTests(unittest.TestCase):
         self.assertEqual(args[args.index('-display') + 1], 'sdl,gl=off')
         self.assertIn('-S', args)
         self.assertIn('-no-reboot', args)
-        self.assertIn('type=1,serial=WCREFERENCE-' + self.ref, args)
+        self.assertTrue(any(value.startswith('type=1,') and value.endswith(',serial=WCREFERENCE-' + self.ref) for value in args))
         self.assertNotIn(vm.SOURCE, ' '.join(args))
         self.assertIn('ringbuf,id=wcrefreturn,size=16777216', args)
         self.assertEqual([args[i + 1] for i, a in enumerate(args) if a == '-serial'], ['none', 'chardev:wcrefreturn'])
@@ -54,7 +54,7 @@ class ReferenceVmTests(unittest.TestCase):
 
     def test_template_boot_uses_only_approved_template_media_and_nonce(self):
         args = vm.arguments(self.op, self.ref, {'vcpus': 2, 'work_memory_mib': 3072}, template_nonce='c' * 32)
-        self.assertIn('type=1,serial=WCMASTER-' + 'c' * 32, args)
+        self.assertTrue(any(value.startswith('type=1,') and value.endswith(',serial=WCMASTER-' + 'c' * 32) for value in args))
         drives = [args[i + 1] for i, name in enumerate(args) if name == '-drive']
         self.assertEqual([d for d in drives if 'file=fat:' in d],
                          ['if=none,id=wcrefhand,format=raw,readonly=on,file=fat:state/reference-' + 'b' * 32 + '/template-handoff'])

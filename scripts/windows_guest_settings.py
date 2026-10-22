@@ -56,18 +56,8 @@ def validate_request(value):
     return result
 
 
-def window_size(guest, display):
-    """First window client size: the guest picture scaled down (never up) to fit the work area with its
-    proportions. Afterwards the user may resize or maximize the window; Windows keeps its size."""
-    width, height = guest
-    work, frame, caption = display['work'], display['frame'], display['caption']
-    scale = min(1.0, (work[0] - 2 * frame - 16) / width, (work[1] - caption - 2 * frame - 16) / height)
-    return round(width * scale), round(height * scale)
-
-
-def host_display():
-    """The monitor under the cursor (where Start was clicked) in 96-DPI units, as an unaware QEMU SDL
-    window on it is laid out; 'monitor' is its physical work area for placing that window."""
+def host_display(window=None):
+    """The window's monitor, or the monitor under Start's cursor, entirely in physical pixels."""
     import ctypes
     from ctypes import wintypes
 
@@ -78,26 +68,36 @@ def host_display():
     user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
     user.MonitorFromPoint.restype = wintypes.HMONITOR
     user.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    user.MonitorFromWindow.restype = wintypes.HMONITOR
+    user.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+    user.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MonitorInfo)]
     previous = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor v2: physical pixels
     try:
-        point = wintypes.POINT()
-        user.GetCursorPos(ctypes.byref(point))
-        monitor = user.MonitorFromPoint(point, 2)  # MONITOR_DEFAULTTONEAREST
+        if window is None:
+            point = wintypes.POINT()
+            if not user.GetCursorPos(ctypes.byref(point)):
+                raise OSError('Cursor position is unavailable')
+            monitor = user.MonitorFromPoint(point, 2)
+        else:
+            monitor = user.MonitorFromWindow(window, 2)  # MONITOR_DEFAULTTONEAREST
         info = MonitorInfo(cbSize=ctypes.sizeof(MonitorInfo))
         if not monitor or not user.GetMonitorInfoW(monitor, ctypes.byref(info)):
             raise OSError('Screen size is unavailable')
         dpi_x, dpi_y = wintypes.UINT(96), wintypes.UINT(96)
-        if ctypes.WinDLL('shcore').GetDpiForMonitor(monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) != 0 or not dpi_x.value:
+        shcore = ctypes.WinDLL('shcore')
+        shcore.GetDpiForMonitor.argtypes = [wintypes.HMONITOR, ctypes.c_int,
+                                          ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT)]
+        if shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) != 0 or not dpi_x.value:
             dpi_x.value = 96
+        size = lambda rect: (rect.right - rect.left, rect.bottom - rect.top)
+        metric = (lambda index: user.GetSystemMetricsForDpi(index, dpi_x.value)) if hasattr(user, 'GetSystemMetricsForDpi') else user.GetSystemMetrics
+        work = info.rcWork
+        return {'screen': size(info.rcMonitor), 'work': size(work), 'frame': metric(32) + metric(92), 'caption': metric(4),
+                'monitor': (work.left, work.top, work.right, work.bottom)}
     finally:
         if previous:
             user.SetThreadDpiAwarenessContext(ctypes.c_void_p(previous))
-    scale = 96 / dpi_x.value
-    size = lambda rect: (round((rect.right - rect.left) * scale), round((rect.bottom - rect.top) * scale))
-    metric = (lambda index: user.GetSystemMetricsForDpi(index, 96)) if hasattr(user, 'GetSystemMetricsForDpi') else user.GetSystemMetrics
-    work = info.rcWork
-    return {'screen': size(info.rcMonitor), 'work': size(work), 'frame': metric(32) + metric(92), 'caption': metric(4),
-            'monitor': (work.left, work.top, work.right, work.bottom)}
 
 
 def vga_memory_mib(settings):

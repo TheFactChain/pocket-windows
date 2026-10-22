@@ -19,6 +19,7 @@ from runtime_logs import start_capped_drain, CappedWriter
 from runtime_config import load_settings, load_viewer_settings
 import launch_runtime as runtime
 import windows_guest_settings as windows_settings
+import windows_hardware
 import host_file_sharing as file_sharing
 
 def sha(path):
@@ -60,7 +61,7 @@ settings=load_settings(root)
 if args.guest != 'work-boot':
     assert ctypes.windll.shell32.IsUserAnAdmin(), 'Use the authorized administrator CLI; no automatic elevation.'
 engine=root/'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
-assert sha(engine)=='d13720aabc7da7940098e19362190effc04b160406247473ed01f57ae851d7bb'
+assert sha(engine)=='8a0feb6045e7493c16579ffefcc2d840074fe1e4af1c99193dee8c6fabf03a86'
 work=args.guest.startswith('work-')
 install=args.guest.endswith('-install')
 assert not args.gateway_stage or args.guest=='gateway-boot'
@@ -74,8 +75,9 @@ if install:
 stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
 output=root/'logs'/('guest-'+args.guest+'-'+stamp)
 output.mkdir(parents=True,exist_ok=False)
-arguments=['-name','WindowsClaude-'+args.guest,'-machine','q35' if work else 'pc','-accel','whpx','-cpu','Westmere','-smp',str(settings['vcpus']),'-m',str(settings['work_memory_mib'] if work else settings['gateway_memory_mib']),'-L','runtime/qemu-11.1.0/share','-nic','none','-display','sdl,gl=off','-vga','std','-serial','none','-parallel','none','-monitor','none','-qmp','stdio']
+arguments=['-name','WindowsClaude-'+args.guest,'-machine','q35' if work else 'pc','-accel','whpx','-cpu',windows_hardware.CPU_MODEL if work else 'Westmere','-smp',str(settings['vcpus']),'-m',str(settings['work_memory_mib'] if work else settings['gateway_memory_mib']),'-L','runtime/qemu-11.1.0/share','-nic','none','-display','sdl,gl=off','-vga','std','-serial','none','-parallel','none','-monitor','none','-qmp','stdio']
 if work:
+    arguments += windows_hardware.arguments()
     firmware=root/'state/workvm-vars.fd'
     if not firmware.exists():
         original=root/'runtime/qemu-11.1.0/share/edk2-i386-vars.fd'
@@ -123,7 +125,7 @@ if args.gateway_stage:
                 '-device','virtio-blk-pci,drive=wcdelivery,serial=WCDELIVERY']
 elif not work:
     arguments[arguments.index('-serial')+1]='file:'+(output/'runtime-serial.log').relative_to(root).as_posix()
-env=os.environ.copy();env['PATH']=str(engine.parent)+';'+os.environ['SystemRoot']+'\\System32;'+os.environ['SystemRoot']
+env=runtime.qemu_environment(root)
 work_reboot_session = args.guest == 'work-boot' and args.network == 'isolated-lan'
 normal_runtime = work_reboot_session and not args.work_test_media
 session_nonce=uuid.uuid4().hex if work_reboot_session else None
@@ -336,12 +338,21 @@ def place_work_window(work_area):
             user.GetWindowThreadProcessId(window, ctypes.byref(pid))
             if pid.value == process.pid and user.IsWindowVisible(window) and not user.IsIconic(window) and not user.IsZoomed(window):
                 outer = wintypes.RECT()
-                user.GetWindowRect(window, ctypes.byref(outer))
+                if not user.GetWindowRect(window, ctypes.byref(outer)):
+                    return True
                 left, top, right, bottom = work_area
                 x = left + max(0, (right - left - (outer.right - outer.left)) // 2)
                 y = top + max(0, (bottom - top - (outer.bottom - outer.top)) // 2)
-                user.SetWindowPos(window, None, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010 | 0x4000)
-                moved.append(window)
+                if (outer.left, outer.top) != (x, y):
+                    if not user.SetWindowPos(window, None, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010 | 0x4000):
+                        return True
+                    if not user.GetWindowRect(window, ctypes.byref(outer)):
+                        return True
+                # A monitor transfer can queue SDL's fit before final centring.
+                if ((outer.left, outer.top) == (x, y)
+                        and outer.right - outer.left <= right - left
+                        and outer.bottom - outer.top <= bottom - top):
+                    moved.append(window)
             return True
         user.EnumWindows(callback_type(visit), 0)
     finally:
@@ -376,11 +387,8 @@ def pointer_settled():
                for mouse in command('query-mice') or [])
 
 
-def tidy_work_window():
-    """Shrink QEMU's window to the monitor when it opens (or after a guest mode change resets it) at the
-    guest's full size; any other size is the user's and SDL scales the picture into it. Returns True when it
-    resized. Every call is bounded so QEMU's UI thread can never stall this controller. The caption is not
-    touched: the patched engine (patch_qemu_engine.py) sets "Windows Claude" itself."""
+def observe_work_window():
+    """Read physical geometry only. SDL owns sizing from its actual DisplaySurface, not the requested mode."""
     from ctypes import wintypes
     user = ctypes.WinDLL('user32', use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -392,38 +400,42 @@ def tidy_work_window():
     user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
     user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-    user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
-    windows = []
-    def visit(window, unused):
-        pid = wintypes.DWORD()
-        user.GetWindowThreadProcessId(window, ctypes.byref(pid))
-        if pid.value == process.pid and user.IsWindowVisible(window):
-            windows.append(window)
-        return True
-    user.EnumWindows(callback_type(visit), 0)
-    guest = (display_settings['width'], display_settings['height'])
-    target = windows_settings.window_size(guest, host_display) if host_display else guest
-    resized = False
-    for window in windows:
-        result = ctypes.c_size_t()
-        # WM_NULL with SMTO_ABORTIFHUNG: touch the window only while its thread answers.
-        if not user.SendMessageTimeoutW(window, 0, 0, None, 0x0002, 200, ctypes.byref(result)):
-            continue
-        style = user.GetWindowLongPtrW(window, -16)
-        # Windowed (has a caption), not minimized or maximized, and still at the guest's full size.
-        if style & 0x00C00000 != 0x00C00000 or user.IsIconic(window) or user.IsZoomed(window) or report.get('window_parked') is True:
-            continue
-        client = wintypes.RECT()
-        user.GetClientRect(window, ctypes.byref(client))
-        if (client.right, client.bottom) != guest or target == guest:
-            continue
-        # Grow or shrink the outer frame by exactly the client difference (SDL's frame is not standard).
-        outer = wintypes.RECT()
-        user.GetWindowRect(window, ctypes.byref(outer))
-        user.SetWindowPos(window, None, 0, 0, outer.right - outer.left + target[0] - client.right,
-                          outer.bottom - outer.top + target[1] - client.bottom, 0x0002 | 0x0004 | 0x0010 | 0x4000)
-        resized = True
-    return resized
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    previous = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    try:
+        windows = []
+        def visit(window, unused):
+            pid = wintypes.DWORD()
+            user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+            if pid.value == process.pid and user.IsWindowVisible(window):
+                windows.append(window)
+            return True
+        user.EnumWindows(callback_type(visit), 0)
+        for window in windows:
+            result = ctypes.c_size_t()
+            if not user.SendMessageTimeoutW(window, 0, 0, None, 0x0002, 200, ctypes.byref(result)):
+                continue
+            style = user.GetWindowLongPtrW(window, -16)
+            if style & 0x00C00000 != 0x00C00000 or user.IsIconic(window) or user.IsZoomed(window) or report.get('window_parked') is True:
+                continue
+            client, outer = wintypes.RECT(), wintypes.RECT()
+            if not user.GetClientRect(window, ctypes.byref(client)) or not user.GetWindowRect(window, ctypes.byref(outer)):
+                continue
+            display = windows_settings.host_display(window)
+            fits = (0 < outer.right - outer.left <= display['work'][0]
+                    and 0 < outer.bottom - outer.top <= display['work'][1])
+            geometry = {'owner': 'qemu-sdl', 'window': int(window), 'monitor': list(display['monitor']),
+                        'client': [client.right, client.bottom],
+                        'outer': [outer.left, outer.top, outer.right, outer.bottom], 'fits_work_area': fits}
+            if report.get('window_geometry') != geometry:
+                report['window_geometry'] = geometry
+                save()
+            return fits
+        return False
+    finally:
+        if previous:
+            user.SetThreadDpiAwarenessContext(ctypes.c_void_p(previous))
 
 
 def read_file_receipt():
@@ -570,16 +582,18 @@ try:
                     if files_session is not None:
                         read_file_receipt()
                     try:
-                        resized = tidy_work_window()
+                        window_ready = observe_work_window()
                     except OSError:
-                        resized = False  # Cosmetic only: the window keeps working with QEMU's own size.
-                    # Centred once, after its first shrink has taken effect.
-                    if (report.get('window_parked') == 'released' and not report.get('window_placed') and not resized
+                        window_ready = False
+                    # SDL sizes the window; the controller only centres it once.
+                    if (report.get('window_parked') == 'released' and not report.get('window_placed') and window_ready
                             and host_display and host_display.get('monitor')):
                         try:
                             report['window_placed'] = place_work_window(host_display['monitor'])
+                            if report['window_placed']:
+                                save()
                         except OSError:
-                            report['window_placed'] = True  # Cosmetic: never retried in a loop.
+                            report['window_placed'] = False
                 if target is not None and time.monotonic()-begin>=target:
                     capture('boot-'+str(target))
                     if work and install and target==2:

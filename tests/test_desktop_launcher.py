@@ -9,6 +9,7 @@ import unittest
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+REPORTS = ROOT / 'state/desktop-regression-reports'
 
 
 class DesktopLauncherTests(unittest.TestCase):
@@ -43,7 +44,7 @@ class DesktopLauncherTests(unittest.TestCase):
     def test_reported_visual_regressions(self):
         compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
         for name in ('DesktopShellRegression', 'SettingsLayoutRegression', 'ConnectionLayoutRegression',
-                     'DesktopPanelLifecycleRegression', 'ProfileDialogsRegression', 'WindowPreferencesRegression', 'FileSharingSettingsRegression'):
+                     'DesktopPanelLifecycleRegression', 'ProfileDialogsRegression', 'WindowPreferencesRegression', 'FileSharingSettingsRegression', 'DesktopNavigationRegression', 'ReleaseInfoRegression'):
             with self.subTest(harness=name), tempfile.TemporaryDirectory(prefix='desktop-reported-') as temporary:
                 executable = Path(temporary) / (name + '.exe')
                 command = [str(compiler), '/nologo', '/target:exe', '/platform:x64', '/main:' + name,
@@ -136,7 +137,7 @@ class DesktopLauncherTests(unittest.TestCase):
                        *map(str, sorted((ROOT / 'ui').glob('*.cs'))), str(ROOT / 'tests/DesktopPagesRegression.cs')]
             build = subprocess.run(command, capture_output=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
             self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
-            result = subprocess.run([str(executable), str(ROOT / 'logs')], capture_output=True, timeout=30,
+            result = subprocess.run([str(executable), str(REPORTS)], capture_output=True, timeout=30,
                                     creationflags=subprocess.CREATE_NO_WINDOW)
             self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
 
@@ -172,7 +173,7 @@ class DesktopLauncherTests(unittest.TestCase):
             build = subprocess.run(command, capture_output=True, timeout=45,
                                    creationflags=subprocess.CREATE_NO_WINDOW)
             self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
-            result = subprocess.run([str(executable), str(ROOT / 'logs')], capture_output=True,
+            result = subprocess.run([str(executable), str(REPORTS)], capture_output=True,
                                     timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
             self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
 
@@ -235,7 +236,7 @@ class DesktopLauncherTests(unittest.TestCase):
             build = subprocess.run(command, capture_output=True, timeout=45,
                                    creationflags=subprocess.CREATE_NO_WINDOW)
             self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
-            result = subprocess.run([str(executable), str(ROOT / 'logs'), str(repair_root)], capture_output=True,
+            result = subprocess.run([str(executable), str(REPORTS), str(repair_root)], capture_output=True,
                                     timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
             self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
             self.assertEqual((repair_root / component).read_bytes(), content)

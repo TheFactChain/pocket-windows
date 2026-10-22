@@ -8,6 +8,20 @@ using System.Windows.Forms;
 
 internal sealed partial class MainForm
 {
+    private async Task ReadProfilesAsync()
+    {
+        ConnectionPage.SetLoading(true);
+        while(CanUpdate && (busy || outcomeUnknown))
+        {
+            if(outcomeUnknown)ConnectionPage.SetLoading(true,"Предыдущая операция ещё не подтверждена. Проверь состояние через диагностику.");
+            if(profileReadReady == null)profileReadReady=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await profileReadReady.Task;
+        }
+        if(!CanUpdate || profilesLoaded)return;
+        var result=await ProfileActionAsync("list-profiles",null);
+        if(CanUpdate && !profilesLoaded)ConnectionPage.SetLoading(true,Bridge.Message(result));
+    }
+
     internal async Task<Dictionary<string,object>> ProfileActionAsync(string action,object payload)
     {
         if (action == "test-profile" && !testAvailable) return Bridge.Failure("Проверка подключения пока недоступна.");
@@ -30,11 +44,12 @@ internal sealed partial class MainForm
             if (result.ContainsKey("profile")) ConnectionPage.LoadView((Dictionary<string,object>)result["profile"]);
             if (action == "list-profiles")
             {
-                bool openSelected = !profilesLoaded && ConnectionPage.ProfileId == null;
+                bool openSelected = !profilesLoaded && ConnectionPage.ProfileId == null && !ConnectionPage.Dirty;
                 profilesLoaded = true;
                 ConnectionPage.LoadProfiles(result.ContainsKey("profiles") ? result["profiles"] : null);
                 if (openSelected && ConnectionPage.PickedView != null) ConnectionPage.LoadView(ConnectionPage.PickedView);
                 else ConnectionPage.RestoreLoadedSelection();
+                ConnectionPage.SetLoading(false);
             }
             else if (action == "save-profile" || action == "select-profile" || action == "import-profile")
             {
@@ -61,7 +76,14 @@ internal sealed partial class MainForm
             if (CanUpdate) { operationResult = result; operation.Text = Bridge.Message(result); if (Flag(result,"outcome_unknown")) TrackUnknownOutcome(result); ConnectionPage.Error.Text = Bridge.Message(result); }
             return result;
         }
-        finally { if (CanUpdate) Busy(false); }
+        finally
+        {
+            if(CanUpdate)
+            {
+                if(action == "list-profiles" && !profilesLoaded && result != null && !Bridge.Ok(result))ConnectionPage.SetLoading(true,Bridge.Message(result));
+                Busy(false);
+            }
+        }
     }
 
     private async Task RefreshProfileMutationAsync(Dictionary<string,object> completed)

@@ -23,7 +23,7 @@ from connection_profile import import_profile_uri
 from profile_store import ProfileStore, StoreBusy, StoreError, SecretsUnavailable, _pinned_directory, _plain
 from gateway_package import inspect_current
 
-ENGINE_SHA256 = 'd13720aabc7da7940098e19362190effc04b160406247473ed01f57ae851d7bb'
+ENGINE_SHA256 = '8a0feb6045e7493c16579ffefcc2d840074fe1e4af1c99193dee8c6fabf03a86'
 RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
                  'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd',
@@ -34,6 +34,7 @@ RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'scripts/gateway_package.py', 'scripts/gateway_profile.py',
                  'scripts/session_carrier.py', 'scripts/file_snapshot.py', 'scripts/runtime_logs.py',
                  'scripts/windows_guest_settings.py',
+                 'scripts/windows_hardware.py',
                  'scripts/host_file_sharing.py', 'scripts/file_share_carrier.py',
                  'runtime/qemu-11.1.0/qemu-img.exe')
 GUEST_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')

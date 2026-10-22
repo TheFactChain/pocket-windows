@@ -112,6 +112,21 @@ class PackagingTests(unittest.TestCase):
             self.assertNotIn(pack.PREFIX + 'config/files.json', archive.namelist())
             self.assertIn(pack.PREFIX + 'config/viewer.json', archive.namelist())
 
+    def test_public_archive_preserves_release_provenance(self):
+        info = {'schema': 1, 'release_id': '2026.10.23.1', 'source_commit': 'a' * 40}
+        self.write('release-info.json', json.dumps(info).encode())
+        destination, manifest = self.archive('versioned-public.zip', mode='public')
+        with zipfile.ZipFile(destination) as archive:
+            self.assertEqual(json.loads(archive.read(pack.PREFIX + 'release-info.json')), info)
+        self.assertIn('release-info.json', {row['path'] for row in manifest['files']})
+
+    def test_malformed_release_provenance_is_not_packaged(self):
+        for value in (b'{"schema":true,"release_id":"2026.10.23.1","source_commit":"' + b'a'*40 + b'"}',
+                      b'{"schema":1,"schema":1,"release_id":"2026.10.23.1","source_commit":"' + b'a'*40 + b'"}'):
+            self.write('release-info.json', value)
+            with self.assertRaises(ValueError):
+                pack.collect(self.project, mode='public')
+
     def test_public_archive_excludes_profiles_without_reading_them(self):
         self.write(pack.PROFILE_FILE, b'{broken private data')
         with mock.patch.object(pack.ProfileStore, '_read', side_effect=AssertionError('private read')):

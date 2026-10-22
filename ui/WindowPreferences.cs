@@ -10,7 +10,6 @@ internal sealed partial class MainForm
 {
     private bool panelPreferencesLoaded;
     private bool rememberPanelBounds;
-    private bool panelWasMaximized;
 
     private static bool PanelInteger(Dictionary<string,object> values,string key,int minimum,int maximum,out int number)
     {
@@ -29,8 +28,7 @@ internal sealed partial class MainForm
             ||!settings.TryGetValue("start_fullscreen",out fullscreen)||!(fullscreen is bool))return;
         rememberPanelBounds=(bool)remember;
         if(panelPreferencesLoaded)return;
-        panelPreferencesLoaded=true;panelWasMaximized=WindowState==FormWindowState.Maximized;
-        Resize+=delegate{if(WindowState!=FormWindowState.Minimized)panelWasMaximized=WindowState==FormWindowState.Maximized;};
+        panelPreferencesLoaded=true;
         if(!rememberPanelBounds)return;
         try
         {
@@ -41,12 +39,10 @@ internal sealed partial class MainForm
             if(!PanelInteger(state,"schema",1,1,out schema)||!PanelInteger(state,"x",-1000000,1000000,out x)||!PanelInteger(state,"y",-1000000,1000000,out y)
                 ||!PanelInteger(state,"width",320,32768,out width)||!PanelInteger(state,"height",240,32768,out height)
                 ||!state.TryGetValue("maximized",out maximized)||!(maximized is bool))return;
-            Rectangle work=Screen.FromRectangle(new Rectangle(x,y,width,height)).WorkingArea;
-            MinimumSize=new Size(Math.Min(MinimumSize.Width,work.Width),Math.Min(MinimumSize.Height,work.Height));
-            width=Math.Min(work.Width,Math.Max(MinimumSize.Width,width));height=Math.Min(work.Height,Math.Max(MinimumSize.Height,height));
-            x=Math.Max(work.Left,Math.Min(x,work.Right-width));y=Math.Max(work.Top,Math.Min(y,work.Bottom-height));
-            StartPosition=FormStartPosition.Manual;WindowState=FormWindowState.Normal;Bounds=new Rectangle(x,y,width,height);
-            panelWasMaximized=(bool)maximized;if(panelWasMaximized)WindowState=FormWindowState.Maximized;
+            WindowState=FormWindowState.Normal;
+            Rectangle work=Screen.FromRectangle(new Rectangle(x,y,Width,Height)).WorkingArea;
+            x=Math.Max(work.Left,Math.Min(x,work.Right-Width));y=Math.Max(work.Top,Math.Min(y,work.Bottom-Height));
+            StartPosition=FormStartPosition.Manual;Location=new Point(x,y);
         }
         catch(Exception error){if(!PanelStateError(error))throw;}
     }
@@ -59,7 +55,7 @@ internal sealed partial class MainForm
             Rectangle bounds=WindowState==FormWindowState.Normal?Bounds:RestoreBounds;
             if(bounds.Width<320||bounds.Height<240||bounds.Width>32768||bounds.Height>32768)return;
             var state=new Dictionary<string,object>{{"schema",1},{"x",bounds.X},{"y",bounds.Y},{"width",bounds.Width},{"height",bounds.Height},
-                {"maximized",WindowState==FormWindowState.Maximized||(WindowState==FormWindowState.Minimized&&panelWasMaximized)}};
+                {"maximized",false}};
             string path=Path.Combine(root,"config","window-state.json");Directory.CreateDirectory(Path.GetDirectoryName(path));
             temporary=path+"."+Guid.NewGuid().ToString("N")+".tmp";File.WriteAllText(temporary,new JavaScriptSerializer().Serialize(state));
             if(File.Exists(path))File.Replace(temporary,path,null);else File.Move(temporary,path);

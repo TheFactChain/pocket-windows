@@ -6,13 +6,13 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
 using Microsoft.Win32.SafeHandles;
 
 internal static class DistributionHarness
 {
-    const string SetupSha = "0206a217579c1bba41cabd571eb2caf75dba3ae1297052956d4d7ef0b472d85d";
     static readonly object Gate = new object();
     static string phase = "Starting";
     static DateTime printed = DateTime.MinValue;
@@ -28,6 +28,7 @@ internal static class DistributionHarness
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     static extern SafeFileHandle CreateFile(string path, uint access, uint sharing, IntPtr security, uint creation, uint flags, IntPtr template);
     static void Assert(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
+    static bool ValidSetupSha(string value) { return value!=null && Regex.IsMatch(value,@"\A[a-f0-9]{64}\z"); }
     static void Progress(string value)
     {
         lock (Gate) {
@@ -97,20 +98,23 @@ internal static class DistributionHarness
             try { using(var stream=new MemoryStream(bytes)) Qcow(stream); } catch(InvalidDataException) { refused=true; }
             Assert(refused,"qcow invalid metadata accepted"); bytes[offset]=0;
         }
-        Console.WriteLine("Distribution harness self-check: 5 assertions OK");
+        Assert(ValidSetupSha(new string('a',64)),"Expected Setup SHA256 must accept lowercase64hex");
+        foreach(string invalid in new[]{"",new string('A',64),new string('g',64),new string('a',63),new string('a',65),new string('a',64)+"\n"})
+            Assert(!ValidSetupSha(invalid),"Invalid expected Setup SHA256 accepted");
+        Console.WriteLine("Distribution harness self-check: 12 assertions OK");
     }
     public static int Main(string[] args)
     {
         Console.OutputEncoding=new System.Text.UTF8Encoding(false);
         if(args.Length==1 && args[0]=="--self-test") { try { SelfTest(); return 0; } catch(Exception error) { Console.Error.WriteLine(error); return 1; } }
-        if(args.Length!=4) { Console.Error.WriteLine("Use acceptance_distribution.ps1"); return 2; }
-        string setup=args[0], payload=args[1], output=args[2], report=args[3];
+        if(args.Length!=5 || !ValidSetupSha(args[4])) { Console.Error.WriteLine("Use acceptance_distribution.ps1 with ExpectedSetupSHA256 from RELEASE.json (64 lowercase hex characters)."); return 2; }
+        string setup=args[0], payload=args[1], output=args[2], report=args[3], expectedSetupSha=args[4];
         var result=new Dictionary<string,object>{{"passed",false},{"shortcut",false},{"ui_invoked",false},{"vm_started",false},{"second_pc_tested",false}};
         using(var heartbeat=new Timer(delegate { lock(Gate) Print(); },null,15000,15000)) {
             try {
                 Assert(!File.Exists(output) && !Directory.Exists(output),"Output must be absent.");
                 using(var setupLock=OpenSetup(setup)) {
-                Assert(Hash(setupLock)==SetupSha,"Native Setup SHA256 mismatch."); result["setup_sha256"]=SetupSha;
+                Assert(Hash(setupLock)==expectedSetupSha,"Native Setup SHA256 mismatch."); result["setup_sha256"]=expectedSetupSha;
                 // Load the exact production executable; never call its entry point or create its Form.
                 var assembly=Assembly.LoadFrom(setup);
                 var installer=assembly.GetType("SetupInstaller",true);

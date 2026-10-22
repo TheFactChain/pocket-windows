@@ -84,8 +84,8 @@ internal static class DesktopAsyncRegression
         }))
         {
             form.DisplayReport(Report());Context();Pump(form.RunAction("start",false));
-            Assert(!form.StartButton.Enabled&&!form.PrepareButton.Enabled&&!form.SettingsButton.Enabled,
-                "Unknown outcome must block duplicate mutations until diagnostics");
+            Assert(!form.StartButton.Enabled&&!form.PrepareButton.Enabled&&form.SettingsButton.Enabled,
+                "Unknown outcome must block duplicate mutations while leaving navigation available");
             Context();Pump(form.SaveSettingsAndDiagnose(new Dictionary<string,object>()));
             Pump(form.RunAction("prepare-components",false));Assert(mutations==1,"Unknown outcome must reject repeated mutations");
             Assert(form.ReadinessReport!=null && form.OperationResult.ContainsKey("outcome_unknown"),"Operation and readiness results must remain separate");

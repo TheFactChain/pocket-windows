@@ -81,6 +81,14 @@ def engine_path(root):
     return root / 'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
 
 
+def qemu_environment(root):
+    env = os.environ.copy()
+    env['PATH'] = str(engine_path(root).parent) + ';' + os.environ['SystemRoot'] + '\\System32;' + os.environ['SystemRoot']
+    env['SDL_WINDOWS_DPI_AWARENESS'] = 'permonitorv2'
+    env['SDL_WINDOWS_DPI_SCALING'] = '0'
+    return env
+
+
 def controller_command(root, role, work_test_media=False):
     if role == 'gateway':
         return [str(root / 'runtime/python-3.12.14/python.exe'), '-I', '-S', '-B',

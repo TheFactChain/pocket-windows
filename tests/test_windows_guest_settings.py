@@ -1,4 +1,5 @@
 import importlib.util
+import ctypes
 import json
 from pathlib import Path
 import struct
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -52,17 +54,33 @@ class WindowsGuestSettingsTests(unittest.TestCase):
         self.assertEqual(guest.validate_settings({'fit': True, 'width': 1366, 'height': 768}),
                          {'schema': 1, 'width': 1920, 'height': 1080, 'fit': False})
 
-    def test_first_window_fits_the_monitor_with_the_guest_proportions(self):
-        # The user's monitors in 96-DPI units: 2560x1440 at 125% and 1920x1080 at 100%, taskbar at the bottom.
-        for work in ((2048, 1104), (1920, 1040), (1366, 728)):
-            with self.subTest(work=work):
-                width, height = guest.window_size((1920, 1080), {'work': work, 'frame': 8, 'caption': 23})
-                self.assertLessEqual(width + 2 * 8, work[0])
-                self.assertLessEqual(height + 23 + 2 * 8, work[1])
-                self.assertAlmostEqual(width / height, 16 / 9, delta=0.005)
-        self.assertEqual(guest.window_size((1280, 720), {'work': (2560, 1392), 'frame': 8, 'caption': 23}), (1280, 720))
+    def test_vga_memory_covers_the_configured_surface(self):
         self.assertEqual(guest.vga_memory_mib({'width': 1920, 'height': 1080}), 16)
         self.assertEqual(guest.vga_memory_mib({'width': 3840, 'height': 2160}), 32)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows monitor coordinates')
+    def test_monitor_work_area_and_metrics_are_physical_at_125_percent(self):
+        user, shcore = mock.Mock(), mock.Mock()
+        user.SetThreadDpiAwarenessContext.return_value = 111
+        user.MonitorFromPoint.return_value = 123
+        def monitor_info(handle, reference):
+            info = reference._obj
+            for rect, bottom in ((info.rcMonitor, 1440), (info.rcWork, 1380)):
+                rect.left, rect.top, rect.right, rect.bottom = 0, 0, 2560, bottom
+            return True
+        def dpi(handle, kind, horizontal, vertical):
+            horizontal._obj.value = vertical._obj.value = 120
+            return 0
+        user.GetMonitorInfoW.side_effect = monitor_info
+        shcore.GetDpiForMonitor.side_effect = dpi
+        user.GetSystemMetricsForDpi.side_effect = lambda index, dpi: {32: 10, 92: 5, 4: 29}[index] if dpi == 120 else 0
+        with mock.patch.object(ctypes, 'WinDLL', side_effect=lambda name, **kwargs: user if name == 'user32' else shcore):
+            display = guest.host_display()
+        self.assertEqual(display['screen'], (2560, 1440))
+        self.assertEqual(display['work'], (2560, 1380))
+        self.assertEqual(display['monitor'], (0, 0, 2560, 1380))
+        self.assertEqual((display['frame'], display['caption']), (15, 29))
+        self.assertEqual(user.SetThreadDpiAwarenessContext.call_args.args[0].value, 111)
 
     def test_request_allows_fitted_sizes_but_saved_settings_only_listed_ones(self):
         self.assertEqual(guest.validate_request({'width': 1752, 'height': 1096})['width'], 1752)

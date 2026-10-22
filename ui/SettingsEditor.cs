@@ -28,6 +28,24 @@ internal sealed class SettingsEditor : UserControl
     private Dictionary<string,object> originalFileSharing;
     private int loadedResolution = -1;
     private bool syncing;
+    private Control content;
+    private readonly Label loading = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Text = "Загружаем настройки…", AccessibleName = "Состояние загрузки настроек", Visible = false };
+    internal bool Loading { get; private set; }
+    internal bool HasValues { get { return original != null; } }
+    internal void SetLoading(bool value, string message = null)
+    {
+        loading.Text = message ?? "Загружаем настройки…";
+        if (Loading == value) return;
+        SuspendLayout();
+        try
+        {
+            Loading = value;
+            Control next = value ? (Control)loading : content;
+            next.Visible = true; next.BringToFront();
+            (value ? content : loading).Visible = false;
+        }
+        finally { ResumeLayout(true); }
+    }
     private readonly ComboBox fileSharingMode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Dock = DockStyle.Top, BackColor = NativeStyle.Background, AccessibleName = "Доступ к файлам ПК", Margin = new Padding(0,8,0,8) };
     private readonly ListBox sharedFolders = new ListBox { Dock = DockStyle.Top, IntegralHeight = false, Height = 100, DrawMode = DrawMode.OwnerDrawFixed, BorderStyle = BorderStyle.None, BackColor = Color.White, AccessibleName = "Выбранные папки ПК", Margin = Padding.Empty, AllowDrop = true };
     private readonly List<RoundedButton> modeButtons = new List<RoundedButton>();
@@ -43,6 +61,8 @@ internal sealed class SettingsEditor : UserControl
 
     internal SettingsEditor()
     {
+        Section = -1;
+        DoubleBuffered = true;
         Dock = DockStyle.Fill;
         BackColor = NativeStyle.Background;
         Font = new Font("Segoe UI",10);
@@ -65,7 +85,7 @@ internal sealed class SettingsEditor : UserControl
         tabs.Controls.Add(tabRow);
         tabs.FontChanged+=delegate{tabs.Height=TextRenderer.MeasureText("Ресурсы",tabs.Font).Height+20;};
         root.Controls.Add(tabs,0,1);
-        Panel scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
+        Panel scroll = new BufferedPanel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
 
         // Resources: memory slider, CPU stepper, read-only disk; the text fields stay the single source of the values.
         for(int index=0;index<keys.Length;index++)
@@ -120,7 +140,7 @@ internal sealed class SettingsEditor : UserControl
         Panel preview = new Panel { Size = new Size(144,90), Anchor = AnchorStyles.Left, BackColor = Color.White, Margin = new Padding(0,0,18,0) };
         preview.Paint+=delegate(object sender,PaintEventArgs args){DrawPreview(args.Graphics,preview.ClientRectangle);};
         Resolution.SelectedIndexChanged+=delegate{preview.Invalidate();};
-        Label previewText = new Label { Text = "Windows всегда работает в выбранном размере. Окно можно тянуть за край, уменьшать и разворачивать: картинка масштабируется, а рабочий стол внутри не меняется.", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = Padding.Empty };
+        Label previewText = new Label { Text = "Окно сохраняет пропорции рабочего стола и уменьшается, если не помещается на мониторе. Его можно перемещать и сворачивать. Полный экран: Ctrl+Alt+F.", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = Padding.Empty };
         TableLayoutPanel previewRow = Line(1,preview,previewText);
         previewRow.SizeChanged+=delegate{previewText.MaximumSize=new Size(Math.Max(100,previewRow.ClientSize.Width-preview.Width-preview.Margin.Horizontal),0);};
         RoundedPanel previewCard=Card(previewRow);previewCard.Margin=new Padding(0,14,0,0);previewCard.Padding=new Padding(18,14,18,14);
@@ -180,19 +200,31 @@ internal sealed class SettingsEditor : UserControl
         root.Controls.Add(footer,0,4);
         CancelButton.Click += delegate {if(original!=null)LoadValues(original,false);if(originalWindows!=null)LoadWindowsValues(originalWindows);if(originalViewer!=null)LoadViewerValues(originalViewer);if(originalFileSharing!=null)LoadFileSharingValues(originalFileSharing);};
         root.SizeChanged += delegate { int width=Math.Max(100,root.ClientSize.Width);notice.MaximumSize=new Size(Math.Max(100,width/2),0);Error.MaximumSize=new Size(width,0); };
-        Controls.Add(root);
+        content=root;Controls.Add(root);Controls.Add(loading);
     }
     private readonly List<Control> fileControls = new List<Control>();
     // Locked with the other fields while an operation may reload them, so a drop or mode change is not lost.
     internal void SetFilesEnabled(bool enabled) { foreach(Control control in fileControls)control.Enabled=enabled;sharedFolders.AllowDrop=enabled; }
+    internal void SetEditingEnabled(bool enabled)
+    {
+        foreach(Control section in sections)section.Enabled=enabled;
+        SetFilesEnabled(enabled);
+    }
     private readonly List<Control> sections = new List<Control>();
     private readonly List<RoundedButton> sectionButtons = new List<RoundedButton>();
     internal int Section { get; private set; }
     internal void ShowSection(int section)
     {
-        if(section<0||section>=sections.Count)return;
-        Section=section;
-        for(int index=0;index<sections.Count;index++){sections[index].Visible=index==section;sectionButtons[index].Selected=index==section;}
+        if(section<0||section>=sections.Count||section==Section)return;
+        Control parent=sections[section].Parent;parent.SuspendLayout();
+        try
+        {
+            Section=section;
+            sections[section].Visible=true;sections[section].BringToFront();
+            for(int index=0;index<sections.Count;index++)if(index!=section)sections[index].Visible=false;
+            for(int index=0;index<sections.Count;index++)sectionButtons[index].Selected=index==section;
+        }
+        finally { parent.ResumeLayout(true); }
     }
     // Layout helpers: a vertical stack, one line with a stretching cell, a white card, rows with separators.
     private static TableLayoutPanel Stack(params Control[] items)
@@ -247,7 +279,11 @@ internal sealed class SettingsEditor : UserControl
         return new RoundedButton { Text = text, CenterText = true, Size = new Size(40,36), Font = new Font("Segoe UI",12), Margin = Padding.Empty, AccessibleName = name };
     }
     private static string Gib(long mib,string format) { return ((decimal)mib/1024).ToString(format,CultureInfo.CurrentCulture); }
-    private void SetMemoryRange(int max) { MemorySlider.Maximum=max;MemorySlider.Invalidate();memoryMax.Text=Gib(max,"0.##")+" ГиБ"; }
+    private void SetMemoryRange(int max)
+    {
+        if (MemorySlider.Maximum == max) return;
+        MemorySlider.Maximum=max;MemorySlider.Invalidate();memoryMax.Text=Gib(max,"0.##")+" ГиБ";
+    }
     private int CpuLimit { get { return hostProcessors>0?Math.Min(maximum[1],hostProcessors):maximum[1]; } }
     private void StepCpu(int delta)
     {
@@ -361,7 +397,9 @@ internal sealed class SettingsEditor : UserControl
     }
     internal void LoadHostValues(Dictionary<string,object> host)
     {
-        hostTotal=ResourceValue(host,"ram_total_mib");hostAvailable=ResourceValue(host,"ram_available_mib");hostProcessors=ResourceValue(host,"logical_processors");
+        int total=ResourceValue(host,"ram_total_mib"),available=ResourceValue(host,"ram_available_mib"),processors=ResourceValue(host,"logical_processors");
+        if(hostTotal==total&&hostAvailable==available&&hostProcessors==processors)return;
+        hostTotal=total;hostAvailable=available;hostProcessors=processors;
         UpdateRecommendations();
     }
     // Half the PC memory, at most 8 GiB, leaving the gateway and 1 GiB free; -1 without host evidence.

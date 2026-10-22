@@ -39,18 +39,21 @@ internal static class NativeStyle
     {
         Panel header = new Panel { Dock = DockStyle.Top, Height = 40, Margin = new Padding(0, 0, 0, 14) };
         Label caption = new Label { Text = title, AutoSize = true, Font = new Font("Segoe UI", 15, FontStyle.Bold), Margin = Padding.Empty };
-        FlowLayoutPanel tools = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = Padding.Empty };
+        FlowLayoutPanel tools = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = Padding.Empty };
         foreach (Control button in actions) { button.Margin = new Padding(6, 0, 0, 0); tools.Controls.Add(button); }
         header.Controls.Add(caption); header.Controls.Add(tools);
+        bool captionVisible = true;
         // Decided in the owner's layout, before the header itself is laid out.
         owner.Layout += delegate
         {
-            int width = owner.ClientSize.Width; tools.WrapContents = false; Size wanted = tools.PreferredSize;
+            int width = owner.ClientSize.Width; Size wanted = tools.GetPreferredSize(Size.Empty);
             // Actions wider than the page wrap onto a second line rather than leave the window.
-            if (wanted.Width > width) { tools.WrapContents = true; wanted = tools.GetPreferredSize(new Size(Math.Max(1, width), 0)); wanted.Width = Math.Min(wanted.Width, width); }
+            if (wanted.Width > width) { wanted = tools.GetPreferredSize(new Size(Math.Max(1, width), 0)); wanted.Width = Math.Min(wanted.Width, width); }
             int height = Math.Max(caption.PreferredHeight, wanted.Height);
             header.Height = height; tools.Bounds = new Rectangle(Math.Max(0, width - wanted.Width), (height - wanted.Height) / 2, wanted.Width, wanted.Height);
-            caption.Location = new Point(0, (height - caption.PreferredHeight) / 2); caption.Visible = caption.PreferredWidth + wanted.Width + 16 <= width;
+            caption.Location = new Point(0, (height - caption.PreferredHeight) / 2);
+            bool visible = caption.PreferredWidth + wanted.Width + 16 <= width;
+            if (captionVisible != visible) { captionVisible = visible; caption.Visible = visible; }
         };
         return header;
     }
@@ -66,6 +69,26 @@ internal static class NativeStyle
         {
             if (passed != false) graphics.DrawLines(pen, new[] { new PointF(x + size * 0.28f, y + size * 0.52f), new PointF(x + size * 0.44f, y + size * 0.67f), new PointF(x + size * 0.73f, y + size * 0.36f) });
             else { graphics.DrawLine(pen, x + size / 2, y + size * 0.26f, x + size / 2, y + size * 0.55f); graphics.DrawLine(pen, x + size / 2, y + size * 0.73f, x + size / 2, y + size * 0.74f); }
+        }
+    }
+}
+
+internal sealed class BufferedPanel : Panel
+{
+    internal BufferedPanel() { DoubleBuffered = true; ResizeRedraw = true; }
+}
+
+internal sealed class CompositedPanel : Panel
+{
+    internal CompositedPanel() { DoubleBuffered = true; ResizeRedraw = true; }
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            CreateParams parameters = base.CreateParams;
+            // DoubleBuffered alone does not buffer the native child windows of a page.
+            parameters.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
+            return parameters;
         }
     }
 }
@@ -90,14 +113,22 @@ internal sealed class RoundedButton : Button
     private int HintWidth { get { return String.IsNullOrEmpty(Hint) ? 0 : TextRenderer.MeasureText(Hint, HintFont).Width + 8; } }
     public override Size GetPreferredSize(Size proposedSize)
     {
-        Size text = TextRenderer.MeasureText(Text, Nav || Note != null ? BoldFont : Font, Size.Empty, TextFormatFlags.SingleLine);
-        if (Note != null)
+        Size content = ContentPreferredSize;
+        return new Size(Math.Max(MinimumSize.Width, content.Width), Math.Max(MinimumSize.Height, content.Height));
+    }
+    internal Size ContentPreferredSize
+    {
+        get
         {
-            Size note = TextRenderer.MeasureText(Note, HintFont, Size.Empty, TextFormatFlags.SingleLine);
-            return new Size(Math.Max(MinimumSize.Width, Math.Max(text.Width, note.Width) + 28), Math.Max(MinimumSize.Height, text.Height + note.Height + 18));
+            Size text = TextRenderer.MeasureText(Text, Nav || Note != null ? BoldFont : Font, Size.Empty, TextFormatFlags.SingleLine);
+            if (Note != null)
+            {
+                Size note = TextRenderer.MeasureText(Note, HintFont, Size.Empty, TextFormatFlags.SingleLine);
+                return new Size(Math.Max(text.Width, note.Width) + 28, text.Height + note.Height + 18);
+            }
+            return new Size(text.Width + Math.Max(24, Padding.Horizontal) + (Glyph.HasValue ? 40 : 0) + HintWidth,
+                text.Height + Padding.Vertical);
         }
-        return new Size(Math.Max(MinimumSize.Width,text.Width + Math.Max(24,Padding.Horizontal) + (Glyph.HasValue ? 40 : 0) + HintWidth),
-            Math.Max(MinimumSize.Height,text.Height + Padding.Vertical));
     }
     private bool selected;
     internal bool Selected

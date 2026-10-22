@@ -84,7 +84,7 @@ internal static class DesktopUiRegression
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
                 Task diagnose = form.RunAction("diagnose", true);
                 Assert(form.DiagnosticsSelected,"Diagnostics must become visible immediately");
-                Assert(!form.DiagnosticsButton.Enabled && !form.PrepareButton.Enabled,"Long-running action must visibly disable duplicate actions");
+                Assert(form.DiagnosticsButton.Enabled && !form.PrepareButton.Enabled,"Long-running action must keep navigation available while disabling duplicate mutations");
                 Pump(diagnose);
                 Assert(form.DiagnosticsButton.AccessibilityObject.Role == AccessibleRole.PageTab &&
                     (form.DiagnosticsButton.AccessibilityObject.State & AccessibleStates.Selected) != 0 &&

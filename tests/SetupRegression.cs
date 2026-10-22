@@ -47,12 +47,13 @@ internal static class SetupRegression
             }
         }
     }
-    private static string Fixture(string root, string label, string badPath, bool badHash, bool link, bool backing)
+    private static string Fixture(string root, string label, string badPath, bool badHash, bool link, bool backing, bool releaseInfo=false)
     {
         string file = Path.Combine(root, label + ".zip");
         var rows = new List<Dictionary<string, object>>();
         var files = new Dictionary<string, byte[]>();
         foreach (string name in SetupInstaller.Required) files[name] = name.EndsWith(".qcow2") ? Disk() : Encoding.UTF8.GetBytes("fixture: " + name);
+        if(releaseInfo)files["release-info.json"]=Encoding.UTF8.GetBytes("{\"schema\":1,\"release_id\":\"2026.10.23.1\",\"source_commit\":\""+new string('a',40)+"\"}");
         if (backing) files["images/workvm-empty.qcow2"][15] = 1;
         if (badPath != null) files[badPath] = Encoding.UTF8.GetBytes("must refuse");
         foreach (var item in files) rows.Add(new Dictionary<string,object> { {"path", item.Key}, {"bytes", item.Value.LongLength}, {"sha256", badHash ? new string('0',64) : Hash(item.Value)} });
@@ -95,6 +96,9 @@ internal static class SetupRegression
             SetupInstaller.Install(zip,target,CancellationToken.None,delegate(string value) {});
             Assert(File.Exists(Path.Combine(target,"Launcher.exe")),"Launcher missing; folders: " + String.Join(", ",Directory.GetDirectories(root)));
             Assert(File.ReadAllBytes(Path.Combine(target,"images/workvm-empty.qcow2")).Length == 104,"disk differs");
+            string versioned=Path.Combine(root,"versioned-install");
+            SetupInstaller.Install(Fixture(root,"versioned",null,false,false,false,true),versioned,CancellationToken.None,delegate(string value) {});
+            Assert(File.ReadAllText(Path.Combine(versioned,"release-info.json")).Contains("2026.10.23.1"),"Optional release metadata must be installed without changing the schema2 contract");
             File.WriteAllText(Path.Combine(target,"user-data.txt"),"preserve");
             Refused(delegate { SetupInstaller.Install(zip,target,CancellationToken.None,delegate(string v) {}); },"existing installation overwritten");
             Assert(File.ReadAllText(Path.Combine(target,"user-data.txt"))=="preserve","user data lost");

@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import windows_guest_settings as settings
 import runtime_config as config
+import launch_runtime as runtime
 
 
 SCREEN = {'screen': (1920, 1200), 'work': (1920, 1152), 'frame': 8, 'caption': 23}
@@ -22,6 +23,25 @@ SCREEN = {'screen': (1920, 1200), 'work': (1920, 1152), 'frame': 8, 'caption': 2
 class DisplayControllerTests(unittest.TestCase):
     def tree(self):
         return ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+
+    def test_every_qemu_launch_overrides_inherited_dpi_without_changing_the_parent(self):
+        inherited = {'SystemRoot': r'C:\Windows', 'PATH': 'untrusted-path',
+                     'SDL_WINDOWS_DPI_AWARENESS': 'unaware', 'SDL_WINDOWS_DPI_SCALING': '1'}
+        for script in ('control_guest_install.py', 'reference_vm.py'):
+            with self.subTest(script=script), mock.patch.dict(os.environ, inherited, clear=True):
+                parent = dict(os.environ)
+                tree = ast.parse((ROOT / 'scripts' / script).read_text(encoding='utf-8'))
+                assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                               and any((isinstance(target, ast.Name) and target.id == 'env')
+                                       or (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                                           and target.value.id == 'env') for target in node.targets)]
+                scope = dict(os=os, root=ROOT, engine=runtime.engine_path(ROOT), runtime=runtime)
+                exec(compile(ast.Module(body=assignments, type_ignores=[]), script, 'exec'), scope)
+                child = scope['env']
+                self.assertEqual(child.get('SDL_WINDOWS_DPI_AWARENESS'), 'permonitorv2')
+                self.assertEqual(child.get('SDL_WINDOWS_DPI_SCALING'), '0')
+                self.assertEqual(child['PATH'], str(runtime.engine_path(ROOT).parent) + r';C:\Windows\System32;C:\Windows')
+                self.assertEqual(dict(os.environ), parent)
 
     def test_normal_boot_attaches_readonly_current_session_settings_and_safe_close(self):
         block = next(node for node in self.tree().body if isinstance(node, ast.If)
@@ -73,42 +93,99 @@ class DisplayControllerTests(unittest.TestCase):
 
     def test_controller_never_retitles_the_qemu_window(self):
         # The branded engine sets a fixed caption itself; a second writer would make it flicker.
-        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'tidy_work_window')
+        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'observe_work_window')
         text = (ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8')
         self.assertNotIn('0x000C', ast.get_source_segment(text, function))
         self.assertNotIn('window_title', [node.name for node in self.tree().body if isinstance(node, ast.FunctionDef)])
 
-    @unittest.skipUnless(os.name == 'nt', 'Windows window sizing regression')
-    def test_window_is_shrunk_only_at_the_guest_full_size_and_user_sizes_are_kept(self):
-        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'tidy_work_window')
-        display = {'work': (2048, 1104), 'frame': 8, 'caption': 23}  # 2560x1440 at 125%
-        target = settings.window_size((1920, 1080), display)
-        for client, expected in (((1920, 1080), target), ((1600, 900), None), ((1280, 800), None)):
-            with self.subTest(client=client):
-                user = mock.Mock()
-                user.EnumWindows.side_effect = lambda callback, unused: callback(11, 0)
-                def identify(window, pid):
-                    pid._obj.value = 456
-                def rect(width, height):
-                    def fill(window, ref):
-                        ref._obj.left, ref._obj.top, ref._obj.right, ref._obj.bottom = 0, 0, width, height
-                    return fill
-                user.GetWindowThreadProcessId.side_effect = identify
-                user.IsWindowVisible.return_value = user.SendMessageTimeoutW.return_value = True
-                user.IsIconic.return_value = user.IsZoomed.return_value = False
-                user.GetWindowLongPtrW.return_value = 0x00C00000
-                user.GetClientRect.side_effect = rect(*client)
-                user.GetWindowRect.side_effect = rect(client[0] + 16, client[1] + 39)
-                scope = dict(ctypes=ctypes, process=SimpleNamespace(pid=456), report={'window_parked': 'released'},
-                             display_settings=settings.DEFAULTS, host_display=display, windows_settings=settings)
-                exec(compile(ast.Module(body=[function], type_ignores=[]), 'window-size', 'exec'), scope)
-                with mock.patch.object(ctypes, 'WinDLL', return_value=user):
-                    resized = scope['tidy_work_window']()
-                self.assertEqual(resized, expected is not None)
-                if expected:
-                    self.assertEqual(user.SetWindowPos.call_args.args[4:6], (expected[0] + 16, expected[1] + 39))
-                else:
-                    user.SetWindowPos.assert_not_called()
+    @unittest.skipUnless(os.name == 'nt', 'Windows geometry observation')
+    def test_observer_records_actual_four_by_three_client_without_imposing_requested_mode(self):
+        display = dict(work=(1920, 1040), frame=8, caption=23, monitor=(0, 0, 1920, 1040))
+        function, user, state, scope = self.window_function('observe_work_window', display)
+        state.client = (1024, 768)
+        with mock.patch.object(ctypes, 'WinDLL', return_value=user), \
+                mock.patch.object(settings, 'host_display', return_value=display):
+            self.assertTrue(function())
+            self.assertTrue(function())
+        self.assertEqual(scope['report']['window_geometry']['client'], [1024, 768])
+        self.assertEqual(scope['report']['window_geometry']['owner'], 'qemu-sdl')
+        self.assertNotIn('target', scope['report']['window_geometry'])
+        user.SetWindowPos.assert_not_called()
+        scope['save'].assert_called_once()
+        self.assertEqual(state.dpi, 111)
+
+    def window_function(self, name, display):
+        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == name)
+        state = SimpleNamespace(client=(1920, 1080), position=(0, 0), dpi=111, contexts=[])
+        user = mock.Mock()
+        user.EnumWindows.side_effect = lambda callback, unused: callback(11, 0)
+        def identify(window, pid):
+            pid._obj.value = 456
+        def context(value):
+            previous, state.dpi = state.dpi, value.value
+            return previous
+        def client_rect(window, reference):
+            state.contexts.append(state.dpi)
+            rect = reference._obj
+            rect.left, rect.top, rect.right, rect.bottom = 0, 0, *state.client
+            return True
+        def outer_rect(window, reference):
+            state.contexts.append(state.dpi)
+            rect = reference._obj
+            rect.left, rect.top = state.position
+            rect.right, rect.bottom = rect.left + state.client[0] + 16, rect.top + state.client[1] + 39
+            return True
+        user.GetWindowThreadProcessId.side_effect = identify
+        user.SetThreadDpiAwarenessContext.side_effect = context
+        user.IsWindowVisible.return_value = user.SendMessageTimeoutW.return_value = True
+        from ctypes import wintypes
+        timeout_signature = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
+                                               wintypes.WPARAM, ctypes.c_void_p, wintypes.UINT,
+                                               wintypes.UINT, ctypes.POINTER(ctypes.c_size_t))
+        user.SendMessageTimeoutW = timeout_signature(lambda window, message, wp, lp, flags, timeout, result: 1)
+        user.IsIconic.return_value = user.IsZoomed.return_value = False
+        user.GetWindowLongPtrW.return_value = 0x00C00000
+        user.GetClientRect.side_effect, user.GetWindowRect.side_effect = client_rect, outer_rect
+        user.SetWindowPos.return_value = True
+        scope = dict(ctypes=ctypes, process=SimpleNamespace(pid=456), report={'window_parked': 'released'},
+                     display_settings=settings.DEFAULTS, host_display=display, windows_settings=settings, save=mock.Mock())
+        exec(compile(ast.Module(body=[function], type_ignores=[]), name, 'exec'), scope)
+        return scope[name], user, state, scope
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows geometry observation')
+    def test_oversized_or_unmeasurable_window_is_not_ready_for_placement(self):
+        display = dict(work=(1920, 1032), frame=8, caption=23, monitor=(0, 0, 1920, 1032))
+        function, user, state, scope = self.window_function('observe_work_window', display)
+        with mock.patch.object(ctypes, 'WinDLL', return_value=user), \
+                mock.patch.object(settings, 'host_display', return_value=display):
+            self.assertFalse(function())
+            self.assertFalse(scope['report']['window_geometry']['fits_work_area'])
+            user.GetClientRect.side_effect = None
+            user.GetClientRect.return_value = False
+            self.assertFalse(function())
+        user.SetWindowPos.assert_not_called()
+
+    def test_controller_does_not_compete_with_sdl_for_window_size(self):
+        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'observe_work_window')
+        calls = [node.func.attr for node in ast.walk(function) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute)]
+        self.assertNotIn('SetWindowPos', calls)
+        self.assertNotIn('window_size', calls)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows window placement regression')
+    def test_placement_waits_until_the_owned_window_reaches_its_target(self):
+        function, user, state, scope = self.window_function('place_work_window', SCREEN)
+        state.client = (960, 540)
+        with mock.patch.object(ctypes, 'WinDLL', return_value=user):
+            user.SetWindowPos.return_value = False
+            self.assertFalse(function((0, 0, 1920, 1040)))
+            user.SetWindowPos.return_value = True
+            self.assertFalse(function((0, 0, 1920, 1040)), 'A queued move is not proof of actual placement')
+            calls = user.SetWindowPos.call_count
+            state.position = (472, 230)
+            self.assertTrue(function((0, 0, 1920, 1040)))
+            self.assertEqual(user.SetWindowPos.call_count, calls, 'An already placed window must not move again')
 
     def test_response_must_confirm_current_nonce_and_actual_resolution(self):
         function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef)

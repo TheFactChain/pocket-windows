@@ -19,6 +19,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launch_runtime as runtime
+import windows_hardware
 from file_snapshot import locked_read, QEMU_IMG_SHA256
 from profile_store import _plain, _pinned_directory
 import reference_prep
@@ -26,7 +27,7 @@ from runtime_config import load_settings
 from runtime_network_plan import arguments as network_arguments
 from runtime_logs import CappedWriter, start_capped_drain
 
-ENGINE_SHA256 = 'd13720aabc7da7940098e19362190effc04b160406247473ed01f57ae851d7bb'
+ENGINE_SHA256 = '8a0feb6045e7493c16579ffefcc2d840074fe1e4af1c99193dee8c6fabf03a86'
 SOURCE = 'images/workvm-empty.qcow2'
 VARS = 'state/workvm-vars.fd'
 CODE = 'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd'
@@ -83,12 +84,11 @@ def arguments(operation, reference_id, settings, gateway=False, template_nonce=N
     serial = 'WCMASTER-' + template_nonce if template_nonce else 'WCREFERENCE-' + reference_id
     handoff = 'template-handoff' if template_nonce else 'handoff'
     result = ['-name', 'WindowsClaude-Reference', '-machine', 'q35', '-accel', 'whpx',
-            '-cpu', 'Westmere', '-smp', str(settings['vcpus']), '-m', str(settings['work_memory_mib']),
+            '-cpu', windows_hardware.CPU_MODEL, '-smp', str(settings['vcpus']), '-m', str(settings['work_memory_mib']),
             '-L', 'runtime/qemu-11.1.0/share', '-nic', 'none', '-display', 'sdl,gl=off',
             '-vga', 'std', '-serial', 'none',
             '-chardev', 'ringbuf,id=wcrefreturn,size=16777216', '-serial', 'chardev:wcrefreturn',
             '-parallel', 'none', '-monitor', 'none', '-qmp', 'stdio', '-S', '-no-reboot',
-            '-smbios', 'type=1,serial=' + serial,
             '-drive', 'if=pflash,unit=0,format=raw,readonly=on,file=' + CODE,
             '-drive', 'if=pflash,unit=1,format=raw,file=' + relative + '/vars.fd',
             '-drive', 'if=ide,index=0,format=qcow2,file=' + relative + '/overlay.qcow2',
@@ -96,6 +96,7 @@ def arguments(operation, reference_id, settings, gateway=False, template_nonce=N
             '-drive', 'if=none,id=wcrefhand,format=raw,readonly=on,file=fat:' + relative + '/' + handoff,
             '-device', 'usb-storage,drive=wcrefhand,bus=wcrefusb.0,removable=on',
             '-boot', 'order=c,strict=on']
+    result += windows_hardware.arguments(serial)
     if gateway:
         result += network_arguments('work', relative, lan_port=settings['lan_port'])
     return result
@@ -444,8 +445,7 @@ def run(root, operation, gateway=False, template=False):
                  'network': 'gateway' if gateway else 'none', 'gateway': gateway_record,
                  'template_nonce': template_nonce, 'template_received': False}
         argv = arguments(operation, manifest['reference_id'], load_settings(root), gateway=gateway, template_nonce=template_nonce)
-        env = os.environ.copy()
-        env['PATH'] = str(runtime.engine_path(root).parent) + ';' + os.environ['SystemRoot'] + '\\System32;' + os.environ['SystemRoot']
+        env = runtime.qemu_environment(root)
         controls = queue.Queue()
         def stdin_controls():
             for line in sys.stdin:

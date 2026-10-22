@@ -107,7 +107,7 @@ internal static class DesktopLifecycleWiring
         {
             Layout(form); form.DisplayReport(Report("retry")); Context(); Pump(form.RunAction("start", false));
             Assert(reads == 1, "An uncertain start must refresh diagnostics immediately");
-            Assert(!form.StartButton.Enabled && !form.SettingsButton.Enabled, "An uncertain start must hold the mutation gate");
+            Assert(!form.StartButton.Enabled && !form.SettingsPage.SaveButton.Enabled && form.SettingsButton.Enabled, "An uncertain start must hold the mutation gate while leaving navigation available");
             current["startup"] = new Dictionary<string,object> { { "receipt", receipt }, { "phase", "ready" }, { "supervisor_active", true } };
             typeof(MainForm).GetField("lifecycleEnabled", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(form, true);
             Context(); Pump(form.RefreshRuntimeAsync());

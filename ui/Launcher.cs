@@ -289,7 +289,7 @@ internal sealed partial class MainForm : Form
         Font = new Font("Segoe UI", 9.5f), Margin = new Padding(0, 0, 0, 12),
         Text = "Проверит файлы, необходимые для запуска Windows, и восстановит недостающие или повреждённые. Интернет не нужен." };
     private readonly ProgressBar progress = new ProgressBar { Dock = DockStyle.Fill, Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 25, Visible = false, Height = 4 };
-    private readonly Panel pages = new Panel { Dock = DockStyle.Fill, BackColor = NativeStyle.Background };
+    private readonly Panel pages = new CompositedPanel { Dock = DockStyle.Fill, BackColor = NativeStyle.Background };
     private readonly Panel overview = new Panel { Dock = DockStyle.Fill, BackColor = NativeStyle.Background };
     private readonly Panel diagnostics = new Panel { Dock = DockStyle.Fill, BackColor = NativeStyle.Background };
     private readonly RoundedButton overviewButton = new RoundedButton { Text = "Главная", Segment = true, Selected = true, AutoSize = true, Padding = new Padding(14,10,14,10), Margin = new Padding(0,0,0,4), Glyph = AppGlyph.Home };
@@ -304,10 +304,14 @@ internal sealed partial class MainForm : Form
     private readonly Dictionary<AppPage,Control> pageControls = new Dictionary<AppPage,Control>();
     private readonly Dictionary<AppPage,RoundedButton> navigation = new Dictionary<AppPage,RoundedButton>();
     private bool settingsLoaded;
+    private Task settingsRead;
+    private int settingsRevision;
     private bool displaySettingsLoaded;
     private bool viewerSettingsLoaded;
     private Dictionary<string,object> settingsHost;
     private bool profilesLoaded;
+    private Task profilesRead;
+    private TaskCompletionSource<bool> profileReadReady;
     private bool stopAvailable;
     private bool runtimeActive;
     private string workState = "unknown";
@@ -323,6 +327,7 @@ internal sealed partial class MainForm : Form
     private TableLayoutPanel recoveryActions;
     private bool recoveryInRow = true;
     private int diagnosticsFailed = -1;
+    private string displayedChecks;
     private bool fittingDiagnostics;
     private readonly Button nextAction = MakeButton("Изменить настройки", false);
     private readonly Func<string, object, Task<Dictionary<string, object>>> run;
@@ -339,6 +344,7 @@ internal sealed partial class MainForm : Form
     private bool lifecycleEnabled;
     private bool runtimePolling;
     private bool panelHiddenForSession;
+    private bool panelDismissedByUser;
     private int operationRevision;
     internal Dictionary<string, object> ReadinessReport { get { return readinessReport; } }
     internal Dictionary<string, object> OperationResult { get { return operationResult; } }
@@ -362,44 +368,88 @@ internal sealed partial class MainForm : Form
     private void SelectPage(bool showDiagnostics) { SelectPage(showDiagnostics ? AppPage.Diagnostics : AppPage.Home); }
     private void SelectPage(AppPage page)
     {
-        ActivePage = page; showingDiagnostics = page == AppPage.Diagnostics;
-        if (!busy && !outcomeUnknown) operation.Visible = false;
-        foreach (KeyValuePair<AppPage,Control> item in pageControls) item.Value.Visible = item.Key == page;
-        pageControls[page].BringToFront();
-        foreach (KeyValuePair<AppPage,RoundedButton> item in navigation) item.Value.Selected = item.Key == page;
+        pages.SuspendLayout();
+        try
+        {
+            ActivePage = page; showingDiagnostics = page == AppPage.Diagnostics;
+            if (!busy && !outcomeUnknown && String.IsNullOrEmpty(operation.Text)) operation.Visible = false;
+            Control target=pageControls[page];
+            target.Bounds=pages.DisplayRectangle;target.PerformLayout();
+            target.BringToFront();target.Visible=true;
+            foreach (KeyValuePair<AppPage,Control> item in pageControls) if(item.Key != page) item.Value.Visible = false;
+            foreach (KeyValuePair<AppPage,RoundedButton> item in navigation) item.Value.Selected = item.Key == page;
+        }
+        finally { pages.ResumeLayout(true); }
     }
 
     internal async Task NavigateAsync(AppPage page)
     {
         if (!CanUpdate) return;
         SelectPage(page);
-        if (page == AppPage.Diagnostics) { await RunAction("diagnose", true); return; }
-        if (page == AppPage.Connection) { if (!profilesLoaded) await ProfileActionAsync("list-profiles", null); return; }
-        if (page != AppPage.Settings || settingsLoaded || !BeginOperation("get-settings")) return;
-        try
+        if (page == AppPage.Diagnostics) { if(readinessReport == null) await RunAction("diagnose", false); return; }
+        if (page == AppPage.Connection)
         {
-            Dictionary<string,object> reply = await run("get-settings", null);
-            if (!CanUpdate) return;
-            if (!Bridge.Ok(reply)) { operation.Text = SettingsPage.Error.Text = Bridge.Message(reply); SettingsPage.Error.Visible = true; return; }
-            SettingsPage.LoadValues((Dictionary<string,object>)reply["settings"], Flag(reply,"recovery_required"));
-            if (reply.ContainsKey("windows_settings"))
+            if(!profilesLoaded)
             {
-                SettingsPage.LoadWindowsValues((Dictionary<string,object>)reply["windows_settings"],
-                    reply.ContainsKey("windows_disk") ? (Dictionary<string,object>)reply["windows_disk"] : null);
+                if(profilesRead == null || profilesRead.IsCompleted) profilesRead = ReadProfilesAsync();
+                await profilesRead;
+            }
+            return;
+        }
+        if (page != AppPage.Settings || settingsLoaded || busy || outcomeUnknown) return;
+        if(settingsRead == null || settingsRead.IsCompleted) settingsRead = ReadSettingsAsync();
+        await settingsRead;
+    }
+
+    private bool InitializeSettings(Dictionary<string,object> reply)
+    {
+        if(settingsLoaded)return true;
+        var values=reply.ContainsKey("settings") ? reply["settings"] as Dictionary<string,object> : null;
+        if(values==null)return false;
+        if(!SettingsPage.Dirty)
+        {
+            SettingsPage.LoadValues(values, Flag(reply,"recovery_required"));
+            if(reply.ContainsKey("windows_settings"))
+            {
+                SettingsPage.LoadWindowsValues(reply["windows_settings"] as Dictionary<string,object>,
+                    reply.ContainsKey("windows_disk") ? reply["windows_disk"] as Dictionary<string,object> : null);
                 displaySettingsLoaded = true;
             }
-            if (reply.ContainsKey("viewer_settings"))
+            if(reply.ContainsKey("viewer_settings"))
             {
-                SettingsPage.LoadViewerValues((Dictionary<string,object>)reply["viewer_settings"]);
+                SettingsPage.LoadViewerValues(reply["viewer_settings"] as Dictionary<string,object>);
                 viewerSettingsLoaded = true;
             }
             SettingsPage.LoadFileSharingValues(reply.ContainsKey("file_settings") ? reply["file_settings"] as Dictionary<string,object> : null);
-            if (reply.ContainsKey("host")) settingsHost = reply["host"] as Dictionary<string,object>;
-            SettingsPage.LoadHostValues(settingsHost);
-            settingsLoaded = true; operation.Text = "";
         }
-        catch (Exception) { if (CanUpdate) { operation.Text = SettingsPage.Error.Text = "Не удалось загрузить настройки. Повтори после проверки компонентов."; SettingsPage.Error.Visible = true; } }
-        finally { if (CanUpdate) Busy(false); }
+        if(reply.ContainsKey("host")) settingsHost = reply["host"] as Dictionary<string,object>;
+        SettingsPage.LoadHostValues(settingsHost);
+        settingsLoaded = SettingsPage.HasValues;
+        SettingsPage.SetLoading(!settingsLoaded);
+        Busy(busy);
+        return settingsLoaded;
+    }
+
+    private async Task ReadSettingsAsync()
+    {
+        int revision = settingsRevision;
+        SettingsPage.SetLoading(true);
+        try
+        {
+            Dictionary<string,object> reply = await run("get-settings", null);
+            if (!CanUpdate || settingsLoaded) return;
+            if(revision != settingsRevision)
+            { SettingsPage.SetLoading(true,"Настройки обновились. Открой раздел ещё раз для загрузки.");return; }
+            if (!Bridge.Ok(reply)) { SettingsLoadFailed(Bridge.Message(reply)); return; }
+            if(!InitializeSettings(reply))SettingsLoadFailed("Ответ не содержит настроек. Открой раздел ещё раз для загрузки.");
+        }
+        catch (Exception) { if (CanUpdate && !settingsLoaded && revision == settingsRevision) SettingsLoadFailed("Не удалось загрузить настройки. Открой раздел ещё раз после проверки компонентов."); }
+    }
+
+    private void SettingsLoadFailed(string message)
+    {
+        SettingsPage.Error.Text=message;SettingsPage.Error.Visible=true;
+        SettingsPage.SetLoading(true,message);
     }
 
     internal MainForm() : this(true, (Func<string, object, Task<Dictionary<string, object>>>)null) { }
@@ -416,11 +466,12 @@ internal sealed partial class MainForm : Form
             SavePanelBounds();
             if (lifecycleEnabled && args.CloseReason == CloseReason.UserClosing
                 && (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start")))
-            { args.Cancel = true; HidePanelForSession(); return; }
+            { args.Cancel = true; panelDismissedByUser = true; HidePanelForSession(); return; }
             closing = true;
         };
         Disposed += delegate {
             closing = true; lifecycleTimer.Stop(); lifecycleTimer.Dispose();
+            if(profileReadReady != null)profileReadReady.TrySetResult(true);
             tips.Dispose();
             if (trayIcon != null)
             {
@@ -430,10 +481,13 @@ internal sealed partial class MainForm : Form
             }
         };
         Font = new Font("Segoe UI", 10);
+        SettingsPage.SetLoading(true);
+        ConnectionPage.SetLoading(true);
         ForeColor = Ink;
         BackColor = NativeStyle.Background;
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
+        FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false;
         ClientSize = new Size(960, 640);
         MinimumSize = new Size(900, 620);
         StartPosition = FormStartPosition.CenterScreen;
@@ -467,14 +521,17 @@ internal sealed partial class MainForm : Form
         }
         TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = new Padding(32,26,32,14) };
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        content.RowStyles.Add(new RowStyle(SizeType.Percent,100)); content.RowStyles.Add(new RowStyle(SizeType.AutoSize)); content.RowStyles.Add(new RowStyle(SizeType.Absolute,4));
+        RowStyle operationRow=new RowStyle(SizeType.Absolute);
+        content.RowStyles.Add(new RowStyle(SizeType.Percent,100)); content.RowStyles.Add(operationRow); content.RowStyles.Add(new RowStyle(SizeType.Absolute,4));
         content.Controls.Add(pages,0,0); operation.Margin = new Padding(0,6,0,0);
         frame.Controls.Add(nav,0,0); frame.Controls.Add(content,1,0);
         pageControls.Add(AppPage.Home,overview); pageControls.Add(AppPage.Connection,ConnectionPage); pageControls.Add(AppPage.Settings,SettingsPage); pageControls.Add(AppPage.Diagnostics,diagnostics); pageControls.Add(AppPage.Help,helpPage);
         foreach (Control page in pageControls.Values) { page.Dock = DockStyle.Fill; pages.Controls.Add(page); }
         TableLayoutPanel help = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
         help.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); help.RowStyles.Add(new RowStyle(SizeType.AutoSize)); help.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        help.Controls.Add(NativeStyle.PageHeader(help,"Справка"),0,0); help.Controls.Add(HelpGrid(),0,1); helpPage.Controls.Add(help);
+        ReleaseInfo release=ReleaseInfo.Read(Bridge.Root);
+        Label version=new Label { Text=release.DisplayText, AutoSize=true, ForeColor=Muted, Font=new Font("Segoe UI",9), AccessibleDescription=release.SourceCommit==null?"Метаданные выпуска отсутствуют":"Исходный commit: "+release.SourceCommit };
+        help.Controls.Add(NativeStyle.PageHeader(help,"Справка",version),0,0); help.Controls.Add(HelpGrid(),0,1); helpPage.Controls.Add(help);
         // Home as in the mockup: title with the state chip, a status card (icon, text, actions, then four steps),
         // three info cards that open their pages, and the keys along the bottom.
         TableLayoutPanel home = homeLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Margin = Padding.Empty };
@@ -568,7 +625,8 @@ internal sealed partial class MainForm : Form
         }
         recovery.Controls.Add(recoveryTitle,0,0); recovery.Controls.Add(actions,0,1);
         diagnosticLayout.Controls.Add(recovery,0,3); reportLocation.Margin = new Padding(0,4,0,0); diagnosticLayout.Controls.Add(reportLocation,0,4); diagnostics.Controls.Add(diagnosticLayout);
-        operation.Height=operation.Font.Height+4;operation.FontChanged+=delegate{operation.Height=operation.Font.Height+4;};
+        EventHandler fitOperation=delegate{operation.Height=operation.Font.Height+4;operationRow.Height=operation.Height+operation.Margin.Vertical;};
+        fitOperation(null,EventArgs.Empty);operation.FontChanged+=fitOperation;
         content.Controls.Add(operation,0,1); content.Controls.Add(progress,0,2); Controls.Add(frame);
         overview.Layout += delegate { FitHome(); }; homeLayout.Layout += delegate { FitHome(); };
         overview.Resize += delegate {
@@ -649,15 +707,21 @@ internal sealed partial class MainForm : Form
     {
         if (!CanUpdate) return;
         bool wasHidden = !Visible;
+        panelDismissedByUser = false;
         panelHiddenForSession = false;
         if (home && wasHidden) SelectPage(AppPage.Home);
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Show(); Activate(); UpdateTray();
     }
 
+    private void ShowPanelAutomatically()
+    {
+        if (!panelDismissedByUser) ShowPanel(true);
+    }
+
     private void RuntimeRefreshFailed(string message)
     {
-        ShowPanel(true);
+        ShowPanelAutomatically();
         status.Text = "Состояние Windows не подтверждено";
         nextStep.Text = message; operation.Text = message; operation.Visible = true;
         checkedAt.Text = "Состояние не обновилось. Повтори диагностику.";
@@ -687,7 +751,7 @@ internal sealed partial class MainForm : Form
             if (changed) { Display(report); Busy(false); }
             bool workActive = workState == "running" || workState == "starting" || workState == "restarting" || workState == "stopping";
             if (panelHiddenForSession && (!workActive || !Bridge.Ok(report) || outcomeUnknown
-                || DisplayState(report) == "failed" || DisplayState(report) == "unconfirmed")) ShowPanel(true);
+                || DisplayState(report) == "failed" || DisplayState(report) == "unconfirmed")) ShowPanelAutomatically();
             UpdateTray();
         }
         catch (Exception)
@@ -706,6 +770,7 @@ internal sealed partial class MainForm : Form
     }
 
     private TableLayoutPanel homeLayout, homeCards, homeSteps;
+    private readonly bool[] homePartsVisible = {true,true,true};
     private bool fittingHome;
     // Large text on a small window: drop the secondary parts first, never the status or the main action.
     private void FitHome()
@@ -714,19 +779,27 @@ internal sealed partial class MainForm : Form
         fittingHome = true;
         try
         {
-            // Row heights read inside a layout pass are stale, so measure preferred sizes instead.
             Control[] optional = {homeKeys, homeCards, homeSteps};
-            foreach (Control item in optional) item.Visible = true;
             int width = homeLayout.ClientSize.Width;
-            // Visible reads false while the window itself is hidden, so track what was dropped here.
-            HashSet<Control> dropped = new HashSet<Control>();
-            Func<int> needed = () => homeLayout.Controls.Cast<Control>().Where(item => !dropped.Contains(item))
-                .Sum(item => item.GetPreferredSize(new Size(width - item.Margin.Horizontal,0)).Height + item.Margin.Vertical);
-            foreach (Control item in optional)
+            Func<Control,int> height = item => item.GetPreferredSize(new Size(Math.Max(1,width-item.Margin.Horizontal),0)).Height+item.Margin.Vertical;
+            int[] optionalHeights={height(homeKeys),height(homeCards),
+                homeSteps.GetPreferredSize(new Size(Math.Max(1,homeSteps.Parent.ClientSize.Width-homeSteps.Margin.Horizontal),0)).Height+homeSteps.Margin.Vertical};
+            int needed=homeLayout.Controls.Cast<Control>().Sum(height);
+            // Steps alone occupy the summary's second AutoSize row; include it even when currently hidden.
+            if(!homePartsVisible[2])needed+=optionalHeights[2];
+            bool[] visible={true,true,true};
+            for(int index=0;index<optional.Length && needed>homeLayout.ClientSize.Height;index++)
             {
-                if (needed() <= homeLayout.ClientSize.Height) break;
-                item.Visible = false; dropped.Add(item);
+                visible[index]=false;needed-=optionalHeights[index];
             }
+            if(visible.SequenceEqual(homePartsVisible))return;
+            homeLayout.SuspendLayout();homeSteps.Parent.SuspendLayout();
+            try
+            {
+                for(int index=0;index<optional.Length;index++)if(homePartsVisible[index]!=visible[index])
+                { homePartsVisible[index]=visible[index];optional[index].Visible=visible[index]; }
+            }
+            finally { homeSteps.Parent.ResumeLayout(true);homeLayout.ResumeLayout(true); }
         }
         finally { fittingHome = false; }
     }
@@ -805,15 +878,17 @@ internal sealed partial class MainForm : Form
         {
             int width = diagnosticsLayout.ClientSize.Width;
             int column = (width - 10 * recoveryItems.Count) / Math.Max(1, recoveryItems.Count);
-            foreach (TableLayoutPanel item in recoveryItems) item.Controls[0].MinimumSize = Size.Empty;
-            bool even = recoveryItems.All(item => item.Controls[0].PreferredSize.Width <= column);
-            int[] own = recoveryItems.Select(item => even ? column : Math.Min(width - 10, Math.Max(item.Controls[0].PreferredSize.Width,
+            int[] natural=recoveryItems.Select(item=>((RoundedButton)item.Controls[0]).ContentPreferredSize.Width).ToArray();
+            bool even = natural.All(size => size <= column);
+            int[] own = recoveryItems.Select((item,index) => even ? column : Math.Min(width - 10, Math.Max(natural[index],
                 TextRenderer.MeasureText("Подключения и Windows", item.Controls[1].Font).Width + 12))).ToArray();
             bool inRow = own.Sum() + 10 * own.Length <= width;
             for (int index = 0; index < recoveryItems.Count; index++)
             {
-                TableLayoutPanel item = recoveryItems[index]; int size = inRow ? own[index] : Math.Min(width - 10, item.Controls[0].PreferredSize.Width);
-                item.Controls[0].MinimumSize = new Size(size, 0); item.Controls[1].MaximumSize = new Size(Math.Max(40, Math.Max(size, own[index]) - 6), 0);
+                TableLayoutPanel item = recoveryItems[index]; int size = inRow ? own[index] : Math.Min(width - 10, natural[index]);
+                Size minimum=new Size(Math.Max(0,size),0),maximum=new Size(Math.Max(40,Math.Max(size,own[index])-6),0);
+                if(item.Controls[0].MinimumSize!=minimum)item.Controls[0].MinimumSize=minimum;
+                if(item.Controls[1].MaximumSize!=maximum)item.Controls[1].MaximumSize=maximum;
             }
             if (inRow != recoveryInRow)
             {
@@ -831,8 +906,9 @@ internal sealed partial class MainForm : Form
         OpenDesktopButton.Visible = workState == "running";
         OpenDesktopButton.Enabled = !value && !outcomeUnknown && workState == "running";
         copyReportButton.Enabled = !value && !String.IsNullOrEmpty(details.Text);
-        SettingsButton.Enabled = PrepareButton.Enabled = RepairGatewayButton.Enabled = !value && !outcomeUnknown;
-        ConnectionButton.Enabled = DiagnosticsButton.Enabled = overviewButton.Enabled = refreshButton.Enabled = nextAction.Enabled = sessionState.Enabled = !value;
+        PrepareButton.Enabled = RepairGatewayButton.Enabled = !value && !outcomeUnknown;
+        SettingsButton.Enabled = ConnectionButton.Enabled = DiagnosticsButton.Enabled = overviewButton.Enabled = HelpButton.Enabled = sessionState.Enabled = true;
+        refreshButton.Enabled = nextAction.Enabled = !value;
         PrepareHostButton.Enabled = !value && !outcomeUnknown && File.Exists(Path.Combine(Bridge.Root,"scripts","Prepare-Host.ps1"));
         StopButton.Enabled = !value && !outcomeUnknown && stopAvailable;
         StopButton.Visible = stopAvailable;
@@ -841,15 +917,17 @@ internal sealed partial class MainForm : Form
         SettingsPage.CancelButton.Enabled = !value && !outcomeUnknown && settingsLoaded;
         foreach (TextBox field in SettingsPage.Fields.Values) field.Enabled = !value && !outcomeUnknown;
         SettingsPage.Resolution.Enabled = !value && !outcomeUnknown;
-        SettingsPage.SetFilesEnabled(!value && !outcomeUnknown);
+        SettingsPage.SetEditingEnabled(!value && !outcomeUnknown && settingsLoaded);
         SettingsPage.StartFullscreen.Enabled = SettingsPage.RememberWindow.Enabled = !value && !outcomeUnknown && viewerSettingsLoaded;
-        SettingsPage.LoadHostValues(settingsHost);
-        if (value || outcomeUnknown) SettingsPage.RecommendedButton.Enabled = false;
         ConnectionPage.SetBusy(value || outcomeUnknown);
         progress.Visible = value;
         operation.Visible = value || outcomeUnknown || !String.IsNullOrEmpty(operation.Text);
         UseWaitCursor = value;
         UpdateTray();
+        if(!value && profileReadReady != null)
+        {
+            var waiting=profileReadReady;profileReadReady=null;waiting.TrySetResult(true);
+        }
     }
 
     private static string VmState(string state, bool gateway = false)
@@ -940,6 +1018,7 @@ internal sealed partial class MainForm : Form
         if (isReadiness)
         {
             readinessReport = result;
+            InitializeSettings(result);
             if (result.ContainsKey("host"))
             {
                 settingsHost = result["host"] as Dictionary<string,object>;
@@ -1045,8 +1124,14 @@ internal sealed partial class MainForm : Form
         string warning = TextValue(report, "network_warning", network.Text);
         network.Text = warning;
         network.Visible = warning.Length > 0;
-        checkRows.SuspendLayout();
-        while (checkRows.Controls.Count > 0) { Control old = checkRows.Controls[0]; checkRows.Controls.RemoveAt(0); old.Dispose(); }
+        string signature=checks.Count==0 ? "message:"+Bridge.Message(result) : "checks:"+new JavaScriptSerializer().Serialize(
+            checks.Select(item=>new object[]{Flag(item,"passed"),TextValue(item,"title","Проверка"),TextValue(item,"detail","")}).ToArray());
+        bool rebuildChecks=signature!=displayedChecks;
+        if(rebuildChecks)
+        {
+            checkRows.SuspendLayout();
+            while (checkRows.Controls.Count > 0) { Control old = checkRows.Controls[0]; checkRows.Controls.RemoveAt(0); old.Dispose(); }
+        }
         List<string> lines = new List<string>();
         foreach (Dictionary<string, object> item in checks)
         {
@@ -1054,6 +1139,7 @@ internal sealed partial class MainForm : Form
             string title = TextValue(item, "title", "Проверка");
             string detail = TextValue(item, "detail", "");
             lines.Add((passed ? "Готово: " : "Нужно исправить: ") + title + Environment.NewLine + detail);
+            if(!rebuildChecks)continue;
             RoundedPanel card = new RoundedPanel { BackColor = Color.White, Padding = new Padding(44, 10, 12, 10), Margin = new Padding(0, 0, 10, 10), AccessibleName = (passed ? "Готово: " : "Нужно внимание: ") + title };
             TableLayoutPanel text = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty, BackColor = Color.White };
             text.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); text.RowStyles.Add(new RowStyle(SizeType.AutoSize)); text.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -1066,7 +1152,7 @@ internal sealed partial class MainForm : Form
         if (checks.Count == 0)
         {
             lines.Add(Bridge.Message(result));
-            checkRows.Controls.Add(new Label { Text = Bridge.Message(result), AutoSize = true, Padding = new Padding(12), ForeColor = Ink });
+            if(rebuildChecks)checkRows.Controls.Add(new Label { Text = Bridge.Message(result), AutoSize = true, Padding = new Padding(12), ForeColor = Ink });
         }
         if (warning.Length > 0) lines.Add(warning);
         string reportPath = TextValue(report, "diagnostic_report", "");
@@ -1074,11 +1160,14 @@ internal sealed partial class MainForm : Form
         reportLocation.Text = reportPath.Length > 0 ? "Отчёт сохранён: " + reportPath : TextValue(report, "diagnostic_report_error", "");
         details.Text = String.Join(Environment.NewLine + Environment.NewLine, lines);
         details.SelectionStart = 0;
-        FitCheckRows();
-        checkRows.ResumeLayout(true);
-        if (diagnosticsLayout != null) diagnosticsLayout.PerformLayout();
-        checkRows.AutoScrollPosition = Point.Empty;
-        if (checkRows.Controls.Count > 0) checkRows.ScrollControlIntoView(checkRows.Controls[0]);
+        if(rebuildChecks)
+        {
+            FitCheckRows();checkRows.ResumeLayout(true);
+            displayedChecks=signature;
+            if (diagnosticsLayout != null) diagnosticsLayout.PerformLayout();
+            checkRows.AutoScrollPosition = Point.Empty;
+            if (checkRows.Controls.Count > 0) checkRows.ScrollControlIntoView(checkRows.Controls[0]);
+        }
         if (!isReadiness && !Bridge.Ok(result) && checks.Count > 0) lines.Insert(0, Bridge.Message(result));
         details.Text = String.Join(Environment.NewLine + Environment.NewLine, lines);
         StartButton.Enabled = !busy && ready && !outcomeUnknown && !runtimeActive;
@@ -1101,6 +1190,7 @@ internal sealed partial class MainForm : Form
             return false;
         }
         activeOperationAction = action;
+        if(action != "diagnose" && action != "get-settings" && action != "list-profiles" && action != "get-profile-view") settingsRevision++;
         operationRevision++;
         Busy(true);
         switch (action)
@@ -1181,7 +1271,7 @@ internal sealed partial class MainForm : Form
                     && ready && workState == "running" && !outcomeUnknown) HidePanelForSession();
                 else if (lifecycleEnabled && panelHiddenForSession
                     && (workState == "stopped" || workState == "failed" || outcomeUnknown
-                        || (action == "start" && !Bridge.Ok(completed)))) ShowPanel(true);
+                        || (action == "start" && !Bridge.Ok(completed)))) ShowPanelAutomatically();
                 UpdateTray();
             }
         }
@@ -1346,6 +1436,8 @@ internal static class Program
         {
             if (args.Length >= 2 && args[0] == "--args-probe") { WriteNewJson(args[1], args.Skip(2).ToArray()); return 0; }
             if (args.Length == 2 && args[0] == "--self-test") return SelfTest(args[1]);
+            string blocked=ReleaseInfo.StartupBlockReason(Bridge.Root);
+            if(blocked!=null) { MessageBox.Show(blocked,"Windows Claude");return 1; }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());

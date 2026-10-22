@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory=$true)][string]$Setup,
     [Parameter(Mandatory=$true)][string]$Payload,
     [Parameter(Mandatory=$true)][string]$Output,
-    [Parameter(Mandatory=$true)][string]$Evidence
+    [Parameter(Mandatory=$true)][string]$Evidence,
+    [Parameter(Mandatory=$true,HelpMessage='Expected Setup SHA256 from the approved RELEASE.json.')]
+    [ValidatePattern('(?-i)\A[a-f0-9]{64}\z')][string]$ExpectedSetupSHA256
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $PSScriptRoot))).TrimEnd('\')
@@ -40,7 +42,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Distribution harness self-check failed.' }
     $stdout = Join-Path $Evidence 'progress.log'
     $stderr = Join-Path $Evidence 'stderr.log'
-    $arguments = @($Setup, $Payload, $Output, (Join-Path $Evidence 'result.json')) | ForEach-Object { '"' + $_ + '"' }
+    $arguments = @($Setup, $Payload, $Output, (Join-Path $Evidence 'result.json'), $ExpectedSetupSHA256) | ForEach-Object { '"' + $_ + '"' }
     $process = Start-Process -FilePath $harness -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     # Keep a process handle so Windows PowerShell retains ExitCode after a fast exit.
     $null = $process.Handle

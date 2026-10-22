@@ -29,7 +29,7 @@ DATA_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 PUBLIC_FILES = ('Launcher.exe', 'config/runtime.json')
 APP_FILES = tuple('scripts/' + name for name in (
     'portable_app.py', 'launch_runtime.py', 'control_guest_install.py',
-    'runtime_network_plan.py', 'runtime_config.py', 'connection_profile.py',
+    'runtime_network_plan.py', 'runtime_config.py', 'windows_hardware.py', 'connection_profile.py',
     'profile_store.py', 'gateway_controller.py', 'gateway_package.py',
     'gateway_profile.py', 'session_carrier.py', 'file_snapshot.py', 'runtime_logs.py', 'windows_guest_settings.py',
     'host_file_sharing.py', 'file_share_carrier.py',
@@ -56,7 +56,7 @@ def safe_name(name):
 def allowed(name):
     return safe_name(name) and (name in (*DATA_FILES, *PUBLIC_FILES, *APP_FILES, *COMPONENT_FILES,
         *GATEWAY_RECOVERY, *FILE_COMPONENT_FILES, PROFILE_FILE, 'gateway/packages/current.json',
-        'config/windows.json', 'config/viewer.json', 'config/files.json')
+        'config/windows.json', 'config/viewer.json', 'config/files.json', 'release-info.json')
         or name.startswith(RUNTIME_PREFIXES)
         or re.fullmatch(r'gateway/packages/releases/[a-z0-9][a-z0-9._-]{0,63}/(manifest.json|gateway.qcow2)', name))
 
@@ -104,6 +104,15 @@ def _json(reader, maximum=MAX_METADATA):
     return json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique)
 
 
+def validate_release_info(value):
+    if (type(value) is not dict or set(value) != {'schema', 'release_id', 'source_commit'}
+            or type(value['schema']) is not int or value['schema'] != 1
+            or type(value['release_id']) is not str or not re.fullmatch(r'[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]{0,8}', value['release_id'])
+            or type(value['source_commit']) is not str or not re.fullmatch('[a-f0-9]{40}', value['source_commit'])):
+        raise ValueError('Invalid release provenance')
+    return value
+
+
 def validate_public_file(name, reader):
     if name == 'config/runtime.json':
         validate_settings(_json(reader, 65536))
@@ -113,6 +122,8 @@ def validate_public_file(name, reader):
         validate_viewer_settings(_json(reader, 16384))
     elif name == 'config/files.json':
         host_file_sharing.validate_settings(_json(reader, 65536))
+    elif name == 'release-info.json':
+        validate_release_info(_json(reader, 4096))
     elif name == 'Launcher.exe':
         header = reader.read(64)
         if len(header) != 64 or header[:2] != b'MZ':
@@ -196,6 +207,8 @@ def collect(project, source=None, mode='personal'):
     with _pinned_directory(project, create=False):
         for name in (*DATA_FILES, *PUBLIC_FILES, *APP_FILES, COMPONENT_FILES[0]):
             add(name)
+        if _optional_file(project, 'release-info.json'):
+            add('release-info.json')
         if _optional_file(project, 'config/windows.json'):
             add('config/windows.json')
         if _optional_file(project, 'config/viewer.json'):

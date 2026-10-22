@@ -23,9 +23,11 @@ Assert-Plain $operation
 try {
     $manifestPath=Join-Path $Project 'runtime/components-manifest.json'
     $archivePath=Join-Path $Project 'runtime/components-recovery.zip'
-    # Trimmed runtime after scripts/patch_qemu_engine.py (deterministic: every patched copy has these bytes).
-    if ((Hash-File $manifestPath) -ne '7d674dec3485e04018a408924ad833eca41a02aa8f8de62d66040a627ce962bc' -or
-        (Hash-File $archivePath) -ne 'b315305c5e5c7908e97b641c238ad25feb9fcee48038748bb4dfbfbb7b7dfb36') { throw 'Unexpected trimmed runtime' }
+    $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $engineName='runtime/qemu-11.1.0/qemu-system-x86_64.exe'
+    $engineRecords=@($manifest.files | Where-Object { $_.path -ceq $engineName })
+    if ($engineRecords.Count -ne 1 -or (Hash-File (Join-Path $Project $engineName)) -ne $engineRecords[0].sha256) { throw 'Engine differs from the component manifest' }
+    $report.qemu_engine_sha256=$engineRecords[0].sha256
     foreach ($relative in @('runtime/components-manifest.json','runtime/components-recovery.zip','scripts/Prepare-Dependencies.ps1')) {
         Assert-Plain (Join-Path $Project $relative)
         [IO.File]::Copy((Join-Path $Project $relative),(Join-Path $fixture $relative),$false)
@@ -43,7 +45,6 @@ try {
     $report.stage='repair'
     $reply=$run.Invoke($null,[object[]]@([string]$fixture,'prepare-components',$null))
     $report.repair_result=$reply
-    $manifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $reply['ok'] -or $reply['code'] -ne 'repaired' -or $reply['repaired_files'] -ne $manifest.files.Count) { throw 'Actual EXE component recovery failed' }
     foreach ($entry in $manifest.files) {
         $file=Join-Path $fixture $entry.path
@@ -55,8 +56,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Restored Python did not execute' }
     $imageVersion=& (Join-Path $fixture 'runtime/qemu-11.1.0/qemu-img.exe') --version 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'Restored qemu-img did not execute' }
+    $engineVersion=& (Join-Path $fixture $engineName) --version 2>&1
+    if ($LASTEXITCODE -ne 0) { throw 'Restored QEMU did not execute' }
     $report.python_version=[string]$pythonVersion
     $report.qemu_img_version=[string]($imageVersion | Select-Object -First 1)
+    $report.qemu_version=[string]($engineVersion | Select-Object -First 1)
     $report.passed=$report.started_without_python -and $report.missing_python_offers_repair
 } catch {
     $report.failure_type=$_.Exception.GetType().Name
