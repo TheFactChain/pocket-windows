@@ -26,6 +26,7 @@ internal static class FileSharingSettingsRegression
             Assert(typeof(SettingsEditor).GetMethod("LoadFileSharingValues",BindingFlags.Instance|BindingFlags.NonPublic)!=null,"Missing separate file sharing settings contract");
             using(SettingsEditor editor=new SettingsEditor())
             {
+                editor.ShowSection(2);
                 Load(editor,null,null);var value=Get(editor);Assert((string)value["mode"]=="off"&&((string[])value["folders"]).Length==0&&value.Count==3,"Defaults must be off with separate schema");
                 ComboBox mode=Tree(editor).OfType<ComboBox>().Single(item=>item.AccessibleName=="Доступ к файлам ПК");
                 ListBox folders=Tree(editor).OfType<ListBox>().Single();

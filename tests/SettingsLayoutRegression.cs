@@ -102,6 +102,14 @@ internal static class SettingsLayoutRegression
                 }
                 Inside(editor.SaveButton,host,"Save");Inside(editor.CancelButton,host,"Cancel");
                 Assert(editor.RecommendedButton.Width>=editor.RecommendedButton.GetPreferredSize(Size.Empty).Width,"Recommendations button text clipped at scale "+scale);
+                Panel pages=Tree(editor).OfType<Panel>().Single(panel=>panel.AutoScroll);
+                for(int section=0;section<3;section++)
+                {
+                    editor.ShowSection(section);Layout(host);
+                    // Each section fits the window without a scroll bar at ordinary text sizes.
+                    if(scale<=1.5f&&(viewport.Width==710||scale==1f))Assert(!pages.VerticalScroll.Visible,"Settings section "+section+" needs a scroll bar at scale "+scale+" in "+viewport+": content "+pages.DisplayRectangle.Height+" > visible "+pages.ClientSize.Height);
+                }
+                editor.ShowSection(1);Layout(host);
                 foreach(CheckBox option in new[]{editor.StartFullscreen,editor.RememberWindow})Assert(option.Height>=TextRenderer.MeasureText(option.Text,option.Font,new Size(Math.Max(1,option.Width-32),0),TextFormatFlags.WordBreak).Height,"Viewer preference must show its complete text at scale "+scale);
                 Assert(editor.Resolution.Height>=TextRenderer.MeasureText("1920 × 1080",editor.Resolution.Font).Height,"Resolution text must not be clipped at scale "+scale);
                 Assert(editor.Resolution.Parent.ClientRectangle.Contains(editor.Resolution.Bounds),"Resolution selector must remain inside its rounded field: "+editor.Resolution.Bounds+" parent="+editor.Resolution.Parent.ClientRectangle+" scale="+scale);
@@ -109,9 +117,11 @@ internal static class SettingsLayoutRegression
                 scroll.ScrollControlIntoView(editor.RememberWindow);Layout(host);Inside(editor.RememberWindow,host,"Remember placement");
                 foreach(CheckBox option in new[]{editor.StartFullscreen,editor.RememberWindow})Assert(option.Height>=option.GetPreferredSize(new Size(option.Width,0)).Height,"Viewer preference text clipped at scale "+scale);
                 if(args.Length>0)using(Bitmap image=new Bitmap(editor.Width,editor.Height)){editor.DrawToBitmap(image,new Rectangle(Point.Empty,editor.Size));image.Save(Path.Combine(args[0],"settings-options-font"+(int)(scale*100)+"-"+viewport.Width+".png"),ImageFormat.Png);}
+                editor.ShowSection(2);Layout(host);
                 ComboBox fileMode=Tree(editor).OfType<ComboBox>().Single(item=>item.AccessibleName=="Доступ к файлам ПК");
-                scroll.ScrollControlIntoView(fileMode);Layout(host);Inside(fileMode,host,"File sharing mode");
-                Assert(fileMode.Height>=TextRenderer.MeasureText(fileMode.Text,fileMode.Font).Height,"File mode text clipped at scale "+scale);
+                foreach(Button mode in Tree(editor).OfType<Button>().Where(button=>new[]{"Выключено","Выбранные папки","Все диски ПК"}.Contains(button.Text)))
+                {scroll.ScrollControlIntoView(mode);Layout(host);Inside(mode,host,"File sharing mode button");Assert(mode.Height>=TextRenderer.MeasureText(mode.Text,mode.Font).Height,"File mode text clipped at scale "+scale);}
+                ListBox list=Tree(editor).OfType<ListBox>().Single();Assert(list.Height>=list.ItemHeight*3,"Folder list must show three whole rows at scale "+scale);
                 Button addFolder=Tree(editor).OfType<Button>().Single(button=>button.Text=="Добавить папку");
                 scroll.ScrollControlIntoView(addFolder);Layout(host);Inside(addFolder,host,"Add folder");
                 foreach(Button action in Tree(addFolder.Parent).OfType<Button>())Assert(action.Width>=action.GetPreferredSize(Size.Empty).Width&&action.Height>=action.GetPreferredSize(Size.Empty).Height,"Folder action clipped at scale "+scale);

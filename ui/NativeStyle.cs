@@ -36,6 +36,7 @@ internal sealed class RoundedButton : Button
 {
     internal bool Primary;
     internal bool Segment;
+    internal bool CenterText;
     internal AppGlyph? Glyph;
     public override Size GetPreferredSize(Size proposedSize)
     {
@@ -111,7 +112,7 @@ internal sealed class RoundedButton : Button
         if (Glyph.HasValue) AppIcons.Draw(e.Graphics, Glyph.Value, new Rectangle(14, (Height - 20) / 2, 20, 20), text);
         int textLeft = Glyph.HasValue ? 42 : 12;
         TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(textLeft, 4, Width - textLeft - 12, Height - 8), text,
-            (Segment ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter) | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | (ShowKeyboardCues ? 0 : TextFormatFlags.HidePrefix));
+            (Segment && !CenterText ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter) | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | (ShowKeyboardCues ? 0 : TextFormatFlags.HidePrefix));
         if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -7, -7), text, fill);
     }
 }

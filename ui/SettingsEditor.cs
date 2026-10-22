@@ -25,7 +25,8 @@ internal sealed class SettingsEditor : UserControl
     private Dictionary<string,object> originalViewer;
     private Dictionary<string,object> originalFileSharing;
     private readonly ComboBox fileSharingMode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Dock = DockStyle.Top, BackColor = NativeStyle.Background, AccessibleName = "Доступ к файлам ПК", Margin = new Padding(0,8,0,8) };
-    private readonly ListBox sharedFolders = new ListBox { Dock = DockStyle.Top, IntegralHeight = false, Height = 100, HorizontalScrollbar = true, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Выбранные папки ПК", Margin = new Padding(0,0,0,8) };
+    private readonly ListBox sharedFolders = new ListBox { Dock = DockStyle.Top, IntegralHeight = false, Height = 100, DrawMode = DrawMode.OwnerDrawFixed, BorderStyle = BorderStyle.None, BackColor = NativeStyle.Background, AccessibleName = "Выбранные папки ПК", Margin = new Padding(0,0,0,8) };
+    private readonly List<RoundedButton> modeButtons = new List<RoundedButton>();
     private int hostTotal = -1, hostAvailable = -1, hostProcessors = -1;
     private Label memoryGib;
     private readonly Label hostMemory = new Label { Text = "Данные памяти ПК пока недоступны.", AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,8,12,8) };
@@ -38,26 +39,39 @@ internal sealed class SettingsEditor : UserControl
         Dock = DockStyle.Fill;
         BackColor = NativeStyle.Background;
         Font = new Font("Segoe UI",10);
-        TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(2), Margin = Padding.Empty };
+        TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(2), Margin = Padding.Empty };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.Controls.Add(new Label { Text = "Настройки запуска", AutoSize = true, Font = new Font("Segoe UI",13,FontStyle.Bold), Margin = new Padding(0,0,0,2) },0,0);
-        root.Controls.Add(notice,0,1);
+        for(int index=0;index<6;index++)root.RowStyles.Add(index==3?new RowStyle(SizeType.Percent,100):new RowStyle(SizeType.AutoSize));
+        // Title and the "next start" note share one line: vertical space goes to the section itself.
+        TableLayoutPanel heading = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, RowCount = 1, Margin = new Padding(0,0,0,8) };
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));heading.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        heading.Controls.Add(new Label { Text = "Настройки", AutoSize = true, Font = new Font("Segoe UI",13,FontStyle.Bold), Margin = new Padding(0,0,16,0) },0,0);
+        notice.TextAlign = ContentAlignment.MiddleRight;notice.Margin = Padding.Empty;notice.Text = "Действует со следующего запуска";
+        heading.Controls.Add(notice,1,0);
+        root.Controls.Add(heading,0,0);
+        // Three short sections instead of one long scrolling form; each fits the window on its own.
+        RoundedPanel tabs = new RoundedPanel { Dock = DockStyle.Top, Height = 44, BackColor = Color.FromArgb(227,227,232), Padding = new Padding(3), Margin = new Padding(0,0,0,6), AccessibleName = "Разделы настроек", AccessibleRole = AccessibleRole.PageTabList };
+        TableLayoutPanel tabRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty, BackColor = tabs.BackColor };
+        for(int index=0;index<3;index++)tabRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33.33f));
+        tabRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        string[] sectionNames={"Ресурсы","Экран","Файлы ПК"};
+        for(int index=0;index<3;index++)
+        {
+            int section=index;
+            RoundedButton tab=new RoundedButton { Text = sectionNames[index], Segment = true, CenterText = true, Dock = DockStyle.Fill, Margin = Padding.Empty, AccessibleName = sectionNames[index] };
+            tab.Click+=delegate{ShowSection(section);};sectionButtons.Add(tab);tabRow.Controls.Add(tab,index,0);
+        }
+        tabs.Controls.Add(tabRow);
+        tabs.FontChanged+=delegate{tabs.Height=TextRenderer.MeasureText("Ресурсы",tabs.Font).Height+16;};
+        root.Controls.Add(tabs,0,2);
         Panel scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
-        RoundedPanel group = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.White, Padding = new Padding(16,10,16,10), Margin = Padding.Empty };
-        TableLayoutPanel rows = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 8, Margin = Padding.Empty };
-        rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,62));
-        rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,38));
+        TableLayoutPanel resources = SectionRows(), display = SectionRows();
         for(int index=0;index<keys.Length;index++)
         {
-            rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            Label help=AddCaption(rows,index,index==0?"Память Windows":"Процессоры",index==0?"1024 МиБ = 1 ГиБ оперативной памяти.":"Число выделенных виртуальных процессоров.");
+            resources.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Label help=AddCaption(resources,index,index==0?"Память Windows":"Процессоры",index==0?"1024 МиБ = 1 ГиБ оперативной памяти.":"Число выделенных виртуальных процессоров.");
             if(index==0)memoryGib=help;
-            RoundedPanel field = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = NativeStyle.Background, Padding = new Padding(12,8,12,8), Margin = new Padding(0,5,0,5) };
+            RoundedPanel field = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = NativeStyle.Background, Padding = new Padding(12,6,12,6), Margin = new Padding(0,4,0,4) };
             TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty, BackColor = field.BackColor };
             content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             content.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -68,10 +82,18 @@ internal sealed class SettingsEditor : UserControl
             content.Controls.Add(input,0,0);
             if(keys[index]=="work_memory_mib")content.Controls.Add(new Label { Text = "МиБ", Font = new Font("Segoe UI",9), AutoSize = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = NativeStyle.Muted, Margin = new Padding(5,0,0,0) },1,0);
             field.Controls.Add(content);
-            rows.Controls.Add(field,1,index);
+            resources.Controls.Add(field,1,index);
         }
-        rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        AddCaption(rows,2,"Разрешение","Размер рабочего стола Windows.");
+        resources.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        AddCaption(resources,2,"Диск Windows (внутри папки программы)","");
+        resources.Controls.Add(diskCapacity,1,2);
+        resources.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        TableLayoutPanel hostResources=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,ColumnCount=2,RowCount=1,Margin=Padding.Empty};hostResources.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));hostResources.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));hostResources.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        hostResources.Controls.Add(hostMemory,0,0);hostResources.Controls.Add(RecommendedButton,1,0);resources.Controls.Add(hostResources,0,3);resources.SetColumnSpan(hostResources,2);
+        hostResources.Layout+=delegate{hostMemory.MaximumSize=new Size(Math.Max(100,hostResources.ClientSize.Width-RecommendedButton.GetPreferredSize(Size.Empty).Width-hostMemory.Margin.Horizontal-RecommendedButton.Margin.Horizontal),0);};
+        RecommendedButton.Click+=delegate{ApplyRecommendedValues();};
+        display.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        AddCaption(display,0,"Размер экрана Windows","«Как экран ПК» убирает чёрные полосы в окне и на весь экран.");
         RoundedPanel resolutionBox = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = NativeStyle.Background, Padding = new Padding(10,8,10,8), Margin = new Padding(0,5,0,5) };
         TableLayoutPanel resolutionContent = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 1, Margin = Padding.Empty, BackColor = resolutionBox.BackColor };
         resolutionContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
@@ -81,63 +103,100 @@ internal sealed class SettingsEditor : UserControl
         Resolution.Items.Add("Как экран ПК (рекомендуется)");
         for(int index=0;index<dimensions.GetLength(0);index++)Resolution.Items.Add(dimensions[index,0]+" × "+dimensions[index,1]);
         Resolution.SelectedIndex=0;
-        resolutionContent.Controls.Add(Resolution,0,0);resolutionBox.Controls.Add(resolutionContent);rows.Controls.Add(resolutionBox,1,2);
-        rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        AddCaption(rows,3,"Диск Windows","Файл находится в папке portable.");
-        rows.Controls.Add(diskCapacity,1,3);
-        for(int index=4;index<7;index++)rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        TableLayoutPanel hostResources=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,ColumnCount=2,RowCount=1,Margin=Padding.Empty};hostResources.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));hostResources.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));hostResources.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        hostResources.Controls.Add(hostMemory,0,0);hostResources.Controls.Add(RecommendedButton,1,0);rows.Controls.Add(hostResources,0,4);rows.SetColumnSpan(hostResources,2);
-        hostResources.Layout+=delegate{hostMemory.MaximumSize=new Size(Math.Max(100,hostResources.ClientSize.Width-RecommendedButton.GetPreferredSize(Size.Empty).Width-hostMemory.Margin.Horizontal-RecommendedButton.Margin.Horizontal),0);};
-        rows.Controls.Add(StartFullscreen,0,5);rows.SetColumnSpan(StartFullscreen,2);
-        rows.Controls.Add(RememberWindow,0,6);rows.SetColumnSpan(RememberWindow,2);
+        resolutionContent.Controls.Add(Resolution,0,0);resolutionBox.Controls.Add(resolutionContent);display.Controls.Add(resolutionBox,1,0);
+        display.RowStyles.Add(new RowStyle(SizeType.AutoSize));display.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        display.Controls.Add(StartFullscreen,0,1);display.SetColumnSpan(StartFullscreen,2);
+        display.Controls.Add(RememberWindow,0,2);display.SetColumnSpan(RememberWindow,2);
         foreach(CheckBox option in new[]{StartFullscreen,RememberWindow})
         {
             option.SizeChanged+=delegate{FitViewerOption(option);};option.FontChanged+=delegate{FitViewerOption(option);};
         }
-        RecommendedButton.Click+=delegate{ApplyRecommendedValues();};
-        rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        TableLayoutPanel files = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 6, Margin = new Padding(0,12,0,0) };
+        FlowLayoutPanel folderActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Margin = Padding.Empty };
+        TableLayoutPanel files = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 6, Margin = Padding.Empty };
         files.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         for(int index=0;index<6;index++)files.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         Label filesHeading = new Label { Text = "Доступ к файлам ПК", AutoSize = true, Dock = DockStyle.Top, Margin = Padding.Empty };
-        Label filesNotice = new Label { AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,8,0,8) };
-        Label filesGuide = new Label { Text = "Первое подключение: в Windows открой диск WCPFILES, запусти RUNFILES.CMD и подтверди запрос администратора. Потом диски ПК подключаются сами при входе.", AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,0,0,8) };
+        // The three modes as one row of buttons; the hidden list box stays the single source of the choice.
+        RoundedPanel modes = new RoundedPanel { Dock = DockStyle.Top, Height = 40, BackColor = Color.FromArgb(227,227,232), Padding = new Padding(3), Margin = new Padding(0,6,0,6), AccessibleName = "Доступ к файлам ПК: режим", AccessibleRole = AccessibleRole.PageTabList };
+        TableLayoutPanel modeRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty, BackColor = modes.BackColor };
+        string[] modeNames={"Выключено","Выбранные папки","Все диски ПК"};int[] modeIndex={2,1,0};
+        for(int index=0;index<3;index++)
+        {
+            int choice=modeIndex[index];modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33.33f));
+            RoundedButton button=new RoundedButton { Text = modeNames[index], Segment = true, CenterText = true, Dock = DockStyle.Fill, Margin = Padding.Empty, Tag = choice, AccessibleName = modeNames[index] };
+            button.Click+=delegate{fileSharingMode.SelectedIndex=choice;};modeButtons.Add(button);modeRow.Controls.Add(button,index,0);
+        }
+        modeRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));modes.Controls.Add(modeRow);
+        modes.FontChanged+=delegate{modes.Height=TextRenderer.MeasureText("Выключено",modes.Font).Height+18;};
+        fileSharingMode.Visible=false;
+        sharedFolders.DrawItem+=delegate(object sender,DrawItemEventArgs args){DrawFolder(args);};
+        sharedFolders.FontChanged+=delegate{sharedFolders.ItemHeight=TextRenderer.MeasureText("Ag",sharedFolders.Font).Height+10;sharedFolders.Height=sharedFolders.ItemHeight*3+2;};
+        Label filesNotice = new Label { AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,8,0,0) };
         fileSharingMode.SelectedIndexChanged+=delegate{
+            foreach(RoundedButton button in modeButtons)button.Selected=(int)button.Tag==fileSharingMode.SelectedIndex;
+            sharedFolders.Visible=folderActions.Visible=fileSharingMode.SelectedIndex==1;
             filesNotice.Text=fileSharingMode.SelectedIndex==0
-                ?"Запись из Windows меняет настоящие файлы ПК: с режимом всех дисков программы в Windows смогут изменить любой файл, доступный твоей учётной записи. Папка программы и автозагрузка ПК защищены. Настройки применяются при следующем запуске Windows."
-                :"Запись из Windows меняет настоящие файлы ПК. Папка программы и автозагрузка ПК из Windows недоступны. Настройки применяются при следующем запуске Windows.";};
+                ?"Запись из Windows меняет любые файлы ПК, кроме программы и автозагрузки."
+                :"Запись из Windows меняет настоящие файлы ПК.";};
         fileSharingMode.Items.AddRange(new object[]{"Все доступные диски ПК","Только выбранные папки","Выключено"});fileSharingMode.SelectedIndex=2;
-        FlowLayoutPanel folderActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Margin = Padding.Empty };
         Button addFolder = new RoundedButton { Text = "Добавить папку", AutoSize = true, Padding = new Padding(10,6,10,6), Margin = new Padding(0,0,8,0) };
         Button removeFolder = new RoundedButton { Text = "Удалить", AutoSize = true, Padding = new Padding(10,6,10,6), Margin = Padding.Empty, Enabled = false };
         folderActions.Controls.Add(addFolder);folderActions.Controls.Add(removeFolder);
         addFolder.Click+=delegate{using(FolderBrowserDialog dialog=new FolderBrowserDialog { Description = "Выбери папку ПК для доступа из Windows", ShowNewFolderButton = false })if(dialog.ShowDialog(this)==DialogResult.OK)AddFileSharingFolder(dialog.SelectedPath);};
         removeFolder.Click+=delegate{if(sharedFolders.SelectedIndex>=0)sharedFolders.Items.RemoveAt(sharedFolders.SelectedIndex);};
         sharedFolders.SelectedIndexChanged+=delegate{removeFolder.Enabled=sharedFolders.SelectedIndex>=0;};
-        files.Controls.Add(filesHeading,0,0);files.Controls.Add(fileSharingMode,0,1);files.Controls.Add(sharedFolders,0,2);files.Controls.Add(folderActions,0,3);files.Controls.Add(filesNotice,0,4);files.Controls.Add(filesGuide,0,5);
-        files.SizeChanged+=delegate{filesHeading.MaximumSize=filesNotice.MaximumSize=filesGuide.MaximumSize=new Size(Math.Max(100,files.ClientSize.Width),0);};
-        sharedFolders.FontChanged+=delegate{sharedFolders.Height=sharedFolders.ItemHeight*4+6;};
-        rows.Controls.Add(files,0,7);rows.SetColumnSpan(files,2);
+        files.Controls.Add(modes,0,1);files.Controls.Add(fileSharingMode,0,2);files.Controls.Add(sharedFolders,0,3);files.Controls.Add(folderActions,0,4);files.Controls.Add(filesNotice,0,5);
+        files.SizeChanged+=delegate{filesHeading.MaximumSize=filesNotice.MaximumSize=new Size(Math.Max(100,files.ClientSize.Width),0);};
+        foreach(TableLayoutPanel section in new[]{resources,display,files})
+        {
+            RoundedPanel group = new RoundedPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.White, Padding = new Padding(16,10,16,10), Margin = Padding.Empty };
+            group.Controls.Add(section);sections.Add(group);scroll.Controls.Add(group);
+        }
+        ShowSection(0);
+        root.Controls.Add(scroll,0,3);root.Controls.Add(Error,0,4);
+        FlowLayoutPanel footer = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = new Padding(0,12,0,0) };
+        footer.Controls.Add(SaveButton);footer.Controls.Add(CancelButton);root.Controls.Add(footer,0,5);
+        CancelButton.Click += delegate {if(original!=null)LoadValues(original,false);if(originalWindows!=null)LoadWindowsValues(originalWindows);if(originalViewer!=null)LoadViewerValues(originalViewer);if(originalFileSharing!=null)LoadFileSharingValues(originalFileSharing);};
+        root.SizeChanged += delegate { int width=Math.Max(100,root.ClientSize.Width-root.Padding.Horizontal);notice.MaximumSize=new Size(Math.Max(100,width/2),0);Error.MaximumSize=new Size(width,0); };
+        Controls.Add(root);
+    }
+    private readonly List<RoundedPanel> sections = new List<RoundedPanel>();
+    private readonly List<RoundedButton> sectionButtons = new List<RoundedButton>();
+    internal int Section { get; private set; }
+    internal void ShowSection(int section)
+    {
+        if(section<0||section>=sections.Count)return;
+        Section=section;
+        for(int index=0;index<sections.Count;index++){sections[index].Visible=index==section;sectionButtons[index].Selected=index==section;}
+    }
+    private void DrawFolder(DrawItemEventArgs args)
+    {
+        if(args.Index<0)return;
+        bool selected=(args.State&DrawItemState.Selected)!=0;
+        using(Brush fill=new SolidBrush(selected?Color.FromArgb(220,234,248):NativeStyle.Background))args.Graphics.FillRectangle(fill,args.Bounds);
+        int size=Math.Max(12,args.Bounds.Height-18);Rectangle icon=new Rectangle(args.Bounds.Left+8,args.Bounds.Top+(args.Bounds.Height-size)/2,size+4,size);
+        using(Brush folder=new SolidBrush(Color.FromArgb(224,161,0)))using(System.Drawing.Drawing2D.GraphicsPath shape=NativeStyle.Rounded(icon,3)){args.Graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;args.Graphics.FillPath(folder,shape);}
+        Rectangle text=new Rectangle(icon.Right+10,args.Bounds.Top,args.Bounds.Width-icon.Right-14,args.Bounds.Height);
+        TextRenderer.DrawText(args.Graphics,sharedFolders.Items[args.Index] as string,sharedFolders.Font,text,NativeStyle.Ink,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.PathEllipsis);
+    }
+    private static TableLayoutPanel SectionRows()
+    {
+        TableLayoutPanel rows = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Margin = Padding.Empty };
+        rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,62));rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,38));
         rows.Paint += delegate(object sender,PaintEventArgs args) {
             int position=0;int[] heights=rows.GetRowHeights();
             using(Pen line=new Pen(Color.FromArgb(237,237,241)))
                 for(int index=0;index<heights.Length-1;index++){position+=heights[index];args.Graphics.DrawLine(line,0,position,rows.Width,position);}
         };
-        group.Controls.Add(rows);scroll.Controls.Add(group);root.Controls.Add(scroll,0,2);root.Controls.Add(Error,0,3);
-        FlowLayoutPanel footer = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = new Padding(0,12,0,0) };
-        footer.Controls.Add(SaveButton);footer.Controls.Add(CancelButton);root.Controls.Add(footer,0,4);
-        CancelButton.Click += delegate {if(original!=null)LoadValues(original,false);if(originalWindows!=null)LoadWindowsValues(originalWindows);if(originalViewer!=null)LoadViewerValues(originalViewer);if(originalFileSharing!=null)LoadFileSharingValues(originalFileSharing);};
-        root.SizeChanged += delegate { int width=Math.Max(100,root.ClientSize.Width-root.Padding.Horizontal);notice.MaximumSize=Error.MaximumSize=new Size(width,0); };
-        Controls.Add(root);
+        return rows;
     }
     private static Label AddCaption(TableLayoutPanel rows,int row,string title,string explanation)
     {
-        TableLayoutPanel caption = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = new Padding(0,8,12,8) };
+        TableLayoutPanel caption = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2, Margin = new Padding(0,6,12,6) };
         caption.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));caption.RowStyles.Add(new RowStyle(SizeType.AutoSize));caption.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         Label heading = new Label { Text = title, AutoSize = true, Dock = DockStyle.Top, Font = new Font("Segoe UI",9.5f), Margin = Padding.Empty };
         Label help = new Label { Text = explanation, AutoSize = true, Dock = DockStyle.Top, Font = new Font("Segoe UI",8.5f), ForeColor = NativeStyle.Muted, Margin = new Padding(0,4,0,0) };
-        caption.Controls.Add(heading,0,0);caption.Controls.Add(help,0,1);
+        caption.Controls.Add(heading,0,0);caption.Controls.Add(help,0,1);help.Visible=explanation.Length>0;
         caption.SizeChanged+=delegate{heading.MaximumSize=help.MaximumSize=new Size(Math.Max(100,caption.ClientSize.Width),0);};
         rows.Controls.Add(caption,0,row);
         return help;
