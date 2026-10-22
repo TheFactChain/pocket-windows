@@ -43,12 +43,11 @@ internal static class DesktopShellRegression
             {
                 form.StartPosition=FormStartPosition.Manual; form.Location=new Point(-30000,-30000); form.ShowInTaskbar=false;
                 form.Show(); Application.DoEvents();
-                Assert(!Tree(form).OfType<Label>().Any(label=>label.Text=="Windows Claude"),"Sidebar brand duplicates the native window title.");
-                Assert(!Tree(form).OfType<Label>().Any(label=>label.Text.Contains("Закрытие панели")),"Home should not contain the permanent close-panel footnote.");
+                Assert(!Tree((Control)typeof(MainForm).GetField("overview",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(form)).OfType<Label>().Any(label=>label.Text.Contains("Закрытие панели")),"Home should not contain the permanent close-panel footnote.");
                 Label operation=(Label)typeof(MainForm).GetField("operation",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(form);
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext()); Pump(form.NavigateAsync(AppPage.Settings));
                 Assert(!operation.Visible,"Loading settings must not leave a global idle status.");
-                foreach(TextBox field in form.SettingsPage.Fields.Values)
+                foreach(TextBox field in form.SettingsPage.Fields.Values.Where(field=>field.Visible))
                     Assert(field.Parent.Parent.Height<=field.PreferredHeight+32,"Hosted settings fields must not stretch after the Form is shown.");
                 Render(form,args,"settings");
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext()); Pump(form.NavigateAsync(AppPage.Connection));

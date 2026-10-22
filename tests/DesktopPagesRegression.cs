@@ -74,17 +74,18 @@ internal static class DesktopPagesRegression
             Context();Pump(form.NavigateAsync(AppPage.Settings));Layout(form);
             Inside(form.SettingsPage.SaveButton,form,"Settings save at font scale "+scale);
             if(scale==2f)Render(form,Path.Combine(logs,"ui-pages-settings-font200.png"));
-            foreach(TextBox field in form.SettingsPage.Fields.Values)
+            Inside(form.SettingsPage.MemorySlider,form,"Memory slider scale "+scale);
+            foreach(TextBox field in form.SettingsPage.Fields.Values.Where(Shown))
             {
                 Inside(field,form,"Settings field "+field.AccessibleName+" scale "+scale);
                 Assert(field.Height>=field.PreferredHeight,"Settings text must not be clipped");
             }
-            foreach(Label label in Tree(form.SettingsPage).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text)))
+            foreach(Label label in Tree(form.SettingsPage).OfType<Label>().Where(item=>!String.IsNullOrEmpty(item.Text)&&Shown(item)))
                 Assert(label.Height>=label.GetPreferredSize(new Size(label.Width,0)).Height,"Settings label clipped: "+label.Text+" scale "+scale);
             if(scale==1f){Directory.CreateDirectory(logs);Render(form,Path.Combine(logs,"ui-pages-settings.png"));}
             form.SettingsPage.Fields["work_memory_mib"].Text="";Dictionary<string,object> invalid;Assert(!form.SettingsPage.TryGetValue(out invalid),"Invalid values must remain editable");Layout(form);
             Inside(form.SettingsPage.SaveButton,form,"Save with inline error "+scale);
-            foreach(TextBox field in form.SettingsPage.Fields.Values)Inside(field,form,"Field with inline error "+scale);Assert(form.ClientSize==viewport,"Inline validation must not increase the viewport");
+            foreach(TextBox field in form.SettingsPage.Fields.Values.Where(Shown))Inside(field,form,"Field with inline error "+scale);Assert(form.ClientSize==viewport,"Inline validation must not increase the viewport");
             if(scale==1f){Directory.CreateDirectory(logs);Render(form,Path.Combine(logs,"ui-pages-settings-validation.png"));Context();Pump(form.NavigateAsync(AppPage.Diagnostics));Render(form,Path.Combine(logs,"ui-pages-diagnostics.png"));Context();Pump(form.NavigateAsync(AppPage.Home));Render(form,Path.Combine(logs,"ui-pages-home.png"));}
         }
     }
@@ -141,9 +142,12 @@ internal static class DesktopPagesRegression
             Render(form,Path.Combine(logs,"ui-pages-diagnostics-long.png"));
             foreach(Button button in new[]{form.PrepareButton,form.RepairGatewayButton,form.PrepareHostButton})Inside(button,form,"Diagnostics recovery actions");
         }
-        using(Form help=MainForm.BuildHelp(new Font("Segoe UI",10)))
+        using(MainForm form=new MainForm(false,(action,payload)=>Report()))
         {
-            Render(help,Path.Combine(logs,"ui-help.png"));
+            form.ClientSize=new Size(960,640);Layout(form);Context();Pump(form.NavigateAsync(AppPage.Help));Layout(form);
+            Render(form,Path.Combine(logs,"ui-help.png"));
+            Assert(form.ActivePage==AppPage.Help,"Help is a page of the sidebar");
+            Control help=Tree(form).Single(item=>item.AccessibleName=="Справка по управлению");
             Assert(!Tree(help).OfType<TextBox>().Any()&&!Tree(help).OfType<ScrollableControl>().Any(item=>item.AutoScroll),"Help must not scroll");
             foreach(Label label in Tree(help).OfType<Label>().Where(item=>item.Text.Length>0))
             {

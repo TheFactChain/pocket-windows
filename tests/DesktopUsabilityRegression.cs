@@ -51,9 +51,9 @@ internal static class DesktopUsabilityRegression
                 form.ClientSize=new Size(1040,660);form.DisplayReport(Report("stopped"));form.PerformLayout();
                 Control home=(Control)typeof(MainForm).GetField("overview",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(form);
                 Rectangle start=Bounds(form.StartButton,home);
-                Assert(Math.Abs(start.Left+start.Width/2-home.ClientSize.Width/2)<=8,"The primary start action must be centered in Home");
-                Assert(Tree(home).OfType<Label>().Any(label=>label.Text.Contains("Ctrl+Alt+F")&&label.Text.Contains("Ctrl+Alt+G")),"Home needs visible fullscreen and mouse-release hints");
-                Assert(Tree(form).OfType<Button>().Any(button=>button.Text=="Справка и клавиши"),"Keyboard help must be discoverable without knowing F1");
+                Assert(start.Left>home.ClientSize.Width/2,"The primary start action sits on the right of the Home summary, as in the mockup");
+                Assert(Tree(home).OfType<Label>().Any(label=>label.Text.Contains("Ctrl+Alt+F"))&&Tree(home).OfType<Label>().Any(label=>label.Text.Contains("Ctrl+Alt+G")),"Home needs visible fullscreen and mouse-release hints");
+                Assert(Tree(form).OfType<Button>().Any(button=>button.Text=="Справка"),"Keyboard help must be discoverable without knowing F1");
                 using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save(Path.Combine(args[0],"home.png"),ImageFormat.Png);}
                 Key(form,Keys.Control|Keys.D2);Assert(form.ActivePage==AppPage.Connection,"Ctrl+2 must open Connection");
                 Key(form,Keys.Control|Keys.D1);Assert(form.ActivePage==AppPage.Home,"Ctrl+1 must return Home");

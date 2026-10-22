@@ -60,16 +60,17 @@ internal sealed class ConnectionEditor : UserControl
         root.Controls.Add(NativeStyle.PageHeader(root,"Подключение",ImportButton,NewButton),0,0);
         // Body: saved connections on the left (only when there are any), the open one on the right.
         body.ColumnStyles.Add(listWidth);body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));body.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        ProfileList.Margin=new Padding(0,0,12,0);body.Controls.Add(ProfileList,0,0);
-        TableLayoutPanel editor=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5,Margin=Padding.Empty};RowStyle cardRow=new RowStyle(SizeType.Absolute,0);editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));editor.RowStyles.Add(cardRow);editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));editor.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        State.Margin=new Padding(0,0,0,8);editor.Controls.Add(State,0,0);
-        // The card scrolls only as a last resort, with very large text in a small window.
-        Panel scroll=new Panel{Dock=DockStyle.Fill,AutoScroll=true,BackColor=NativeStyle.Background,Margin=Padding.Empty};
-        RoundedPanel card=new RoundedPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Padding=new Padding(16,14,16,6),BackColor=Color.White,Margin=Padding.Empty};
+        ProfileList.Margin=new Padding(0,0,16,0);body.Controls.Add(ProfileList,0,0);
+        // The open connection is one white card: fields on top, status and actions at its bottom.
+        RoundedPanel sheet=new RoundedPanel{Dock=DockStyle.Fill,Radius=14,BackColor=Color.White,Padding=new Padding(22,18,22,14),Margin=Padding.Empty};
+        TableLayoutPanel editor=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Margin=Padding.Empty,BackColor=Color.White};RowStyle cardRow=new RowStyle(SizeType.Absolute,0);editor.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        editor.RowStyles.Add(cardRow);editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));editor.RowStyles.Add(new RowStyle(SizeType.Percent,100));editor.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        // The fields scroll only as a last resort, with very large text in a small window.
+        Panel scroll=new Panel{Dock=DockStyle.Fill,AutoScroll=true,BackColor=Color.White,Margin=Padding.Empty};
+        Panel card=new Panel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,BackColor=Color.White,Margin=Padding.Empty};
         fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
         for(int row=0;row<10;row++)fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        RoundedPanel protocols=new RoundedPanel{Dock=DockStyle.Top,Height=40,BackColor=Color.FromArgb(227,227,232),Padding=new Padding(3),Margin=Padding.Empty,AccessibleName="Протокол",AccessibleRole=AccessibleRole.PageTabList};
+        RoundedPanel protocols=new RoundedPanel{Dock=DockStyle.Top,Height=40,Radius=10,BackColor=Color.FromArgb(240,240,244),Padding=new Padding(3),Margin=Padding.Empty,AccessibleName="Протокол",AccessibleRole=AccessibleRole.PageTabList};
         TableLayoutPanel protocolRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=4,RowCount=1,Margin=Padding.Empty,BackColor=protocols.BackColor};protocolRow.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         string[] protocolNames={"Hysteria2","SOCKS5","HTTP","HTTPS"};
         for(int index=0;index<4;index++)
@@ -79,20 +80,28 @@ internal sealed class ConnectionEditor : UserControl
             button.Click+=delegate{Protocol.SelectedIndex=choice;};protocolButtons.Add(button);protocolRow.Controls.Add(button,index,0);
         }
         protocols.Controls.Add(protocolRow);inputBoxes.Add(protocols);
-        AddControl("protocol","Тип подключения",protocols,0,0,true);
+        AddControl("protocol","Протокол",protocols,0,0,true);
         AddField("name","Название",false,"Любое удобное имя, например «Мой сервер».",0,1,true);
         AddField("host","Адрес сервера",false,"Например proxy.example.com или 203.0.113.10, без https:// и пути.",0,2,false);AddField("port","Порт",false,"Число из настроек поставщика, например 443.",1,2,false);
         AddField("auth","Пароль Hysteria2",true,"Пароль подключения, выданный поставщиком сервера.",0,3,true);AddControl("proxy_auth","",ProxyAuth,0,4,true);AddField("username","Логин",false,"Имя пользователя из настроек прокси.",0,5,false);AddField("password","Пароль прокси",true,"Пароль пользователя прокси.",1,5,false);
         AddControl("advanced","",advanced,0,6,true);AddField("tls_server_name","Имя TLS (SNI)",false,"Необязательно. Заполни, только если поставщик указал отдельное имя TLS.",0,7,true);
         AddControl("obfs","",Obfuscation,0,8,true);AddField("obfs_password","Пароль маскировки",true,"Отдельный пароль Salamander из настроек сервера.",0,9,true);
-        card.Controls.Add(fields);scroll.Controls.Add(card);editor.Controls.Add(scroll,0,1);
-        Error.Margin=new Padding(0,8,0,0);editor.Controls.Add(Error,0,2);
-        FlowLayoutPanel footer=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true,Margin=new Padding(0,10,0,0)};foreach(Button button in new[]{SaveButton,SelectButton,TestButton,ExportButton})footer.Controls.Add(button);editor.Controls.Add(footer,0,3);
-        body.Controls.Add(editor,1,0);root.Controls.Add(body,0,1);
-        // The buttons follow the card directly; the card takes only the height it needs, and scrolls only when even that does not fit.
+        card.Controls.Add(fields);scroll.Controls.Add(card);editor.Controls.Add(scroll,0,0);
+        Error.Margin=new Padding(0,8,0,0);editor.Controls.Add(Error,0,1);
+        // Footer: the status line, then the actions with the primary Save at the right end.
+        FlowLayoutPanel actions=new FlowLayoutPanel{Dock=DockStyle.Top,AutoSize=true,WrapContents=true,FlowDirection=FlowDirection.RightToLeft,BackColor=Color.White,Margin=Padding.Empty};
+        foreach(Button button in new[]{SaveButton,SelectButton,ExportButton,TestButton}){button.Margin=new Padding(6,0,0,0);button.Padding=new Padding(10,8,10,8);actions.Controls.Add(button);}
+        State.Dock=DockStyle.Top;State.Font=new Font("Segoe UI",9);State.Margin=new Padding(0,0,0,10);
+        TableLayoutPanel footer=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,RowCount=2,BackColor=Color.White,Padding=new Padding(0,14,0,0),Margin=new Padding(0,10,0,0)};
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        footer.Controls.Add(State,0,0);footer.Controls.Add(actions,0,1);
+        footer.Paint+=delegate(object sender,PaintEventArgs args){using(Pen line=new Pen(Color.FromArgb(237,237,241)))args.Graphics.DrawLine(line,0,0,footer.Width,0);};
+        editor.Controls.Add(footer,0,3);sheet.Controls.Add(editor);
+        body.Controls.Add(sheet,1,0);root.Controls.Add(body,0,1);
+        // The footer stays at the bottom of the card; the fields take only the height they need, and scroll only when even that does not fit.
         editor.Layout+=delegate{
             int width=editor.ClientSize.Width;Func<Control,int> need=item=>item.GetPreferredSize(new Size(Math.Max(1,width-item.Margin.Horizontal),0)).Height+item.Margin.Vertical;
-            int other=need(footer)+(String.IsNullOrEmpty(State.Text)?0:need(State))+(String.IsNullOrEmpty(Error.Text)?0:need(Error));
+            int other=need(footer)+(String.IsNullOrEmpty(Error.Text)?0:need(Error));
             int wanted=Math.Max(0,Math.Min(card.GetPreferredSize(new Size(width,0)).Height,editor.ClientSize.Height-other));
             if(cardRow.Height!=wanted)cardRow.Height=wanted;
         };
@@ -105,7 +114,7 @@ internal sealed class ConnectionEditor : UserControl
         };
         ProfileList.SelectedIndexChanged+=delegate{if(!syncing&&ProfileList.SelectedIndex>=0&&ProfileList.SelectedIndex!=Profiles.SelectedIndex)Profiles.SelectedIndex=ProfileList.SelectedIndex;};
         ProfileList.DrawItem+=delegate(object sender,DrawItemEventArgs args){DrawProfile(args);};
-        ProfileList.FontChanged+=delegate{ProfileList.ItemHeight=Math.Min(255,ProfileList.Font.Height*2+26);FitList();};ProfileList.ItemHeight=ProfileList.Font.Height*2+26;
+        ProfileList.FontChanged+=delegate{ProfileList.ItemHeight=Math.Min(255,ProfileList.Font.Height*3+34);FitList();};ProfileList.ItemHeight=ProfileList.Font.Height*3+34;
         body.SizeChanged+=delegate{FitList();};
         editor.SizeChanged+=delegate{State.MaximumSize=Error.MaximumSize=new Size(Math.Max(100,editor.ClientSize.Width),0);};
         NewButton.Click+=delegate{NewProfile();};Controls.Add(root);Controls.Add(Profiles);Controls.Add(Protocol);NewProfile();
@@ -124,20 +133,24 @@ internal sealed class ConnectionEditor : UserControl
         using(Brush back=new SolidBrush(ProfileList.BackColor))args.Graphics.FillRectangle(back,args.Bounds);
         if(args.Index<0||args.Index>=ProfileList.Items.Count)return;
         Dictionary<string,object> value=((Entry)ProfileList.Items[args.Index]).Value;
-        Rectangle card=new Rectangle(args.Bounds.X,args.Bounds.Y+3,args.Bounds.Width-1,args.Bounds.Height-6);
-        if((args.State&DrawItemState.Selected)!=0)
+        // Every saved connection is a white card; the open one has an accent outline.
+        Rectangle card=new Rectangle(args.Bounds.X+1,args.Bounds.Y+1,args.Bounds.Width-3,args.Bounds.Height-9);
+        args.Graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using(System.Drawing.Drawing2D.GraphicsPath shape=NativeStyle.Rounded(card,12))
         {
-            args.Graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using(System.Drawing.Drawing2D.GraphicsPath shape=NativeStyle.Rounded(card,10))using(Brush fill=new SolidBrush(Color.White))args.Graphics.FillPath(fill,shape);
-            using(Brush mark=new SolidBrush(NativeStyle.Accent))args.Graphics.FillRectangle(mark,card.X+1,card.Y+10,3,card.Height-20);
+            using(Brush fill=new SolidBrush(Color.White))args.Graphics.FillPath(fill,shape);
+            if((args.State&DrawItemState.Selected)!=0)using(Pen outline=new Pen(NativeStyle.Accent,2f))args.Graphics.DrawPath(outline,shape);
         }
         bool used=Flag(value,"selected"),locked=Flag(value,"needs_credentials");
-        string state=locked?"нужен пароль":used?(Flag(value,"verified")?"используется, проверено":"используется"):"не выбрано";
+        string state=locked?"Нужен пароль":used?(Flag(value,"verified")?"Используется, проверено":"Используется"):"Не выбрано";
         TextFormatFlags flags=TextFormatFlags.Left|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix|TextFormatFlags.SingleLine;
-        int line=ProfileList.Font.Height,top=card.Y+(card.Height-line*2-4)/2;
+        int line=ProfileList.Font.Height,top=card.Y+(card.Height-line*3-6)/2;
         using(Font bold=new Font(ProfileList.Font,FontStyle.Bold))TextRenderer.DrawText(args.Graphics,Text(value,"name","Без названия"),bold,new Rectangle(card.X+14,top,card.Width-24,line+2),NativeStyle.Ink,flags);
+        TextRenderer.DrawText(args.Graphics,ProtocolName(Text(value,"protocol","")),ProfileList.Font,new Rectangle(card.X+14,top+line+3,card.Width-24,line+2),NativeStyle.Muted,flags);
         Color tone=locked?Color.FromArgb(175,59,48):used?Color.FromArgb(30,107,52):NativeStyle.Muted;
-        TextRenderer.DrawText(args.Graphics,ProtocolName(Text(value,"protocol",""))+", "+state,ProfileList.Font,new Rectangle(card.X+14,top+line+4,card.Width-24,line+2),tone,flags);
+        int dot=used||locked?12:0;
+        if(dot>0)using(Brush mark=new SolidBrush(locked?tone:Color.FromArgb(46,158,79)))args.Graphics.FillEllipse(mark,card.X+14,top+line*2+6+(line-7)/2,7,7);
+        TextRenderer.DrawText(args.Graphics,state,ProfileList.Font,new Rectangle(card.X+14+dot,top+line*2+6,card.Width-24-dot,line+2),tone,flags);
     }
     // A grey hint inside an empty password box instead of a second caption line.
     private static void Cue(TextBox box,string text)
@@ -162,8 +175,10 @@ internal sealed class ConnectionEditor : UserControl
     }
     private RoundedPanel InputBox(Control input)
     {
-        RoundedPanel box=new RoundedPanel{Dock=DockStyle.Top,Height=44,Padding=new Padding(10,6,10,6),BackColor=NativeStyle.Background,Margin=Padding.Empty};
-        TableLayoutPanel content=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=1,Margin=Padding.Empty,BackColor=box.BackColor};content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));content.RowStyles.Add(new RowStyle(SizeType.Percent,100));input.Dock=DockStyle.None;input.Anchor=AnchorStyles.Left|AnchorStyles.Right;input.Margin=Padding.Empty;content.Controls.Add(input,0,0);box.Controls.Add(content);inputBoxes.Add(box);return box;
+        // A white field with a thin grey outline: the outer panel's colour shows as a 1 px border.
+        RoundedPanel box=new RoundedPanel{Dock=DockStyle.Top,Height=44,Radius=9,Padding=new Padding(1),BackColor=Color.FromArgb(209,209,214),Margin=Padding.Empty};
+        RoundedPanel inner=new RoundedPanel{Dock=DockStyle.Fill,Radius=8,Padding=new Padding(10,5,10,5),BackColor=Color.White,Margin=Padding.Empty};
+        TableLayoutPanel content=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=1,Margin=Padding.Empty,BackColor=inner.BackColor};content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));content.RowStyles.Add(new RowStyle(SizeType.Percent,100));input.Dock=DockStyle.None;input.Anchor=AnchorStyles.Left|AnchorStyles.Right;input.Margin=Padding.Empty;content.Controls.Add(input,0,0);inner.Controls.Add(content);box.Controls.Add(inner);inputBoxes.Add(box);return box;
     }
     private void FitInputHeights()
     {
@@ -172,13 +187,13 @@ internal sealed class ConnectionEditor : UserControl
     }
     private void AddField(string key,string title,bool secret,string help,int column,int row,bool wide)
     {
-        TextBox field=new TextBox{BorderStyle=BorderStyle.None,BackColor=NativeStyle.Background,UseSystemPasswordChar=secret,AccessibleName=title,AccessibleDescription=help,Margin=Padding.Empty};
+        TextBox field=new TextBox{BorderStyle=BorderStyle.None,BackColor=Color.White,UseSystemPasswordChar=secret,AccessibleName=title,AccessibleDescription=help,Margin=Padding.Empty};
         Fields.Add(key,field);field.FontChanged+=delegate{FitInputHeights();};field.HandleCreated+=delegate{if(field.Tag is string)Cue(field,(string)field.Tag);};AddControl(key,title,InputBox(field),column,row,wide);
     }
     private void AddControl(string key,string title,Control control,int column,int row,bool wide)
     {
         TableLayoutPanel cell=new TableLayoutPanel{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,RowCount=3,Margin=new Padding(column==0?0:8,0,wide?0:column==0?8:0,8)};cell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));for(int index=0;index<3;index++)cell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Label label=new Label{Text=title,AutoSize=true,Dock=DockStyle.Top,Margin=new Padding(0,0,0,String.IsNullOrEmpty(title)?0:4),Visible=!String.IsNullOrEmpty(title)};
+        Label label=new Label{Text=title,AutoSize=true,Dock=DockStyle.Top,Font=new Font("Segoe UI",9),ForeColor=NativeStyle.Muted,Margin=new Padding(0,0,0,String.IsNullOrEmpty(title)?0:4),Visible=!String.IsNullOrEmpty(title)};
         cell.Controls.Add(label,0,0);cell.Controls.Add(control,0,1);fields.Controls.Add(cell,column,row);if(wide)fields.SetColumnSpan(cell,2);rows[key]=new Control[]{label,control,cell};
     }
     private void UpdateRows()
@@ -192,7 +207,7 @@ internal sealed class ConnectionEditor : UserControl
         SetRowVisibility("obfs",hy&&advanced.Checked);SetRowVisibility("auth",hy);
         SetRowVisibility("obfs_password",hy&&advanced.Checked&&Obfuscation.Checked);SetRowVisibility("proxy_auth",!hy);
         SetRowVisibility("username",!hy&&ProxyAuth.Checked);SetRowVisibility("password",!hy&&ProxyAuth.Checked);
-        rows["protocol"][0].Text=hy?"Тип подключения: TCP и UDP":"Тип подключения: только TCP, без UDP";
+        rows["protocol"][0].Text=hy?"Протокол: TCP и UDP":"Протокол: только TCP, без UDP";
     }
     private void SetRowVisibility(string key,bool visible)
     {

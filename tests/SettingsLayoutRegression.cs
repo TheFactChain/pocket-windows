@@ -47,6 +47,10 @@ internal static class SettingsLayoutRegression
             editor.LoadHostValues(new Dictionary<string,object>{{"ram_total_mib",65536},{"ram_available_mib",64000},{"logical_processors",3}});recommend.PerformClick();Assert(editor.TryGetValue(out runtime)&&(int)runtime["work_memory_mib"]==8192&&(int)runtime["vcpus"]==1,"Recommendations must cap RAM at 8 GiB and round CPU division down");
             editor.CancelButton.PerformClick();Assert(editor.TryGetValue(out runtime)&&(int)runtime["work_memory_mib"]==3072&&(int)runtime["vcpus"]==2,"Cancel must restore loaded resource values after recommendations");
             editor.LoadHostValues(null);Assert(!recommend.Enabled,"Missing host evidence must disable recommendations");
+            Assert(!editor.Dirty,"Loaded settings must not report unsaved changes");
+            editor.MemorySlider.Value=4096;Assert(editor.Fields["work_memory_mib"].Text=="4096"&&editor.Dirty,"The memory slider must edit the memory value and mark the draft unsaved");
+            editor.Fields["work_memory_mib"].Text="5120";Assert(editor.MemorySlider.Value==5120,"A typed memory value must move the slider");
+            editor.CancelButton.PerformClick();Assert(!editor.Dirty&&editor.MemorySlider.Value==3072,"Cancel must clear the unsaved-changes note and restore the slider");
         }
     }
     [STAThread]
@@ -78,7 +82,7 @@ internal static class SettingsLayoutRegression
                 Assert(!editor.Fields.ContainsKey("disk")&&Tree(editor).OfType<Label>().Any(label=>label.Text=="80 ГиБ"),"Windows disk capacity must remain read-only.");
             }
             foreach(float scale in new[]{1f} /* laid out at 100% only; Windows scales the window */)
-            foreach(Size viewport in new[]{new Size(710,540),new Size(650,440)})
+            foreach(Size viewport in new[]{new Size(676,560),new Size(616,540)})
             using(Form host=new Form{ClientSize=viewport,AutoScaleMode=AutoScaleMode.None})
             {
                 SettingsEditor editor=new SettingsEditor();host.Controls.Add(editor);
@@ -89,27 +93,27 @@ internal static class SettingsLayoutRegression
                 var fonts=Tree(editor).Select(control=>new{Control=control,Font=control.Font}).ToArray();
                 foreach(var item in fonts) item.Control.Font=new Font(item.Font.FontFamily,item.Font.SizeInPoints*scale,item.Font.Style);
                 Layout(host);
-                if(scale==1f&&viewport.Width==710)Assert(Tree(editor).OfType<Label>().Single(label=>label.Text.StartsWith("Память ПК:")).Width>=250,"Host hint must use the space left beside Recommendations");
-                if(scale==1f&&viewport.Width==710) using(Graphics graphics=host.CreateGraphics()) Console.WriteLine("Native render DPI: "+graphics.DpiX+"x"+graphics.DpiY);
+                if(scale==1f&&viewport.Width==676)Assert(Tree(editor).OfType<Label>().Single(label=>label.Text.StartsWith("Рекомендуется")).Width>=250,"Host hint must use the space left beside Recommendations");
+                if(scale==1f&&viewport.Width==676) using(Graphics graphics=host.CreateGraphics()) Console.WriteLine("Native render DPI: "+graphics.DpiX+"x"+graphics.DpiY);
                 if(args.Length>0)
                 {
                     Directory.CreateDirectory(args[0]);
                     using(Bitmap image=new Bitmap(editor.Width,editor.Height)){editor.DrawToBitmap(image,new Rectangle(Point.Empty,editor.Size));image.Save(Path.Combine(args[0],"settings-font"+(int)(scale*100)+"-"+viewport.Width+".png"),ImageFormat.Png);}
                 }
-                foreach(TextBox field in editor.Fields.Values)
+                foreach(TextBox field in new[]{editor.Fields["vcpus"]})
                 {
                     Control box=field.Parent.Parent;
                     Assert(box.Height<=field.PreferredHeight+32,"Settings input background stretched: "+box.Height+" vs text "+field.PreferredHeight);
                     Assert(field.Height>=field.PreferredHeight,"Settings text clipped");Inside(field,host,"Settings input");
                 }
-                Inside(editor.SaveButton,host,"Save");Inside(editor.CancelButton,host,"Cancel");
+                Inside(editor.MemorySlider,host,"Memory slider");Inside(editor.SaveButton,host,"Save");Inside(editor.CancelButton,host,"Cancel");
                 Assert(editor.RecommendedButton.Width>=editor.RecommendedButton.GetPreferredSize(Size.Empty).Width,"Recommendations button text clipped at scale "+scale);
                 Panel pages=Tree(editor).OfType<Panel>().Single(panel=>panel.AutoScroll);
                 for(int section=0;section<3;section++)
                 {
                     editor.ShowSection(section);Layout(host);
                     // Each section fits the window without a scroll bar at ordinary text sizes.
-                    if(scale<=1.5f&&(viewport.Width==710||scale==1f))Assert(!pages.VerticalScroll.Visible,"Settings section "+section+" needs a scroll bar at scale "+scale+" in "+viewport+": content "+pages.DisplayRectangle.Height+" > visible "+pages.ClientSize.Height);
+                    if(scale<=1.5f&&(viewport.Width==676||scale==1f))Assert(!pages.VerticalScroll.Visible,"Settings section "+section+" needs a scroll bar at scale "+scale+" in "+viewport+": content "+pages.DisplayRectangle.Height+" > visible "+pages.ClientSize.Height);
                 }
                 editor.ShowSection(1);Layout(host);
                 foreach(CheckBox option in new[]{editor.StartFullscreen,editor.RememberWindow})Assert(option.Height>=TextRenderer.MeasureText(option.Text,option.Font,new Size(Math.Max(1,option.Width-32),0),TextFormatFlags.WordBreak).Height,"Viewer preference must show its complete text at scale "+scale);

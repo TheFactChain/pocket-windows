@@ -43,7 +43,7 @@ internal static class FileSharingSettingsRegression
                 Load(editor,"selected",new[]{@"\\server\share"});Assert(!Save(editor),"Loaded UNC path accepted");
                 Load(editor,"bad",new string[0]);Assert(!Save(editor),"Unknown mode accepted");
                 Load(editor,"selected",new[]{@"C:\Work",@"c:\WORK\"});Assert(!Save(editor),"Loaded duplicates accepted");
-                Load(editor,"selected",new[]{@"C:\Work"});folders.SelectedIndex=0;Tree(editor).OfType<Button>().Single(button=>button.Text=="Удалить").PerformClick();Assert(folders.Items.Count==0&&!Save(editor),"Remove failed");
+                Load(editor,"selected",new[]{@"C:\Work"});folders.SelectedIndex=0;Tree(editor).OfType<Button>().Single(button=>button.Text=="Убрать").PerformClick();Assert(folders.Items.Count==0&&!Save(editor),"Remove failed");
             }
             Console.WriteLine("PASS: file sharing defaults, modes, retained folders, validation, duplicate rejection, 64 limit, removal and Cancel.");return 0;
         }

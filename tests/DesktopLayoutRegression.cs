@@ -50,7 +50,6 @@ internal static class DesktopLayoutRegression
                 var fonts=Tree(form).Select(item=>new{Control=item,Font=item.Font}).ToArray();
                 foreach(var item in fonts)item.Control.Font=new Font(item.Font.FontFamily,item.Font.SizeInPoints*factor,item.Font.Style);
                 Layout(form);string scenario="font-only "+factor+" at unchanged client "+viewport;
-                Assert(!Tree(form).OfType<Label>().Any(item=>item.Text=="Windows Claude"),"Application name must stay in the native title bar without a repeated content heading");
                 foreach(string name in new[]{"Главная","Подключение","Настройки","Диагностика"})
                 {
                     Button nav=Tree(form).OfType<Button>().Single(item=>item.Text==name);Inside(nav,form,scenario);

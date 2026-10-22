@@ -2,7 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 
-internal enum AppGlyph { Play, Settings, Diagnostics, Repair, Home, Network }
+internal enum AppGlyph { Play, Settings, Diagnostics, Repair, Home, Network, Globe, Sliders, Pulse, Help, Monitor }
 
 internal static class AppIcons
 {
@@ -65,6 +65,31 @@ internal static class AppIcons
                         graphics.DrawRectangle(pen, 8, 3, 8, 6);
                         graphics.DrawRectangle(pen, 3, 16, 6, 5);
                         graphics.DrawRectangle(pen, 15, 16, 6, 5);
+                        break;
+                    // The sidebar glyphs of the panel mockups (same 24-unit paths).
+                    case AppGlyph.Globe:
+                        graphics.DrawEllipse(pen, 3, 3, 18, 18);
+                        graphics.DrawLine(pen, 3, 12, 21, 12);
+                        graphics.DrawBezier(pen, 12, 3, 16, 7, 16, 17, 12, 21);
+                        graphics.DrawBezier(pen, 12, 3, 8, 7, 8, 17, 12, 21);
+                        break;
+                    case AppGlyph.Sliders:
+                        graphics.DrawLine(pen, 4, 6, 14, 6); graphics.DrawLine(pen, 18, 6, 20, 6); graphics.DrawLine(pen, 14, 4, 14, 8);
+                        graphics.DrawLine(pen, 4, 12, 8, 12); graphics.DrawLine(pen, 12, 12, 20, 12); graphics.DrawLine(pen, 8, 10, 8, 14);
+                        graphics.DrawLine(pen, 4, 18, 16, 18); graphics.DrawLine(pen, 16, 16, 16, 20);
+                        break;
+                    case AppGlyph.Pulse:
+                        graphics.DrawLines(pen, new[] { new PointF(3, 12), new PointF(7, 12), new PointF(10, 5), new PointF(14, 19), new PointF(17, 12), new PointF(21, 12) });
+                        break;
+                    case AppGlyph.Help:
+                        graphics.DrawEllipse(pen, 3, 3, 18, 18);
+                        graphics.DrawBezier(pen, 9.5f, 9.5f, 9.5f, 6.5f, 14.5f, 6.5f, 14.5f, 9.7f);
+                        graphics.DrawBezier(pen, 14.5f, 9.7f, 14.5f, 11.5f, 12, 11.9f, 12, 13.6f);
+                        graphics.DrawLine(pen, 12, 17, 12.01f, 17);
+                        break;
+                    case AppGlyph.Monitor:
+                        graphics.DrawRectangle(pen, 3, 4, 18, 13);
+                        graphics.DrawLine(pen, 8, 21, 16, 21); graphics.DrawLine(pen, 12, 17, 12, 21);
                         break;
                 }
             }
