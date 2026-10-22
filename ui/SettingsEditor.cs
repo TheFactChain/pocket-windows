@@ -142,7 +142,11 @@ internal sealed class SettingsEditor : UserControl
         sharedFolders.DrawItem+=delegate(object sender,DrawItemEventArgs args){DrawFolder(args);};
         sharedFolders.FontChanged+=delegate{sharedFolders.ItemHeight=TextRenderer.MeasureText("Ag",sharedFolders.Font).Height*2+12;sharedFolders.Height=sharedFolders.ItemHeight*3+2;};
         sharedFolders.DragEnter+=delegate(object sender,DragEventArgs args){args.Effect=args.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Link:DragDropEffects.None;};
-        sharedFolders.DragDrop+=delegate(object sender,DragEventArgs args){string[] paths=args.Data.GetData(DataFormats.FileDrop) as string[];if(paths!=null)foreach(string path in paths)if(Directory.Exists(path))AddFileSharingFolder(path);};
+        // Each dropped path goes through the same validation as the folder dialog; the first refusal stays visible.
+        sharedFolders.DragDrop+=delegate(object sender,DragEventArgs args){
+            string[] paths=args.Data.GetData(DataFormats.FileDrop) as string[];if(paths==null)return;string refusal=null;
+            foreach(string path in paths)if(!AddFileSharingFolder(path)&&refusal==null)refusal=Error.Text;
+            if(refusal!=null)FileSharingError(refusal);};
         Label filesNotice = new Label { AutoSize = true, Dock = DockStyle.Top, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = new Padding(0,12,0,0) };
         Label firstRun = new Label { Text = "Первое подключение: в Windows открой диск WCPFILES, запусти RUNFILES.CMD и подтверди запрос. Дальше папки подключаются сами при входе.", AutoSize = true, Dock = DockStyle.Top, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = new Padding(0,6,0,0) };
         Button addFolder = new RoundedButton { Text = "Добавить папку", AutoSize = true, Padding = new Padding(12,6,12,6), Margin = new Padding(0,0,8,0) };
@@ -163,6 +167,7 @@ internal sealed class SettingsEditor : UserControl
         addFolder.Click+=delegate{using(FolderBrowserDialog dialog=new FolderBrowserDialog { Description = "Выбери папку ПК для доступа из Windows", ShowNewFolderButton = false })if(dialog.ShowDialog(this)==DialogResult.OK)AddFileSharingFolder(dialog.SelectedPath);};
         removeFolder.Click+=delegate{if(sharedFolders.SelectedIndex>=0){sharedFolders.Items.RemoveAt(sharedFolders.SelectedIndex);UpdateDirty();}};
         sharedFolders.SelectedIndexChanged+=delegate{removeFolder.Enabled=sharedFolders.SelectedIndex>=0;};
+        fileControls.Add(modes);fileControls.Add(folderCard);
         TableLayoutPanel files = Stack(modes,fileSharingMode,folderCard,filesNotice,firstRun);
         files.SizeChanged+=delegate{filesNotice.MaximumSize=firstRun.MaximumSize=new Size(Math.Max(100,files.ClientSize.Width),0);};
 
@@ -177,6 +182,9 @@ internal sealed class SettingsEditor : UserControl
         root.SizeChanged += delegate { int width=Math.Max(100,root.ClientSize.Width);notice.MaximumSize=new Size(Math.Max(100,width/2),0);Error.MaximumSize=new Size(width,0); };
         Controls.Add(root);
     }
+    private readonly List<Control> fileControls = new List<Control>();
+    // Locked with the other fields while an operation may reload them, so a drop or mode change is not lost.
+    internal void SetFilesEnabled(bool enabled) { foreach(Control control in fileControls)control.Enabled=enabled;sharedFolders.AllowDrop=enabled; }
     private readonly List<Control> sections = new List<Control>();
     private readonly List<RoundedButton> sectionButtons = new List<RoundedButton>();
     internal int Section { get; private set; }
@@ -239,7 +247,7 @@ internal sealed class SettingsEditor : UserControl
         return new RoundedButton { Text = text, CenterText = true, Size = new Size(40,36), Font = new Font("Segoe UI",12), Margin = Padding.Empty, AccessibleName = name };
     }
     private static string Gib(long mib,string format) { return ((decimal)mib/1024).ToString(format,CultureInfo.CurrentCulture); }
-    private void SetMemoryRange(int max) { MemorySlider.Maximum=max;memoryMax.Text=Gib(max,"0.##")+" ГиБ"; }
+    private void SetMemoryRange(int max) { MemorySlider.Maximum=max;MemorySlider.Invalidate();memoryMax.Text=Gib(max,"0.##")+" ГиБ"; }
     private int CpuLimit { get { return hostProcessors>0?Math.Min(maximum[1],hostProcessors):maximum[1]; } }
     private void StepCpu(int delta)
     {

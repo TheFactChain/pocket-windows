@@ -11,6 +11,7 @@ using System.Windows.Forms;
 internal static class DesktopAsyncRegression
 {
     static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
+    static IEnumerable<Control> Tree(Control root) { yield return root; foreach (Control child in root.Controls) foreach (Control item in Tree(child)) yield return item; }
     static Dictionary<string,object> Report()
     {
         return new Dictionary<string,object> {{"ok",true},{"message","Готово"},{"checks",new Dictionary<string,object> {
@@ -68,6 +69,7 @@ internal static class DesktopAsyncRegression
             form.DisplayReport(Report());Context();Task action=form.RunAction("diagnose",true);
             Assert(!action.IsCompleted && !form.StartButton.Enabled,"Pending async operation must leave the UI responsive and busy");
             Assert(form.SettingsPage.Fields.Values.All(field=>!field.Enabled),"Settings fields must be read-only while an operation may reload them");
+            Assert(!Tree(form.SettingsPage).OfType<Button>().Single(button=>button.Text=="Все диски ПК").Enabled&&!Tree(form.SettingsPage).OfType<ListBox>().Single().AllowDrop,"File access mode and folders must be locked while an operation may reload them");
             bool heartbeat=false;form.BeginInvoke(new Action(()=>heartbeat=true));Application.DoEvents();
             Assert(heartbeat,"Native message loop must remain responsive while the backend is pending");
             Context();Pump(form.SaveSettingsAndDiagnose(new Dictionary<string,object>()));

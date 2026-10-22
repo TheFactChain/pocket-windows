@@ -841,6 +841,7 @@ internal sealed partial class MainForm : Form
         SettingsPage.CancelButton.Enabled = !value && !outcomeUnknown && settingsLoaded;
         foreach (TextBox field in SettingsPage.Fields.Values) field.Enabled = !value && !outcomeUnknown;
         SettingsPage.Resolution.Enabled = !value && !outcomeUnknown;
+        SettingsPage.SetFilesEnabled(!value && !outcomeUnknown);
         SettingsPage.StartFullscreen.Enabled = SettingsPage.RememberWindow.Enabled = !value && !outcomeUnknown && viewerSettingsLoaded;
         SettingsPage.LoadHostValues(settingsHost);
         if (value || outcomeUnknown) SettingsPage.RecommendedButton.Enabled = false;
