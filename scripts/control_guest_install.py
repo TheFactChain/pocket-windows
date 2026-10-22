@@ -60,7 +60,7 @@ settings=load_settings(root)
 if args.guest != 'work-boot':
     assert ctypes.windll.shell32.IsUserAnAdmin(), 'Use the authorized administrator CLI; no automatic elevation.'
 engine=root/'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
-assert sha(engine)=='47d57a6072e0bb3bd98f87926eb129eb1736dfe818c67b3b81ef7ce4edd0b3cd'
+assert sha(engine)=='d13720aabc7da7940098e19362190effc04b160406247473ed01f57ae851d7bb'
 work=args.guest.startswith('work-')
 install=args.guest.endswith('-install')
 assert not args.gateway_stage or args.guest=='gateway-boot'
@@ -372,17 +372,10 @@ def pointer_settled():
                for mouse in command('query-mice') or [])
 
 
-def window_title(title):
-    """'QEMU (WindowsClaude-work-boot-0) - Press Ctrl+Alt+G to exit grab' -> 'Windows Claude — …'."""
-    if not title.startswith('QEMU (') or ')' not in title:
-        return None
-    grabbed = 'Ctrl+Alt+G' in title.split(')', 1)[1]
-    return 'Windows Claude' + (' — Ctrl+Alt+G освобождает мышь' if grabbed else '')
-
-
 def tidy_work_window():
     """A fixed-size window whose client is exactly the guest screen never shows black bars;
-    every call to the QEMU window is bounded so its UI thread can never stall this controller."""
+    every call to the QEMU window is bounded so its UI thread can never stall this controller.
+    The caption is not touched: the patched engine (patch_qemu_engine.py) sets "Windows Claude" itself."""
     from ctypes import wintypes
     user = ctypes.WinDLL('user32', use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -410,11 +403,6 @@ def tidy_work_window():
         # WM_NULL with SMTO_ABORTIFHUNG: touch the window only while its thread answers.
         if not user.SendMessageTimeoutW(window, 0, 0, None, 0x0002, 200, ctypes.byref(result)):
             continue
-        text = ctypes.create_unicode_buffer(256)
-        user.GetWindowTextW(window, text, 256)
-        title = window_title(text.value)
-        if title:
-            user.SendMessageTimeoutW(window, 0x000C, 0, ctypes.c_wchar_p(title), 0x0002, 200, ctypes.byref(result))
         style = user.GetWindowLongPtrW(window, -16)
         # Windowed (has a caption) and not minimized: a fixed frame whose client is exactly the guest
         # screen, so SDL never scales the picture (scaling is what adds the bars).

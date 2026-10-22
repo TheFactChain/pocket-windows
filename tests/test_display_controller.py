@@ -70,14 +70,12 @@ class DisplayControllerTests(unittest.TestCase):
             self.assertIn('VGA.xres=1920', arguments)
             self.assertIn('VGA.yres=1200', arguments)
 
-    def test_window_title_names_the_product_and_keeps_the_grab_hint(self):
-        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'window_title')
-        scope = {}
-        exec(compile(ast.Module(body=[function], type_ignores=[]), 'window-title', 'exec'), scope)
-        self.assertEqual(scope['window_title']('QEMU (WindowsClaude-work-boot-0)'), 'Windows Claude')
-        self.assertEqual(scope['window_title']('QEMU (WindowsClaude-work-boot-0) - Press Ctrl+Alt+G to exit grab'),
-                         'Windows Claude — Ctrl+Alt+G освобождает мышь')
-        self.assertIsNone(scope['window_title']('Windows Claude'))
+    def test_controller_never_retitles_the_qemu_window(self):
+        # The branded engine sets a fixed caption itself; a second writer would make it flicker.
+        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'tidy_work_window')
+        text = (ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8')
+        self.assertNotIn('0x000C', ast.get_source_segment(text, function))
+        self.assertNotIn('window_title', [node.name for node in self.tree().body if isinstance(node, ast.FunctionDef)])
 
     def test_response_must_confirm_current_nonce_and_actual_resolution(self):
         function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef)

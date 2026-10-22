@@ -23,7 +23,7 @@ from connection_profile import import_profile_uri
 from profile_store import ProfileStore, StoreBusy, StoreError, SecretsUnavailable, _pinned_directory, _plain
 from gateway_package import inspect_current
 
-ENGINE_SHA256 = '47d57a6072e0bb3bd98f87926eb129eb1736dfe818c67b3b81ef7ce4edd0b3cd'
+ENGINE_SHA256 = 'd13720aabc7da7940098e19362190effc04b160406247473ed01f57ae851d7bb'
 RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
                  'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd',

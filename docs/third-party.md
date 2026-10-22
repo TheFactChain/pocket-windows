@@ -5,7 +5,10 @@ and documentation. No downloaded builder or third-party runtime is committed.
 
 The local ZIP preserves the already present runtime directories and their bundled
 license notices: Python 3.12.14 (`LICENSE.txt`), QEMU 11.1.0 (`COPYING`, `COPYING.LIB`),
-and bundled firmware notices including `share/edk2-licenses.txt`. Debian and sing-box
+and bundled firmware notices including `share/edk2-licenses.txt`. `qemu-system-x86_64.exe`
+is modified: three same-length byte replacements (fixed window title, no caption update on
+mouse grab) described in `packaging.md` and applied by `scripts/patch_qemu_engine.py`;
+everything else is unmodified QEMU 11.1.0. Debian and sing-box
 remain installed in the existing gateway disk. Windows remains in its existing disk.
 
 This local copy is not a public software release or a grant of redistribution rights.

@@ -23,8 +23,9 @@ Assert-Plain $operation
 try {
     $manifestPath=Join-Path $Project 'runtime/components-manifest.json'
     $archivePath=Join-Path $Project 'runtime/components-recovery.zip'
-    if ((Hash-File $manifestPath) -ne '3b6a10783f08f626ef3b2799ec53b1763ecfeb2ebfd407c99e2c5c07bcd5ee78' -or
-        (Hash-File $archivePath) -ne '7b4ae07c85ba102aa9ea5780e4d70a1622f433f786089418e5dd9e2e29d7c016') { throw 'Unexpected trimmed runtime' }
+    # Trimmed runtime after scripts/patch_qemu_engine.py (deterministic: every patched copy has these bytes).
+    if ((Hash-File $manifestPath) -ne '7d674dec3485e04018a408924ad833eca41a02aa8f8de62d66040a627ce962bc' -or
+        (Hash-File $archivePath) -ne 'b315305c5e5c7908e97b641c238ad25feb9fcee48038748bb4dfbfbb7b7dfb36') { throw 'Unexpected trimmed runtime' }
     foreach ($relative in @('runtime/components-manifest.json','runtime/components-recovery.zip','scripts/Prepare-Dependencies.ps1')) {
         Assert-Plain (Join-Path $Project $relative)
         [IO.File]::Copy((Join-Path $Project $relative),(Join-Path $fixture $relative),$false)
