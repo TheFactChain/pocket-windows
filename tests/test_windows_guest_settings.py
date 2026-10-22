@@ -29,14 +29,14 @@ class WindowsGuestSettingsTests(unittest.TestCase):
         with self.temporary() as temporary:
             first = guest.load_settings(Path(temporary))
             first['width'] = 800
-            self.assertEqual(guest.load_settings(Path(temporary)), {'schema': 1, 'width': 1280, 'height': 720})
+            self.assertEqual(guest.load_settings(Path(temporary)), {'schema': 1, 'width': 1280, 'height': 720, 'fit': True})
 
     def test_load_merges_partial_settings_from_selected_root(self):
         with self.temporary() as temporary:
             root = Path(temporary)
             (root / 'config').mkdir()
             (root / 'config/windows.json').write_text('{"width":1920,"height":1080}', encoding='utf-8')
-            self.assertEqual(guest.load_settings(root), {'schema': 1, 'width': 1920, 'height': 1080})
+            self.assertEqual(guest.load_settings(root), {'schema': 1, 'width': 1920, 'height': 1080, 'fit': True})
 
     def test_settings_reject_unknown_modes_secrets_types_and_disk_options(self):
         invalid = ({'password': 'private'}, {'width': True}, {'schema': True}, {'height': 719},
@@ -46,6 +46,31 @@ class WindowsGuestSettingsTests(unittest.TestCase):
                 guest.validate_settings(value)
         for width, height in guest.MODES:
             self.assertEqual(guest.validate_settings({'width': width, 'height': height})['width'], width)
+
+    def test_fit_keeps_monitor_proportions_for_window_and_full_screen(self):
+        laptop = {'screen': (1366, 768), 'work': (1366, 728), 'frame': 8, 'caption': 23}
+        width, height = guest.fit_size(fullscreen=False, **laptop)
+        self.assertEqual(width % 8, 0)
+        self.assertLessEqual(width + 2 * 8, 1366)
+        self.assertLessEqual(height + 23 + 2 * 8, 728)
+        self.assertAlmostEqual(width / height, 1366 / 768, delta=0.01)
+        self.assertEqual(guest.fit_size(fullscreen=True, screen=(1920, 1200), work=(1920, 1152), frame=8, caption=23), (1920, 1200))
+        self.assertEqual(guest.fit_size(fullscreen=True, screen=(1366, 768), work=(1366, 728), frame=8, caption=23), (1360, 764))
+        fitted = guest.effective_settings({'fit': True}, False, {'screen': (2560, 1440), 'work': (2560, 1392), 'frame': 8, 'caption': 23})
+        self.assertTrue(fitted['fit'])
+        self.assertAlmostEqual(fitted['width'] / fitted['height'], 16 / 9, delta=0.005)
+        fixed = guest.effective_settings({'fit': False, 'width': 1600, 'height': 900}, True, {'screen': (1, 1)})
+        self.assertEqual((fixed['width'], fixed['height']), (1600, 900))
+        self.assertEqual(guest.vga_memory_mib({'width': 1920, 'height': 1080}), 16)
+        self.assertEqual(guest.vga_memory_mib({'width': 3840, 'height': 2160}), 32)
+
+    def test_request_allows_fitted_sizes_but_saved_settings_only_listed_ones(self):
+        self.assertEqual(guest.validate_request({'width': 1752, 'height': 1096})['width'], 1752)
+        with self.assertRaises(ValueError):
+            guest.validate_settings({'width': 1752, 'height': 1096})
+        for bad in ({'width': 1750, 'height': 1096}, {'width': 600, 'height': 400}, {'width': 8000, 'height': 4000}, {'fit': 1}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                guest.validate_request(bad)
 
     def test_load_rejects_duplicate_and_oversize_json(self):
         with self.temporary() as temporary:
@@ -61,7 +86,7 @@ class WindowsGuestSettingsTests(unittest.TestCase):
             folder = Path(temporary)
             identities = guest.write_settings(folder, {}, self.NONCE)
             self.assertEqual(set(identities), {'SETTINGS.JSN'})
-            self.assertEqual(json.loads((folder / 'SETTINGS.JSN').read_bytes()), guest.DEFAULTS | {'session_nonce': self.NONCE})
+            self.assertEqual(json.loads((folder / 'SETTINGS.JSN').read_bytes()), {'schema': 1, 'width': 1280, 'height': 720, 'session_nonce': self.NONCE})
             self.assertEqual(identities['SETTINGS.JSN']['file_id'], (folder / 'SETTINGS.JSN').stat().st_ino)
             with self.assertRaises(ValueError):
                 guest.write_settings(folder, {}, self.NONCE)

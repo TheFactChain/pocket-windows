@@ -27,7 +27,7 @@ class DesktopWindowTests(unittest.TestCase):
                 mock.patch.object(ctypes, 'WinDLL', return_value=user):
             result = show(Path(temporary))
         self.assertTrue(result['ok'])
-        user.ShowWindow.assert_called_once_with(22, 9)
+        user.ShowWindowAsync.assert_called_once_with(22, 9)  # async: a busy QEMU UI thread cannot stall the panel
         user.SetForegroundWindow.assert_called_once_with(22)
 
     def test_exited_or_reused_process_never_activates_a_window(self):

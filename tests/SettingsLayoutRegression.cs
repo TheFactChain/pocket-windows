@@ -63,15 +63,15 @@ internal static class SettingsLayoutRegression
                 Dictionary<string,object> value;
                 Assert(!editor.TryGetWindowsValue(out value),"Windows settings must be loaded before save.");
                 editor.LoadValues(new Dictionary<string,object>{{"schema",1},{"work_memory_mib",3072},{"gateway_memory_mib",1536},{"vcpus",2},{"lan_port",42345}},false);
-                editor.LoadWindowsValues(new Dictionary<string,object>{{"schema",1},{"width",1366},{"height",768}},new Dictionary<string,object>{{"virtual_bytes",85899345920L}});
-                Assert(editor.Resolution.SelectedIndex==4&&editor.Resolution.Items.Count==7,"Only the agreed desktop-resolution presets may be selected.");
-                editor.Resolution.SelectedIndex=6;
-                Assert(editor.TryGetWindowsValue(out value)&&value.Count==3&&(int)value["schema"]==1&&(int)value["width"]==1920&&(int)value["height"]==1080,"Windows display save must return only its own schema.");
+                editor.LoadWindowsValues(new Dictionary<string,object>{{"schema",1},{"width",1366},{"height",768},{"fit",false}},new Dictionary<string,object>{{"virtual_bytes",85899345920L}});
+                Assert(editor.Resolution.SelectedIndex==5&&editor.Resolution.Items.Count==12,"Only the agreed desktop-resolution presets may be selected.");
+                editor.Resolution.SelectedIndex=9;
+                Assert(editor.TryGetWindowsValue(out value)&&value.Count==4&&(int)value["schema"]==1&&(int)value["width"]==1920&&(int)value["height"]==1080&&!(bool)value["fit"],"Windows display save must return only its own schema.");
                 editor.CancelButton.PerformClick();Assert(editor.TryGetWindowsValue(out value)&&(int)value["width"]==1366,"Cancel must restore loaded Windows resolution.");
                 editor.Resolution.SelectedIndex=-1;Assert(!editor.TryGetWindowsValue(out value),"An unselected resolution must not be saved.");
-                editor.LoadWindowsValues(new Dictionary<string,object>{{"schema",1},{"width",1234},{"height",567}});
+                editor.LoadWindowsValues(new Dictionary<string,object>{{"schema",1},{"width",1234},{"height",567},{"fit",false}});
                 Assert(editor.Resolution.SelectedIndex==-1&&!editor.TryGetWindowsValue(out value),"Unsupported saved modes must remain an explicit error, not silently become a preset.");
-                editor.LoadWindowsValues(null);Assert(editor.TryGetWindowsValue(out value)&&(int)value["width"]==1280&&(int)value["height"]==720,"Default Windows desktop must be 1280x720.");
+                editor.LoadWindowsValues(null);Assert(editor.Resolution.SelectedIndex==0&&editor.TryGetWindowsValue(out value)&&(bool)value["fit"]&&(int)value["width"]==1280,"Default Windows desktop must follow the PC screen.");
                 Assert(editor.TryGetValue(out value)&&value.Count==5&&(int)value["gateway_memory_mib"]==1536&&(int)value["lan_port"]==42345&&(int)value["vcpus"]==2,"Adding Windows display settings must not change the runtime contract.");
                 Assert(!editor.Fields.ContainsKey("disk")&&Tree(editor).OfType<Label>().Any(label=>label.Text=="80 ГиБ"),"Windows disk capacity must remain read-only.");
             }

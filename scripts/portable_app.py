@@ -231,7 +231,10 @@ def preflight(root, host=None, *, full=True):
                 display_state = {'status': 'pending'}
                 display = work_state.get('windows_display', {})
                 if display.get('status') in ('applied', 'failed') and display.get('generation') == work_state.get('generation'):
-                    receipt = windows_settings.validate_receipt(json.dumps(display.get('receipt')), display_settings, work_state.get('session_nonce'))
+                    # "As the PC screen" sends a fitted size: check the guest against what this session requested.
+                    requested = windows_settings.validate_request(display['requested']) if 'requested' in display else display_settings
+                    receipt = windows_settings.validate_receipt(json.dumps(display.get('receipt')), requested, work_state.get('session_nonce'))
+                    display_state['requested'] = {key: requested[key] for key in ('width', 'height')}
                     display_state = {'status': 'applied' if receipt['success'] else 'failed', 'receipt': receipt}
                 elif display.get('status') == 'unconfirmed':
                     display_state = {'status': 'unconfirmed'}
@@ -304,7 +307,11 @@ def show_desktop(root):
     user.EnumWindows(inspect, 0)
     if not windows or not runtime.same_identity(identity, runtime.process_identity(identity['pid'])):
         return {'ok': False, 'message': 'Окно Windows ещё не появилось. Повтори через несколько секунд.'}
-    user.ShowWindow(windows[0], 9)
+    if work.get('state') and runtime.read_json(Path(work['state'])).get('window_parked') is True:
+        # Restoring it before the guest enables its tablet risks the QEMU window deadlock.
+        return {'ok': False, 'message': 'Windows ещё загружается. Окно откроется само через несколько секунд.'}
+    user.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+    user.ShowWindowAsync(windows[0], 9)
     foreground = bool(user.SetForegroundWindow(windows[0]))
     return {'ok': True, 'message': 'Рабочий стол Windows открыт.' if foreground else
             'Окно Windows восстановлено. Выбери его на панели задач.'}

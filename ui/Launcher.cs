@@ -815,6 +815,12 @@ internal sealed partial class MainForm : Form
         if (displaySettings != null)
         {
             string size = TextValue(displaySettings,"width","—") + " × " + TextValue(displaySettings,"height","—");
+            if (TextValue(displaySettings,"fit","True") == "True")
+            {
+                var shown = report.ContainsKey("windows_display") ? report["windows_display"] as Dictionary<string,object> : null;
+                var requested = shown != null && shown.ContainsKey("requested") ? shown["requested"] as Dictionary<string,object> : null;
+                size = "как экран ПК" + (requested != null ? " (" + TextValue(requested,"width","—") + " × " + TextValue(requested,"height","—") + ")" : "");
+            }
             string state = DisplayState(report);
             string detail = state == "applied" ? "применено" : state == "not_running" ? "при следующем запуске" : state == "failed" ? "не применилось" : "ожидаем подтверждения Windows";
             resources.Text += Environment.NewLine + "Разрешение: " + size + " — " + detail;

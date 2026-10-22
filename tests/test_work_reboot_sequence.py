@@ -81,6 +81,7 @@ class WorkRebootSequence(unittest.TestCase):
             api=SimpleNamespace(Popen=mock.Mock(side_effect=spawn),PIPE=subprocess.PIPE,CREATE_NO_WINDOW=subprocess.CREATE_NO_WINDOW)
             scope={'runtime':runtime,'normal_runtime':True,'work_reboot_session':True,'output':output,'root':root,'engine':engine,'env':{},
                 'display_settings':None, 'protect_work_window':mock.Mock(return_value=True),
+                'show_work_window':mock.Mock(return_value=False),'pointer_settled':mock.Mock(return_value=True),
                 'file_sharing':file_api,'files_session':None,
                 'arguments':['-drive','file=images/workvm-empty.qcow2','-no-reboot'],
                 'session_nonce':'a'*32,'controller_identity':controller,'generation':1,'previous_generations':[],

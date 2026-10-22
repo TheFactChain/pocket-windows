@@ -29,7 +29,7 @@ internal sealed class SettingsEditor : UserControl
     private int hostTotal = -1, hostAvailable = -1, hostProcessors = -1;
     private Label memoryGib;
     private readonly Label hostMemory = new Label { Text = "Данные памяти ПК пока недоступны.", AutoSize = true, Dock = DockStyle.Top, ForeColor = NativeStyle.Muted, Margin = new Padding(0,8,12,8) };
-    private readonly int[,] dimensions = {{800,600},{1024,768},{1280,720},{1280,800},{1366,768},{1600,900},{1920,1080}};
+    private readonly int[,] dimensions = {{800,600},{1024,768},{1280,720},{1280,800},{1366,768},{1440,900},{1600,900},{1680,1050},{1920,1080},{1920,1200},{2560,1440}};
     private readonly Label diskCapacity = new Label { Text = "80 ГиБ", AutoSize = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Margin = new Padding(0,12,0,12) };
     private readonly Label notice = new Label { Text = "Изменения применяются при следующем запуске Windows.", Font = new Font("Segoe UI",9), AutoSize = true, Dock = DockStyle.Fill, ForeColor = NativeStyle.Muted, Margin = new Padding(0,6,0,12) };
 
@@ -77,8 +77,10 @@ internal sealed class SettingsEditor : UserControl
         resolutionContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         RowStyle resolutionRow=new RowStyle(SizeType.Absolute,Resolution.Height);resolutionContent.RowStyles.Add(resolutionRow);
         Resolution.SizeChanged+=delegate{resolutionRow.Height=Resolution.Height;};
+        // First choice: the PC monitor's proportions, so Windows never shows black bars.
+        Resolution.Items.Add("Как экран ПК (рекомендуется)");
         for(int index=0;index<dimensions.GetLength(0);index++)Resolution.Items.Add(dimensions[index,0]+" × "+dimensions[index,1]);
-        Resolution.SelectedIndex=2;
+        Resolution.SelectedIndex=0;
         resolutionContent.Controls.Add(Resolution,0,0);resolutionBox.Controls.Add(resolutionContent);rows.Controls.Add(resolutionBox,1,2);
         rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         AddCaption(rows,3,"Диск Windows","Файл находится в папке portable.");
@@ -225,12 +227,13 @@ internal sealed class SettingsEditor : UserControl
     }
     internal void LoadWindowsValues(Dictionary<string,object> settings,Dictionary<string,object> disk = null)
     {
-        originalWindows=settings==null?new Dictionary<string,object>{{"schema",1},{"width",1280},{"height",720}}:new Dictionary<string,object>(settings);
-        Resolution.SelectedIndex=-1;int width,height;
+        originalWindows=settings==null?new Dictionary<string,object>{{"schema",1},{"width",1280},{"height",720},{"fit",true}}:new Dictionary<string,object>(settings);
+        Resolution.SelectedIndex=-1;int width,height;object fit;
+        if(!originalWindows.TryGetValue("fit",out fit)||!(fit is bool)||(bool)fit)Resolution.SelectedIndex=0;else
         if(originalWindows.ContainsKey("width")&&originalWindows.ContainsKey("height")
             &&Int32.TryParse(Convert.ToString(originalWindows["width"],CultureInfo.InvariantCulture),out width)
             &&Int32.TryParse(Convert.ToString(originalWindows["height"],CultureInfo.InvariantCulture),out height))
-            for(int index=0;index<dimensions.GetLength(0);index++)if(dimensions[index,0]==width&&dimensions[index,1]==height)Resolution.SelectedIndex=index;
+            for(int index=0;index<dimensions.GetLength(0);index++)if(dimensions[index,0]==width&&dimensions[index,1]==height)Resolution.SelectedIndex=index+1;
         if(Resolution.SelectedIndex<0){Error.Text="Сохранённое разрешение не поддерживается. Выбери значение из списка.";Error.Visible=true;}
         long bytes;
         if(disk!=null&&disk.ContainsKey("virtual_bytes")&&Int64.TryParse(Convert.ToString(disk["virtual_bytes"],CultureInfo.InvariantCulture),out bytes)&&bytes>0)
@@ -240,9 +243,15 @@ internal sealed class SettingsEditor : UserControl
     {
         value=null;
         if(originalWindows==null){Error.Text="Сначала загрузи настройки Windows.";Error.Visible=true;return false;}
-        int index=Resolution.SelectedIndex;
-        if(index<0||index>=dimensions.GetLength(0)){Error.Text="Выбери разрешение рабочего стола из списка.";Error.Visible=true;return false;}
-        value=new Dictionary<string,object>{{"schema",1},{"width",dimensions[index,0]},{"height",dimensions[index,1]}};
+        int index=Resolution.SelectedIndex-1;
+        if(index<-1||index>=dimensions.GetLength(0)){Error.Text="Выбери разрешение рабочего стола из списка.";Error.Visible=true;return false;}
+        if(index<0)
+        {
+            // Keep the saved fixed size as the fallback for when "as the PC screen" is switched off again.
+            int width=1280,height=720;bool known=Int32.TryParse(Convert.ToString(originalWindows.ContainsKey("width")?originalWindows["width"]:null,CultureInfo.InvariantCulture),out width)&&Int32.TryParse(Convert.ToString(originalWindows.ContainsKey("height")?originalWindows["height"]:null,CultureInfo.InvariantCulture),out height)&&Enumerable.Range(0,dimensions.GetLength(0)).Any(item=>dimensions[item,0]==width&&dimensions[item,1]==height);
+            value=new Dictionary<string,object>{{"schema",1},{"width",known?width:1280},{"height",known?height:720},{"fit",true}};
+        }
+        else value=new Dictionary<string,object>{{"schema",1},{"width",dimensions[index,0]},{"height",dimensions[index,1]},{"fit",false}};
         Error.Text="";Error.Visible=false;return true;
     }
     internal void LoadValues(Dictionary<string,object> settings,bool recovery)

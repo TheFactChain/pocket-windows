@@ -304,7 +304,7 @@ class PortableAppTests(unittest.TestCase):
             image.parent.mkdir()
             header = b'QFI\xfb' + bytes(20) + (80 * 1024 ** 3).to_bytes(8, 'big')
             image.write_bytes(header)
-            value = dict(app.DEFAULTS, windows={'schema': 1, 'width': 1920, 'height': 1080})
+            value = dict(app.DEFAULTS, windows={'schema': 1, 'width': 1920, 'height': 1080, 'fit': False})
             app.save_settings(root, value)
             view = app.windows_preferences(root)
             self.assertEqual(view['windows_settings'], value['windows'])

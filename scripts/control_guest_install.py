@@ -130,18 +130,26 @@ session_nonce=uuid.uuid4().hex if work_reboot_session else None
 files_session = None
 display_settings = None
 if normal_runtime:
-    display_settings = windows_settings.load_settings(root)
+    viewer_settings = load_viewer_settings(root)
+    # "As the PC screen": the monitor's proportions, so neither the window nor full screen shows bars.
+    display_settings = windows_settings.effective_settings(windows_settings.load_settings(root), viewer_settings['start_fullscreen'])
     medium = output / 'display-settings'
     medium.mkdir()
     windows_settings.write_settings(medium, display_settings, session_nonce)
     arguments += windows_settings.media_arguments(medium.relative_to(root).as_posix())
-    arguments += ['-device', 'usb-tablet,id=wcabspointer,bus=wcsettingsusb.0']
+    # QEMU's SDL front end retitles its window from the vCPU thread whenever the guest switches
+    # between the PS/2 mouse and the tablet; that SendMessage deadlocks with the UI thread waiting
+    # for the big QEMU lock and the window freezes during boot. Without the PS/2 controller the
+    # pointer is absolute from the start and the mode never switches; the keyboard moves to USB.
+    arguments[arguments.index('-machine') + 1] = 'q35,i8042=off'
+    arguments += ['-device', 'usb-tablet,id=wcabspointer,bus=wcsettingsusb.0',
+                  '-device', 'usb-kbd,id=wckeyboard,bus=wcsettingsusb.0']
     arguments += ['-global', 'VGA.xres=' + str(display_settings['width']),
                   '-global', 'VGA.yres=' + str(display_settings['height']),
+                  '-global', 'VGA.vgamem_mb=' + str(windows_settings.vga_memory_mib(display_settings)),
                   '-chardev', 'ringbuf,id=wcdisplay,size=8192']
     arguments[arguments.index('-serial') + 1] = 'chardev:wcdisplay'
     # SDL's close button otherwise cuts guest power without an ACPI shutdown.
-    viewer_settings = load_viewer_settings(root)
     arguments[arguments.index('-display') + 1] = ('sdl,gl=off,window-close=off'
         + (',full-screen=on' if viewer_settings['start_fullscreen'] else ''))
     setup = root / 'state/display-setup'
@@ -269,7 +277,7 @@ def read_display_receipt():
             line, display_buffer = display_buffer.split('\n', 1)
             receipt = windows_settings.validate_receipt(line.strip(), display_settings, session_nonce)
             report['windows_display'] = {'status': 'applied' if receipt['success'] else 'failed',
-                                         'receipt': receipt, 'generation': generation}
+                                         'receipt': receipt, 'generation': generation, 'requested': display_settings}
             save()
     except (OSError, ValueError, RuntimeError, TimeoutError, queue.Empty) as error:
         if isinstance(error, (OSError, TimeoutError, queue.Empty)):
@@ -302,6 +310,88 @@ def protect_work_window():
         return True
     user.EnumWindows(callback_type(visit), 0)
     return bool(found)
+
+
+def show_work_window(command_code):
+    """ShowWindowAsync never waits for QEMU's UI thread. 7 = minimized without focus, 9 = restore."""
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+    found = []
+    def visit(window, unused):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+        if pid.value == process.pid and user.IsWindowVisible(window):
+            user.ShowWindowAsync(window, command_code)
+            found.append(window)
+        return True
+    user.EnumWindows(callback_type(visit), 0)
+    return bool(found)
+
+
+def pointer_settled():
+    """True once the guest has switched QEMU to the absolute USB tablet (it never switches back)."""
+    return any(isinstance(mouse, dict) and mouse.get('absolute') is True and mouse.get('current') is True
+               for mouse in command('query-mice') or [])
+
+
+def window_title(title):
+    """'QEMU (WindowsClaude-work-boot-0) - Press Ctrl+Alt+G to exit grab' -> 'Windows Claude — …'."""
+    if not title.startswith('QEMU (') or ')' not in title:
+        return None
+    grabbed = 'Ctrl+Alt+G' in title.split(')', 1)[1]
+    return 'Windows Claude' + (' — Ctrl+Alt+G освобождает мышь' if grabbed else '')
+
+
+def tidy_work_window():
+    """A fixed-size window whose client is exactly the guest screen never shows black bars;
+    every call to the QEMU window is bounded so its UI thread can never stall this controller."""
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, ctypes.c_void_p,
+                                         wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    user.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    user.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user.AdjustWindowRectEx.argtypes = [ctypes.POINTER(wintypes.RECT), wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    windows = []
+    def visit(window, unused):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+        if pid.value == process.pid and user.IsWindowVisible(window):
+            windows.append(window)
+        return True
+    user.EnumWindows(callback_type(visit), 0)
+    for window in windows:
+        result = ctypes.c_size_t()
+        # WM_NULL with SMTO_ABORTIFHUNG: touch the window only while its thread answers.
+        if not user.SendMessageTimeoutW(window, 0, 0, None, 0x0002, 200, ctypes.byref(result)):
+            continue
+        text = ctypes.create_unicode_buffer(256)
+        user.GetWindowTextW(window, text, 256)
+        title = window_title(text.value)
+        if title:
+            user.SendMessageTimeoutW(window, 0x000C, 0, ctypes.c_wchar_p(title), 0x0002, 200, ctypes.byref(result))
+        style = user.GetWindowLongPtrW(window, -16)
+        # Windowed (has a caption), still resizable or maximizable: lock it at its current client size.
+        if style & 0x00C00000 == 0x00C00000 and style & (0x00040000 | 0x00010000) and not user.IsZoomed(window):
+            client = wintypes.RECT()
+            user.GetClientRect(window, ctypes.byref(client))
+            style &= ~(0x00040000 | 0x00010000)
+            user.SetWindowLongPtrW(window, -16, style)
+            frame = wintypes.RECT(0, 0, client.right, client.bottom)
+            user.AdjustWindowRectEx(ctypes.byref(frame), style & 0xFFFFFFFF, False, user.GetWindowLongPtrW(window, -20) & 0xFFFFFFFF)
+            # SWP_NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED|ASYNCWINDOWPOS
+            user.SetWindowPos(window, None, 0, 0, frame.right - frame.left, frame.bottom - frame.top, 0x0002 | 0x0004 | 0x0010 | 0x0020 | 0x4000)
 
 
 def read_file_receipt():
@@ -413,6 +503,11 @@ try:
                     report['host_files']['link']='down'
                 except (RuntimeError,TimeoutError,queue.Empty):
                     report['host_files'].update(status='failed',code='LINK_CONTROL_FAILED',link='unknown')
+            if normal_runtime:
+                # QEMU's SDL grabs the mouse and retitles its window from the vCPU thread when the guest
+                # first enables the tablet with the host cursor over the window; that SendMessage deadlocks
+                # with the UI thread. A minimized window never has the cursor, so keep it parked until then.
+                report['window_parked']=show_work_window(7)
             command('cont');report['status']='running';save()
             # Capture only on explicit request, so a user's local password entry is never polled.
             targets=iter([]);target=next(targets,None)
@@ -423,6 +518,17 @@ try:
             while process.poll() is None:
                 if normal_runtime and not protected_window:
                     protected_window = protect_work_window()
+                if normal_runtime and report.get('window_parked') is False and time.monotonic() - begin < 60:
+                    report['window_parked'] = show_work_window(7)  # The SDL window appeared after cont.
+                if report.get('window_parked') is True and time.monotonic() >= display_poll:
+                    try:
+                        settled = pointer_settled() or time.monotonic() - begin >= 240
+                    except (RuntimeError, TimeoutError, queue.Empty):
+                        settled = False
+                    if settled:
+                        show_work_window(9)
+                        report['window_parked'] = 'released'
+                        save()
                 if display_settings is not None and time.monotonic() >= display_poll:
                     read_display_receipt()
                     if time.monotonic() - begin >= 120 and report['windows_display']['status'] == 'pending':
@@ -431,6 +537,10 @@ try:
                     display_poll = time.monotonic() + 3
                     if files_session is not None:
                         read_file_receipt()
+                    try:
+                        tidy_work_window()
+                    except OSError:
+                        pass  # Cosmetic only: the window keeps working with QEMU's own title and frame.
                 if target is not None and time.monotonic()-begin>=target:
                     capture('boot-'+str(target))
                     if work and install and target==2:

@@ -4,9 +4,9 @@ import os
 from pathlib import Path
 import re
 
-DEFAULTS = {'schema': 1, 'width': 1280, 'height': 720}
-MODES = ((800, 600), (1024, 768), (1280, 720), (1280, 800),
-         (1366, 768), (1600, 900), (1920, 1080))
+DEFAULTS = {'schema': 1, 'width': 1280, 'height': 720, 'fit': True}
+MODES = ((800, 600), (1024, 768), (1280, 720), (1280, 800), (1366, 768), (1440, 900),
+         (1600, 900), (1680, 1050), (1920, 1080), (1920, 1200), (2560, 1440))
 
 
 def _unique(pairs):
@@ -26,14 +26,71 @@ def _json(value):
     return json.loads(value, object_pairs_hook=_unique)
 
 
-def validate_settings(value):
+def _checked(value):
     if type(value) is not dict or set(value) - set(DEFAULTS):
         raise ValueError('Unknown Windows guest setting')
     result = DEFAULTS | value
-    if (any(type(item) is not int for item in result.values()) or result['schema'] != 1
-            or (result['width'], result['height']) not in MODES):
+    if (type(result['fit']) is not bool or any(type(result[key]) is not int for key in ('schema', 'width', 'height'))
+            or result['schema'] != 1):
         raise ValueError('Invalid Windows resolution')
     return result
+
+
+def validate_settings(value):
+    """Saved preference: fit to this PC's screen, or one listed size."""
+    result = _checked(value)
+    if (result['width'], result['height']) not in MODES:
+        raise ValueError('Invalid Windows resolution')
+    return result
+
+
+def validate_request(value):
+    """The size actually sent to Windows: a listed mode or one fitted to the screen."""
+    result = _checked(value)
+    if not (640 <= result['width'] <= 7680 and 480 <= result['height'] <= 4320) or result['width'] % 8:
+        raise ValueError('Invalid Windows resolution')
+    return result
+
+
+def fit_size(screen, work, frame, caption, fullscreen):
+    """Largest size with the monitor's proportions: full screen fills it exactly, and the
+    window (client = guest size, so never scaled) also fits the work area without bars."""
+    width, height = screen
+    if fullscreen:
+        scale = 1.0
+    else:
+        scale = min(1.0, (work[0] - 2 * frame - 16) / width, (work[1] - caption - 2 * frame - 16) / height)
+    fitted = max(640, int(width * scale) // 8 * 8)
+    return fitted, max(480, round(fitted * height / width / 2) * 2)
+
+
+def host_display():
+    """Primary monitor in the 96-DPI units an unaware QEMU SDL window is laid out in."""
+    import ctypes
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    dpi = user.GetDpiForSystem() if hasattr(user, 'GetDpiForSystem') else 96
+    scale = 96 / dpi if dpi else 1.0
+    metric = lambda index: round(user.GetSystemMetrics(index) * scale)
+    area = wintypes.RECT()
+    if not user.SystemParametersInfoW(0x30, 0, ctypes.byref(area), 0) or not metric(0) or not metric(1):
+        raise OSError('Screen size is unavailable')
+    return {'screen': (metric(0), metric(1)),
+            'work': (round((area.right - area.left) * scale), round((area.bottom - area.top) * scale)),
+            'frame': metric(32) + metric(92), 'caption': metric(4)}
+
+
+def effective_settings(settings, fullscreen, display=None):
+    settings = validate_settings(settings)
+    if not settings['fit']:
+        return settings
+    width, height = fit_size(fullscreen=fullscreen, **(display or host_display()))
+    return validate_request(dict(settings, width=width, height=height))
+
+
+def vga_memory_mib(settings):
+    needed = settings['width'] * settings['height'] * 4
+    return next(size for size in (16, 32, 64, 128) if needed <= size * 1024 * 1024)
 
 
 def load_settings(root):
@@ -85,7 +142,7 @@ def _write_files(directory, files):
 
 
 def write_settings(directory, value, nonce):
-    payload = validate_settings(value) | {'session_nonce': _nonce(nonce)}
+    payload = {key: item for key, item in validate_request(value).items() if key != 'fit'} | {'session_nonce': _nonce(nonce)}
     return _write_files(directory, {'SETTINGS.JSN': json.dumps(payload, separators=(',', ':')).encode('ascii')})
 
 
@@ -110,7 +167,7 @@ def media_arguments(directory, label='WCPSETTINGS'):
 
 
 def validate_receipt(data, settings, nonce):
-    settings, nonce = validate_settings(settings), _nonce(nonce)
+    settings, nonce = validate_request(settings), _nonce(nonce)
     receipt = _json(data)
     keys = {'schema', 'session_nonce', 'requested', 'current', 'success', 'code'}
     if type(receipt) is not dict or not keys <= set(receipt) or set(receipt) - keys - {'display_code'}:
