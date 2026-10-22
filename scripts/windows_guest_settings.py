@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 
-DEFAULTS = {'schema': 1, 'width': 1280, 'height': 720, 'fit': True}
+DEFAULTS = {'schema': 1, 'width': 1920, 'height': 1080, 'fit': False}
 MODES = ((800, 600), (1024, 768), (1280, 720), (1280, 800), (1366, 768), (1440, 900),
          (1600, 900), (1680, 1050), (1920, 1080), (1920, 1200), (2560, 1440))
 
@@ -37,8 +37,12 @@ def _checked(value):
 
 
 def validate_settings(value):
-    """Saved preference: fit to this PC's screen, or one listed size."""
+    """Saved preference: one listed standard size. Windows saves its desktop mode and the firmware can only
+    restore a standard one: an old "as the PC screen" size broke the next start from another monitor
+    (garbled picture, 22.10), so that choice now means the default size."""
     result = _checked(value)
+    if result['fit']:
+        result = dict(DEFAULTS)
     if (result['width'], result['height']) not in MODES:
         raise ValueError('Invalid Windows resolution')
     return result
@@ -52,16 +56,13 @@ def validate_request(value):
     return result
 
 
-def fit_size(screen, work, frame, caption, fullscreen):
-    """Largest size with the monitor's proportions: full screen fills it exactly, and the
-    window (client = guest size, so never scaled) also fits the work area without bars."""
-    width, height = screen
-    if fullscreen:
-        scale = 1.0
-    else:
-        scale = min(1.0, (work[0] - 2 * frame - 16) / width, (work[1] - caption - 2 * frame - 16) / height)
-    fitted = max(640, int(width * scale) // 8 * 8)
-    return fitted, max(480, round(fitted * height / width / 2) * 2)
+def window_size(guest, display):
+    """First window client size: the guest picture scaled down (never up) to fit the work area with its
+    proportions. Afterwards the user may resize or maximize the window; Windows keeps its size."""
+    width, height = guest
+    work, frame, caption = display['work'], display['frame'], display['caption']
+    scale = min(1.0, (work[0] - 2 * frame - 16) / width, (work[1] - caption - 2 * frame - 16) / height)
+    return round(width * scale), round(height * scale)
 
 
 def host_display():
@@ -97,16 +98,6 @@ def host_display():
     work = info.rcWork
     return {'screen': size(info.rcMonitor), 'work': size(work), 'frame': metric(32) + metric(92), 'caption': metric(4),
             'monitor': (work.left, work.top, work.right, work.bottom)}
-
-
-def effective_settings(settings, fullscreen, display=None):
-    settings = validate_settings(settings)
-    if not settings['fit']:
-        return settings
-    display = dict(display or host_display())
-    display.pop('monitor', None)
-    width, height = fit_size(fullscreen=fullscreen, **display)
-    return validate_request(dict(settings, width=width, height=height))
 
 
 def vga_memory_mib(settings):

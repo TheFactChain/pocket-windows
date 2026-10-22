@@ -44,8 +44,9 @@ class DisplayControllerTests(unittest.TestCase):
             self.assertEqual(device['label'], 'WCPSETTINGS')
             self.assertEqual(arguments[arguments.index('-serial') + 1], 'chardev:wcdisplay')
             self.assertEqual(arguments[arguments.index('-display') + 1], 'sdl,gl=off,window-close=off')
-            self.assertIn('VGA.xres=1752', arguments)
-            self.assertIn('VGA.yres=1096', arguments)
+            # One standard size whatever monitor Start was clicked on; the monitor only sizes the window.
+            self.assertIn('VGA.xres=1920', arguments)
+            self.assertIn('VGA.yres=1080', arguments)
             self.assertIn('usb-tablet,id=wcabspointer,bus=wcsettingsusb.0', arguments)
             # No PS/2 controller: the pointer never switches back to relative mode (QEMU SDL deadlock).
             self.assertEqual(arguments[arguments.index('-machine') + 1], 'q35,i8042=off')
@@ -66,9 +67,9 @@ class DisplayControllerTests(unittest.TestCase):
                 exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
             self.assertEqual(arguments[arguments.index('-display') + 1],
                              'sdl,gl=off,window-close=off,full-screen=on')
-            # Full screen uses the monitor's own size: nothing to scale, no bars.
+            # Full screen keeps Windows' own size too; SDL scales it to the monitor.
             self.assertIn('VGA.xres=1920', arguments)
-            self.assertIn('VGA.yres=1200', arguments)
+            self.assertIn('VGA.yres=1080', arguments)
 
     def test_controller_never_retitles_the_qemu_window(self):
         # The branded engine sets a fixed caption itself; a second writer would make it flicker.
@@ -77,11 +78,43 @@ class DisplayControllerTests(unittest.TestCase):
         self.assertNotIn('0x000C', ast.get_source_segment(text, function))
         self.assertNotIn('window_title', [node.name for node in self.tree().body if isinstance(node, ast.FunctionDef)])
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows window sizing regression')
+    def test_window_is_shrunk_only_at_the_guest_full_size_and_user_sizes_are_kept(self):
+        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'tidy_work_window')
+        display = {'work': (2048, 1104), 'frame': 8, 'caption': 23}  # 2560x1440 at 125%
+        target = settings.window_size((1920, 1080), display)
+        for client, expected in (((1920, 1080), target), ((1600, 900), None), ((1280, 800), None)):
+            with self.subTest(client=client):
+                user = mock.Mock()
+                user.EnumWindows.side_effect = lambda callback, unused: callback(11, 0)
+                def identify(window, pid):
+                    pid._obj.value = 456
+                def rect(width, height):
+                    def fill(window, ref):
+                        ref._obj.left, ref._obj.top, ref._obj.right, ref._obj.bottom = 0, 0, width, height
+                    return fill
+                user.GetWindowThreadProcessId.side_effect = identify
+                user.IsWindowVisible.return_value = user.SendMessageTimeoutW.return_value = True
+                user.IsIconic.return_value = user.IsZoomed.return_value = False
+                user.GetWindowLongPtrW.return_value = 0x00C00000
+                user.GetClientRect.side_effect = rect(*client)
+                user.GetWindowRect.side_effect = rect(client[0] + 16, client[1] + 39)
+                scope = dict(ctypes=ctypes, process=SimpleNamespace(pid=456), report={'window_parked': 'released'},
+                             display_settings=settings.DEFAULTS, host_display=display, windows_settings=settings)
+                exec(compile(ast.Module(body=[function], type_ignores=[]), 'window-size', 'exec'), scope)
+                with mock.patch.object(ctypes, 'WinDLL', return_value=user):
+                    resized = scope['tidy_work_window']()
+                self.assertEqual(resized, expected is not None)
+                if expected:
+                    self.assertEqual(user.SetWindowPos.call_args.args[4:6], (expected[0] + 16, expected[1] + 39))
+                else:
+                    user.SetWindowPos.assert_not_called()
+
     def test_response_must_confirm_current_nonce_and_actual_resolution(self):
         function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef)
                         and node.name == 'read_display_receipt')
-        receipt = dict(schema=1, session_nonce='a' * 32, requested=dict(width=1280, height=720),
-                       current=dict(width=1280, height=720), success=True, code='OK', display_code='OK')
+        receipt = dict(schema=1, session_nonce='a' * 32, requested=dict(width=1920, height=1080),
+                       current=dict(width=1920, height=1080), success=True, code='OK', display_code='OK')
         for nonce, status in [('a' * 32, 'applied'), ('b' * 32, 'unconfirmed')]:
             data = dict(receipt, session_nonce=nonce)
             report = {}

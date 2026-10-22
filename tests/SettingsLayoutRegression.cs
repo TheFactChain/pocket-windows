@@ -64,14 +64,16 @@ internal static class SettingsLayoutRegression
                 Assert(!editor.TryGetWindowsValue(out value),"Windows settings must be loaded before save.");
                 editor.LoadValues(new Dictionary<string,object>{{"schema",1},{"work_memory_mib",3072},{"gateway_memory_mib",1536},{"vcpus",2},{"lan_port",42345}},false);
                 editor.LoadWindowsValues(new Dictionary<string,object>{{"schema",1},{"width",1366},{"height",768},{"fit",false}},new Dictionary<string,object>{{"virtual_bytes",85899345920L}});
-                Assert(editor.Resolution.SelectedIndex==5&&editor.Resolution.Items.Count==12,"Only the agreed desktop-resolution presets may be selected.");
-                editor.Resolution.SelectedIndex=9;
+                Assert(editor.Resolution.SelectedIndex==4&&editor.Resolution.Items.Count==11,"Only the agreed standard desktop-resolution presets may be selected.");
+                editor.Resolution.SelectedIndex=8;
                 Assert(editor.TryGetWindowsValue(out value)&&value.Count==4&&(int)value["schema"]==1&&(int)value["width"]==1920&&(int)value["height"]==1080&&!(bool)value["fit"],"Windows display save must return only its own schema.");
                 editor.CancelButton.PerformClick();Assert(editor.TryGetWindowsValue(out value)&&(int)value["width"]==1366,"Cancel must restore loaded Windows resolution.");
                 editor.Resolution.SelectedIndex=-1;Assert(!editor.TryGetWindowsValue(out value),"An unselected resolution must not be saved.");
                 editor.LoadWindowsValues(new Dictionary<string,object>{{"schema",1},{"width",1234},{"height",567},{"fit",false}});
                 Assert(editor.Resolution.SelectedIndex==-1&&!editor.TryGetWindowsValue(out value),"Unsupported saved modes must remain an explicit error, not silently become a preset.");
-                editor.LoadWindowsValues(null);Assert(editor.Resolution.SelectedIndex==0&&editor.TryGetWindowsValue(out value)&&(bool)value["fit"]&&(int)value["width"]==1280,"Default Windows desktop must follow the PC screen.");
+                editor.LoadWindowsValues(null);Assert(editor.Resolution.SelectedIndex==8&&editor.TryGetWindowsValue(out value)&&!(bool)value["fit"]&&(int)value["width"]==1920&&(int)value["height"]==1080,"Default Windows desktop is the standard 1920x1080.");
+                editor.LoadWindowsValues(new Dictionary<string,object>{{"schema",1},{"width",1280},{"height",720},{"fit",true}});Assert(editor.Resolution.SelectedIndex==8&&editor.TryGetWindowsValue(out value)&&!(bool)value["fit"]&&(int)value["width"]==1920,"An old 'as the PC screen' setting opens as 1920x1080 and saves as a fixed size.");
+                Assert(!Enumerable.Range(0,editor.Resolution.Items.Count).Any(item=>Convert.ToString(editor.Resolution.Items[item]).Contains("ПК")),"The 'as the PC screen' choice is gone.");
                 Assert(editor.TryGetValue(out value)&&value.Count==5&&(int)value["gateway_memory_mib"]==1536&&(int)value["lan_port"]==42345&&(int)value["vcpus"]==2,"Adding Windows display settings must not change the runtime contract.");
                 Assert(!editor.Fields.ContainsKey("disk")&&Tree(editor).OfType<Label>().Any(label=>label.Text=="80 ГиБ"),"Windows disk capacity must remain read-only.");
             }

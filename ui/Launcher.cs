@@ -726,12 +726,7 @@ internal sealed partial class MainForm : Form
         cardValues[1].Text = gib + ", " + (settings != null ? TextValue(settings,"vcpus","—") : "—") + " проц.";
         string screen = "";
         if (displaySettings != null)
-        {
-            var shown = report.ContainsKey("windows_display") ? report["windows_display"] as Dictionary<string,object> : null;
-            var requested = shown != null && shown.ContainsKey("requested") ? shown["requested"] as Dictionary<string,object> : null;
-            screen = TextValue(displaySettings,"fit","True") == "True" ? "Экран как у ПК" + (requested != null ? ": " + TextValue(requested,"width","") + " × " + TextValue(requested,"height","") : "")
-                : "Экран " + TextValue(displaySettings,"width","—") + " × " + TextValue(displaySettings,"height","—");
-        }
+            screen = "Экран " + TextValue(displaySettings,"width","—") + " × " + TextValue(displaySettings,"height","—");
         cardDetails[1].Text = screen;
         if (filesState.Length == 0) { cardValues[2].Text = "Выключены"; cardDetails[2].Text = "Включить в настройках"; }
         FitHome();
@@ -988,12 +983,6 @@ internal sealed partial class MainForm : Form
         if (displaySettings != null)
         {
             string size = TextValue(displaySettings,"width","—") + " × " + TextValue(displaySettings,"height","—");
-            if (TextValue(displaySettings,"fit","True") == "True")
-            {
-                var shown = report.ContainsKey("windows_display") ? report["windows_display"] as Dictionary<string,object> : null;
-                var requested = shown != null && shown.ContainsKey("requested") ? shown["requested"] as Dictionary<string,object> : null;
-                size = "как экран ПК" + (requested != null ? " (" + TextValue(requested,"width","—") + " × " + TextValue(requested,"height","—") + ")" : "");
-            }
             string state = DisplayState(report);
             string detail = state == "applied" ? "применено" : state == "not_running" ? "при следующем запуске" : state == "failed" ? "не применилось" : "ожидаем подтверждения Windows";
             resources.Text += Environment.NewLine + "Разрешение: " + size + " — " + detail;

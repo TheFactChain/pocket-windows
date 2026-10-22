@@ -433,8 +433,8 @@ namespace WindowsClaude.GuestFiles
                 if(!Environment.UserInteractive||Process.GetCurrentProcess().SessionId==0)throw new InvalidOperationException("INTERACTIVE_USER_REQUIRED");
                 // The panel ships each new helper on its medium: switch to it at logon, nothing to click.
                 if(args[0]=="--apply"&&UpdateFromMedium())return 0;
-                // The desktop takes the adapter's own mode, which the panel sized to the window: no black bars.
-                FitDisplay();
+                // The desktop takes the panel's standard size (saved, so later starts boot into it) and reports it.
+                string displaySettings=ReadDisplaySettings();FitDisplay(RequestedSize(displaySettings));ReportDisplay(displaySettings);
                 using(var mutex=new Mutex(false,@"Local\WindowsClaude.HostFiles."+WindowsIdentity.GetCurrent().User.Value))
                 {
                     bool held;try{held=mutex.WaitOne(0);}catch(AbandonedMutexException){held=true;}if(!held)throw new InvalidOperationException("APPLY_ALREADY_RUNNING");
@@ -476,19 +476,90 @@ namespace WindowsClaude.GuestFiles
             return best;
         }
         static DevMode NewMode(){return new DevMode{dmSize=(short)Marshal.SizeOf(typeof(DevMode))};}
-        static void FitDisplay()
+        // What FitDisplay saw and did, reported when the desktop does not end at the requested size.
+        static List<int[]> displayModes=new List<int[]>();static int[] displayLargest;static string displayStep="NOT_ATTEMPTED";
+        static string ChangeResult(int result)
+        {
+            switch(result){case 0:return "OK";case 1:return "RESTART";case -1:return "FAILED";case -2:return "BADMODE";case -3:return "NOTUPDATED";case -4:return "BADFLAGS";case -5:return "BADPARAM";case -6:return "BADDUALVIEW";default:return "OTHER";}
+        }
+        public const int SafeWidth=1280,SafeHeight=800;
+        public static int ModeIndex(IList<int[]> modes,int width,int height)
+        {
+            int found=-1;
+            for(int index=0;index<modes.Count;index++)if(modes[index][0]==width&&modes[index][1]==height&&modes[index][2]>=32&&(found<0||modes[index][3]>modes[found][3]))found=index;
+            return found;
+        }
+        public static int DisplayTarget(IList<int[]> modes,int[] requested)
+        {
+            // The window's size when Windows offers it; otherwise the standard safe mode, so the desktop stays readable.
+            // Without the panel's request nothing is saved: the largest mode may be a non-standard size.
+            if(requested==null)return -1;
+            int index=ModeIndex(modes,requested[0],requested[1]);
+            return index>=0?index:ModeIndex(modes,SafeWidth,SafeHeight);
+        }
+        static void FitDisplay(int[] requested)
         {
             try
             {
                 var found=new List<DevMode>();var shapes=new List<int[]>();
                 for(int index=0;index<4096;index++){DevMode mode=NewMode();if(!EnumDisplaySettings(null,index,ref mode))break;found.Add(mode);shapes.Add(new[]{mode.dmPelsWidth,mode.dmPelsHeight,mode.dmBitsPerPel,mode.dmDisplayFrequency});}
-                int best=NativeMode(shapes);DevMode current=NewMode();
-                if(best<0||!EnumDisplaySettings(null,-1,ref current)||(current.dmPelsWidth==found[best].dmPelsWidth&&current.dmPelsHeight==found[best].dmPelsHeight))return;
-                DevMode target=found[best];
-                // Saved for this display when Windows allows it; otherwise applied for this logon (repeated at the next).
-                if(ChangeDisplaySettingsEx(null,ref target,IntPtr.Zero,1,IntPtr.Zero)!=0)ChangeDisplaySettingsEx(null,ref target,IntPtr.Zero,0,IntPtr.Zero);
+                int best=NativeMode(shapes),target=DisplayTarget(shapes,requested);DevMode current=NewMode();
+                displayModes=shapes;displayLargest=best<0?null:shapes[best];
+                if(target<0){displayStep=requested==null?"NO_REQUEST":"NO_MODE";return;}
+                if(!EnumDisplaySettings(null,-1,ref current)){displayStep="CURRENT_UNKNOWN";return;}
+                if(current.dmPelsWidth==shapes[target][0]&&current.dmPelsHeight==shapes[target][1]){displayStep="ALREADY";return;}
+                DevMode mode_=found[target];
+                // Saved, so Windows boots straight into it: the panel asks only standard sizes, which the firmware can set
+                // again at the next start (a saved window-sized mode garbled the picture after a monitor change, 22.10).
+                int saved=ChangeDisplaySettingsEx(null,ref mode_,IntPtr.Zero,1,IntPtr.Zero);
+                displayStep="SAVE_"+ChangeResult(saved)+(saved==0?"":"_LIVE_"+ChangeResult(ChangeDisplaySettingsEx(null,ref mode_,IntPtr.Zero,0,IntPtr.Zero)));
             }
-            catch(Exception){}  // Cosmetic: file access must not depend on the desktop size.
+            catch(Exception){displayStep="ERROR";}  // Cosmetic: file access must not depend on the desktop size.
+        }
+        static string ReadDisplaySettings()
+        {
+            try
+            {
+                string found=null;
+                foreach(var drive in DriveInfo.GetDrives()){if(!drive.IsReady||drive.VolumeLabel!="WCPSETTINGS")continue;if(found!=null)return null;found=Path.Combine(drive.RootDirectory.FullName,"SETTINGS.JSN");}
+                return found==null?null:ReadBounded(found);
+            }
+            catch(Exception){return null;}
+        }
+        static int[] RequestedSize(string settings)
+        {
+            try{var values=Object(new Reader(settings).Read(),"schema","width","height","session_nonce");return values["width"] is int&&values["height"] is int?new[]{(int)values["width"],(int)values["height"]}:null;}
+            catch(Exception){return null;}
+        }
+        public static string DisplayDetail(IList<int[]> modes,int[] largest,int width,int height,string step)
+        {
+            // e.g. REQ_UNLISTED_MAX_BELOW_ALREADY: Windows does not offer the adapter's new size at all.
+            bool listed=modes.Any(mode=>mode[0]==width&&mode[1]==height&&mode[2]>=32);
+            string max=largest==null?"NONE":largest[0]==width&&largest[1]==height?"SAME":(long)largest[0]*largest[1]>(long)width*height?"ABOVE":"BELOW";
+            string detail="REQ_"+(listed?"LISTED":"UNLISTED")+"_MAX_"+max+"_"+step;
+            return detail.Length>64?detail.Substring(0,64):detail;
+        }
+        public static string DisplayReceipt(string settings,int width,int height,string detail=null)
+        {
+            // The same COM1 receipt GuestSettings sends, so the panel confirms the size this helper applied.
+            var values=Object(new Reader(settings).Read(),"schema","width","height","session_nonce");string nonce=Text(values,"session_nonce");
+            if(!(values["schema"] is int)||(int)values["schema"]!=1||!(values["width"] is int)||!(values["height"] is int)||!Matches(nonce,"[a-f0-9]{32}"))throw Invalid();
+            int requestedWidth=(int)values["width"],requestedHeight=(int)values["height"];
+            string code=requestedWidth==width&&requestedHeight==height?"OK":"DISPLAY_APPLY_INCOMPLETE";
+            string displayCode=code!="OK"&&Matches(detail,"[A-Z_]{1,64}")?detail:code;
+            return Json.Serialize(new{schema=1,session_nonce=nonce,requested=new{width=requestedWidth,height=requestedHeight},current=new{width=width,height=height},success=code=="OK",code=code,display_code=displayCode});
+        }
+        static void ReportDisplay(string settings)
+        {
+            try
+            {
+                DevMode current=NewMode();int[] requested=RequestedSize(settings);
+                if(settings==null||requested==null||!EnumDisplaySettings(null,-1,ref current))return;
+                string detail=DisplayDetail(displayModes,displayLargest,requested[0],requested[1],displayStep);
+                string line=DisplayReceipt(settings,current.dmPelsWidth,current.dmPelsHeight,detail);
+                using(var serial=new SerialPort("COM1",115200){WriteTimeout=3000,Encoding=new UTF8Encoding(false),NewLine="\n"}){serial.Open();serial.WriteLine(line);}
+            }
+            catch(Exception){}  // Cosmetic: without it the panel shows the display as unconfirmed.
         }
         static bool UpdateFromMedium()
         {

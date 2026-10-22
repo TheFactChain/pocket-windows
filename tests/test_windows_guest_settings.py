@@ -22,45 +22,45 @@ class WindowsGuestSettingsTests(unittest.TestCase):
 
     def receipt(self):
         return {'schema': 1, 'session_nonce': self.NONCE,
-                'requested': {'width': 1280, 'height': 720},
-                'current': {'width': 1280, 'height': 720}, 'success': True, 'code': 'OK'}
+                'requested': {'width': 1920, 'height': 1080},
+                'current': {'width': 1920, 'height': 1080}, 'success': True, 'code': 'OK'}
 
     def test_missing_file_returns_independent_defaults(self):
         with self.temporary() as temporary:
             first = guest.load_settings(Path(temporary))
             first['width'] = 800
-            self.assertEqual(guest.load_settings(Path(temporary)), {'schema': 1, 'width': 1280, 'height': 720, 'fit': True})
+            self.assertEqual(guest.load_settings(Path(temporary)), {'schema': 1, 'width': 1920, 'height': 1080, 'fit': False})
 
     def test_load_merges_partial_settings_from_selected_root(self):
         with self.temporary() as temporary:
             root = Path(temporary)
             (root / 'config').mkdir()
-            (root / 'config/windows.json').write_text('{"width":1920,"height":1080}', encoding='utf-8')
-            self.assertEqual(guest.load_settings(root), {'schema': 1, 'width': 1920, 'height': 1080, 'fit': True})
+            (root / 'config/windows.json').write_text('{"width":1600,"height":900}', encoding='utf-8')
+            self.assertEqual(guest.load_settings(root), {'schema': 1, 'width': 1600, 'height': 900, 'fit': False})
 
     def test_settings_reject_unknown_modes_secrets_types_and_disk_options(self):
         invalid = ({'password': 'private'}, {'width': True}, {'schema': True}, {'height': 719},
-                   {'width': 1920}, {'width': '1280'}, {'disk_size_gib': 80}, [])
+                   {'width': 1280}, {'width': '1280'}, {'disk_size_gib': 80}, [])
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 guest.validate_settings(value)
         for width, height in guest.MODES:
             self.assertEqual(guest.validate_settings({'width': width, 'height': height})['width'], width)
 
-    def test_fit_keeps_monitor_proportions_for_window_and_full_screen(self):
-        laptop = {'screen': (1366, 768), 'work': (1366, 728), 'frame': 8, 'caption': 23}
-        width, height = guest.fit_size(fullscreen=False, **laptop)
-        self.assertEqual(width % 8, 0)
-        self.assertLessEqual(width + 2 * 8, 1366)
-        self.assertLessEqual(height + 23 + 2 * 8, 728)
-        self.assertAlmostEqual(width / height, 1366 / 768, delta=0.01)
-        self.assertEqual(guest.fit_size(fullscreen=True, screen=(1920, 1200), work=(1920, 1152), frame=8, caption=23), (1920, 1200))
-        self.assertEqual(guest.fit_size(fullscreen=True, screen=(1366, 768), work=(1366, 728), frame=8, caption=23), (1360, 764))
-        fitted = guest.effective_settings({'fit': True}, False, {'screen': (2560, 1440), 'work': (2560, 1392), 'frame': 8, 'caption': 23})
-        self.assertTrue(fitted['fit'])
-        self.assertAlmostEqual(fitted['width'] / fitted['height'], 16 / 9, delta=0.005)
-        fixed = guest.effective_settings({'fit': False, 'width': 1600, 'height': 900}, True, {'screen': (1, 1)})
-        self.assertEqual((fixed['width'], fixed['height']), (1600, 900))
+    def test_old_screen_fit_choice_becomes_the_standard_default(self):
+        # A saved window-sized mode garbled the next start from another monitor (live, 22.10).
+        self.assertEqual(guest.validate_settings({'fit': True, 'width': 1366, 'height': 768}),
+                         {'schema': 1, 'width': 1920, 'height': 1080, 'fit': False})
+
+    def test_first_window_fits_the_monitor_with_the_guest_proportions(self):
+        # The user's monitors in 96-DPI units: 2560x1440 at 125% and 1920x1080 at 100%, taskbar at the bottom.
+        for work in ((2048, 1104), (1920, 1040), (1366, 728)):
+            with self.subTest(work=work):
+                width, height = guest.window_size((1920, 1080), {'work': work, 'frame': 8, 'caption': 23})
+                self.assertLessEqual(width + 2 * 8, work[0])
+                self.assertLessEqual(height + 23 + 2 * 8, work[1])
+                self.assertAlmostEqual(width / height, 16 / 9, delta=0.005)
+        self.assertEqual(guest.window_size((1280, 720), {'work': (2560, 1392), 'frame': 8, 'caption': 23}), (1280, 720))
         self.assertEqual(guest.vga_memory_mib({'width': 1920, 'height': 1080}), 16)
         self.assertEqual(guest.vga_memory_mib({'width': 3840, 'height': 2160}), 32)
 
@@ -86,7 +86,7 @@ class WindowsGuestSettingsTests(unittest.TestCase):
             folder = Path(temporary)
             identities = guest.write_settings(folder, {}, self.NONCE)
             self.assertEqual(set(identities), {'SETTINGS.JSN'})
-            self.assertEqual(json.loads((folder / 'SETTINGS.JSN').read_bytes()), {'schema': 1, 'width': 1280, 'height': 720, 'session_nonce': self.NONCE})
+            self.assertEqual(json.loads((folder / 'SETTINGS.JSN').read_bytes()), {'schema': 1, 'width': 1920, 'height': 1080, 'session_nonce': self.NONCE})
             self.assertEqual(identities['SETTINGS.JSN']['file_id'], (folder / 'SETTINGS.JSN').stat().st_ino)
             with self.assertRaises(ValueError):
                 guest.write_settings(folder, {}, self.NONCE)

@@ -29,6 +29,36 @@ internal static class GuestFilesRegression
         public NicState[] Read(){Reads++;return States;}
         public void Configure(string id){Changes++;ChangedId=id;}
     }
+    static void DisplayReceiptRegression()
+    {
+        // SETTINGS.JSN exactly as windows_guest_settings.write_settings writes it.
+        string settings="{\"schema\":1,\"width\":1864,\"height\":1048,\"session_nonce\":\"0123456789abcdef0123456789abcdef\"}";
+        var ok=Json.Deserialize<Dictionary<string,object>>(Program.DisplayReceipt(settings,1864,1048));
+        var keys=new[]{"schema","session_nonce","requested","current","success","code","display_code"};
+        Assert(ok.Count==keys.Length&&keys.All(ok.ContainsKey),"Display receipt must carry exactly the keys validate_receipt accepts");
+        Assert((int)ok["schema"]==1&&(string)ok["session_nonce"]=="0123456789abcdef0123456789abcdef"&&(bool)ok["success"]&&(string)ok["code"]=="OK"&&(string)ok["display_code"]=="OK","Applied size must confirm");
+        var requested=(Dictionary<string,object>)ok["requested"];var current=(Dictionary<string,object>)ok["current"];
+        Assert((int)requested["width"]==1864&&(int)requested["height"]==1048&&(int)current["width"]==1864&&(int)current["height"]==1048&&requested.Count==2&&current.Count==2,"Requested and current sizes must be reported as given");
+        var short_=Json.Deserialize<Dictionary<string,object>>(Program.DisplayReceipt(settings,1280,800));
+        Assert(!(bool)short_["success"]&&(string)short_["code"]=="DISPLAY_APPLY_INCOMPLETE"&&(string)short_["display_code"]=="DISPLAY_APPLY_INCOMPLETE","A different desktop size must not be reported as applied");
+        var offered=new List<int[]>{new[]{1280,800,32,60},new[]{1736,976,32,60},new[]{1864,1048,16,75},new[]{1864,1048,32,60},new[]{1864,1048,32,75}};
+        Assert(Program.DisplayTarget(offered,new[]{1864,1048})==4,"The window's size is chosen in true colour at the highest refresh");
+        Assert(Program.DisplayTarget(offered.Take(3).ToList(),new[]{1864,1048})==0,"A window size Windows does not offer falls back to the standard safe mode");
+        Assert(Program.DisplayTarget(offered.Skip(1).Take(2).ToList(),new[]{1864,1048})==-1,"Without the safe mode nothing is switched");
+        Assert(Program.DisplayTarget(offered,null)==-1,"Without the panel's request nothing is switched or saved");
+        Assert(Program.ModeIndex(offered,Program.SafeWidth,Program.SafeHeight)==0&&Program.SafeWidth==1280&&Program.SafeHeight==800,"Safe mode is the standard 1280x800");
+        var detailed=Json.Deserialize<Dictionary<string,object>>(Program.DisplayReceipt(settings,1736,976,"REQ_UNLISTED_MAX_BELOW_ALREADY"));
+        Assert((string)detailed["code"]=="DISPLAY_APPLY_INCOMPLETE"&&(string)detailed["display_code"]=="REQ_UNLISTED_MAX_BELOW_ALREADY","A failed fit must carry its reason");
+        Assert((string)Json.Deserialize<Dictionary<string,object>>(Program.DisplayReceipt(settings,1864,1048,"REQ_LISTED_MAX_SAME_SAVE_OK"))["display_code"]=="OK","A confirmed size reports plain OK");
+        Assert((string)Json.Deserialize<Dictionary<string,object>>(Program.DisplayReceipt(settings,1736,976,"bad detail 1"))["display_code"]=="DISPLAY_APPLY_INCOMPLETE","A malformed reason must not reach the host");
+        var modes=new List<int[]>{new[]{1280,800,32,60},new[]{1736,976,32,60},new[]{1864,1048,16,60}};
+        Assert(Program.DisplayDetail(modes,modes[1],1864,1048,"ALREADY")=="REQ_UNLISTED_MAX_BELOW_ALREADY","Only true-colour modes count as offered");
+        modes.Add(new[]{1864,1048,32,60});
+        Assert(Program.DisplayDetail(modes,modes[3],1864,1048,"SAVE_BADMODE_LIVE_BADMODE")=="REQ_LISTED_MAX_SAME_SAVE_BADMODE_LIVE_BADMODE","Refused switch must name both results");
+        Assert(Program.DisplayDetail(modes,null,1864,1048,"NO_MODE")=="REQ_LISTED_MAX_NONE_NO_MODE"&&Program.DisplayDetail(modes,new[]{2560,1600,32,60},1864,1048,"SAVE_NOTUPDATED_LIVE_NOTUPDATED").Length<=64,"Details stay within the host's code limit");
+        foreach(string bad in new[]{"{\"schema\":2,\"width\":1864,\"height\":1048,\"session_nonce\":\"0123456789abcdef0123456789abcdef\"}","{\"schema\":1,\"width\":1864,\"height\":1048,\"session_nonce\":\"NOT-A-NONCE\"}","{\"schema\":1,\"width\":1864,\"height\":1048}"})
+        {bool rejected=false;try{Program.DisplayReceipt(bad,1864,1048);}catch(FormatException){rejected=true;}Assert(rejected,"Invalid settings must not produce a receipt: "+bad);}
+    }
     static void LinkRegression()
     {
         string id="{d4fd0ad7-e160-4146-903c-2337af221325}";
@@ -122,6 +152,7 @@ internal static class GuestFilesRegression
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15","192.168.234.16"},Masks=new[]{"255.255.255.0","255.255.255.0"}}),"Extra IPv4 addresses must fail exact bootstrap validation");
             BootstrapRegression();
             LinkRegression();
+            DisplayReceiptRegression();
             var modes=new List<int[]>{new[]{1280,800,32,60},new[]{1864,1048,32,60},new[]{1864,1048,16,75},new[]{1864,1048,32,75},new[]{800,600,32,60}};
             Assert(Program.NativeMode(modes)==3,"The desktop must take the largest true-colour adapter mode (the window-sized one), highest refresh on ties");
             Assert(Program.NativeMode(new List<int[]>{new[]{1024,768,16,60}})==-1&&Program.NativeMode(new List<int[]>())==-1,"No true-colour mode leaves the desktop unchanged");

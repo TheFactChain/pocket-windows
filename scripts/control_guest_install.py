@@ -131,12 +131,12 @@ files_session = None
 display_settings = None
 if normal_runtime:
     viewer_settings = load_viewer_settings(root)
-    # "As the PC screen": the monitor's proportions, so neither the window nor full screen shows bars.
+    # The monitor under the cursor only sizes and places the window; Windows keeps one standard size.
     try:
         host_display = windows_settings.host_display()
     except OSError:
         host_display = None
-    display_settings = windows_settings.effective_settings(windows_settings.load_settings(root), viewer_settings['start_fullscreen'], host_display)
+    display_settings = windows_settings.load_settings(root)
     medium = output / 'display-settings'
     medium.mkdir()
     windows_settings.write_settings(medium, display_settings, session_nonce)
@@ -317,7 +317,8 @@ def protect_work_window():
 
 
 def place_work_window(work_area):
-    """Centre the window once on the monitor it was sized for (physical pixels; async, never blocks)."""
+    """Centre the window once on the monitor it was sized for (physical pixels; async, never blocks).
+    Returns True when a restored, non-maximized window was moved, so a still-minimized one is retried."""
     from ctypes import wintypes
     user = ctypes.WinDLL('user32', use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -328,22 +329,25 @@ def place_work_window(work_area):
     user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
     user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
     previous = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    moved = []
     try:
         def visit(window, unused):
             pid = wintypes.DWORD()
             user.GetWindowThreadProcessId(window, ctypes.byref(pid))
-            if pid.value == process.pid and user.IsWindowVisible(window) and not user.IsIconic(window):
+            if pid.value == process.pid and user.IsWindowVisible(window) and not user.IsIconic(window) and not user.IsZoomed(window):
                 outer = wintypes.RECT()
                 user.GetWindowRect(window, ctypes.byref(outer))
                 left, top, right, bottom = work_area
                 x = left + max(0, (right - left - (outer.right - outer.left)) // 2)
                 y = top + max(0, (bottom - top - (outer.bottom - outer.top)) // 2)
                 user.SetWindowPos(window, None, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010 | 0x4000)
+                moved.append(window)
             return True
         user.EnumWindows(callback_type(visit), 0)
     finally:
         if previous:
             user.SetThreadDpiAwarenessContext(ctypes.c_void_p(previous))
+    return bool(moved)
 
 
 def show_work_window(command_code):
@@ -373,9 +377,10 @@ def pointer_settled():
 
 
 def tidy_work_window():
-    """A fixed-size window whose client is exactly the guest screen never shows black bars;
-    every call to the QEMU window is bounded so its UI thread can never stall this controller.
-    The caption is not touched: the patched engine (patch_qemu_engine.py) sets "Windows Claude" itself."""
+    """Shrink QEMU's window to the monitor when it opens (or after a guest mode change resets it) at the
+    guest's full size; any other size is the user's and SDL scales the picture into it. Returns True when it
+    resized. Every call is bounded so QEMU's UI thread can never stall this controller. The caption is not
+    touched: the patched engine (patch_qemu_engine.py) sets "Windows Claude" itself."""
     from ctypes import wintypes
     user = ctypes.WinDLL('user32', use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -385,8 +390,6 @@ def tidy_work_window():
                                          wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
     user.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
     user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-    user.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
-    user.SetWindowLongPtrW.restype = ctypes.c_ssize_t
     user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
     user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
@@ -398,31 +401,29 @@ def tidy_work_window():
             windows.append(window)
         return True
     user.EnumWindows(callback_type(visit), 0)
+    guest = (display_settings['width'], display_settings['height'])
+    target = windows_settings.window_size(guest, host_display) if host_display else guest
+    resized = False
     for window in windows:
         result = ctypes.c_size_t()
         # WM_NULL with SMTO_ABORTIFHUNG: touch the window only while its thread answers.
         if not user.SendMessageTimeoutW(window, 0, 0, None, 0x0002, 200, ctypes.byref(result)):
             continue
         style = user.GetWindowLongPtrW(window, -16)
-        # Windowed (has a caption) and not minimized: a fixed frame whose client is exactly the guest
-        # screen, so SDL never scales the picture (scaling is what adds the bars).
+        # Windowed (has a caption), not minimized or maximized, and still at the guest's full size.
         if style & 0x00C00000 != 0x00C00000 or user.IsIconic(window) or user.IsZoomed(window) or report.get('window_parked') is True:
             continue
         client = wintypes.RECT()
         user.GetClientRect(window, ctypes.byref(client))
-        target = (display_settings['width'], display_settings['height'])
-        if style & (0x00040000 | 0x00010000) or (client.right, client.bottom) != target:
-            if style & (0x00040000 | 0x00010000):
-                style &= ~(0x00040000 | 0x00010000)
-                user.SetWindowLongPtrW(window, -16, style)
-                # SWP_NOMOVE|NOSIZE|NOZORDER|NOACTIVATE|FRAMECHANGED|ASYNCWINDOWPOS; size is fixed on the next pass.
-                user.SetWindowPos(window, None, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0010 | 0x0020 | 0x4000)
-                continue
-            # Grow or shrink the outer frame by exactly the client difference (SDL's frame is not standard).
-            outer = wintypes.RECT()
-            user.GetWindowRect(window, ctypes.byref(outer))
-            user.SetWindowPos(window, None, 0, 0, outer.right - outer.left + target[0] - client.right,
-                              outer.bottom - outer.top + target[1] - client.bottom, 0x0002 | 0x0004 | 0x0010 | 0x4000)
+        if (client.right, client.bottom) != guest or target == guest:
+            continue
+        # Grow or shrink the outer frame by exactly the client difference (SDL's frame is not standard).
+        outer = wintypes.RECT()
+        user.GetWindowRect(window, ctypes.byref(outer))
+        user.SetWindowPos(window, None, 0, 0, outer.right - outer.left + target[0] - client.right,
+                          outer.bottom - outer.top + target[1] - client.bottom, 0x0002 | 0x0004 | 0x0010 | 0x4000)
+        resized = True
+    return resized
 
 
 def read_file_receipt():
@@ -569,16 +570,16 @@ try:
                     if files_session is not None:
                         read_file_receipt()
                     try:
-                        tidy_work_window()
+                        resized = tidy_work_window()
                     except OSError:
-                        pass  # Cosmetic only: the window keeps working with QEMU's own title and frame.
-                    if (report.get('window_parked') == 'released' and not report.get('window_placed')
+                        resized = False  # Cosmetic only: the window keeps working with QEMU's own size.
+                    # Centred once, after its first shrink has taken effect.
+                    if (report.get('window_parked') == 'released' and not report.get('window_placed') and not resized
                             and host_display and host_display.get('monitor')):
                         try:
-                            place_work_window(host_display['monitor'])
+                            report['window_placed'] = place_work_window(host_display['monitor'])
                         except OSError:
-                            pass
-                        report['window_placed'] = True
+                            report['window_placed'] = True  # Cosmetic: never retried in a loop.
                 if target is not None and time.monotonic()-begin>=target:
                     capture('boot-'+str(target))
                     if work and install and target==2:
