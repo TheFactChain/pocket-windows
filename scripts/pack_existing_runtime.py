@@ -329,8 +329,10 @@ def write_archive(entries, destination, commit=None):
                                 validate_public_file(name, reader)
                                 digest, size = hashlib.sha256(), 0
                                 info = zipfile.ZipInfo.from_file(path, PREFIX + name)
-                                info.compress_type = zipfile.ZIP_STORED if entries.mode == 'public' and name.endswith('.qcow2') else zipfile.ZIP_DEFLATED
-                                info._compresslevel = 1
+                                # The Windows disk is zstd-compressed inside and gains nothing; the Debian gateway disk is raw and does.
+                                windows_disk = entries.mode == 'public' and name.startswith('images/') and name.endswith('.qcow2')
+                                info.compress_type = zipfile.ZIP_STORED if windows_disk else zipfile.ZIP_DEFLATED
+                                info._compresslevel = 9 if name.endswith('.qcow2') else 1
                                 with archive.open(info, 'w', force_zip64=True) as member:
                                     while chunk := reader.read(CHUNK):
                                         member.write(chunk)

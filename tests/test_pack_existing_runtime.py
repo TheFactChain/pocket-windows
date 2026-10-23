@@ -112,7 +112,7 @@ class PackagingTests(unittest.TestCase):
             self.assertNotIn(pack.PREFIX + 'config/files.json', archive.namelist())
             self.assertIn(pack.PREFIX + 'config/viewer.json', archive.namelist())
 
-    def test_public_archive_omits_gateway_duplicate_and_stores_disks(self):
+    def test_public_archive_omits_gateway_duplicate_stores_windows_disk_and_deflates_gateway_disk(self):
         payload = b'verified recovery fixture'
         self.write(pack.GATEWAY_RECOVERY[1], payload)
         self.write(pack.GATEWAY_RECOVERY[0], json.dumps({
@@ -124,7 +124,7 @@ class PackagingTests(unittest.TestCase):
                 self.assertNotIn(pack.PREFIX + name, archive.namelist())
             for member in archive.infolist():
                 if member.filename.endswith('.qcow2'):
-                    self.assertEqual(member.compress_type, zipfile.ZIP_STORED)
+                    self.assertEqual(member.compress_type, zipfile.ZIP_STORED if '/images/' in member.filename else zipfile.ZIP_DEFLATED, member.filename)
 
     def test_zstd_windows_disk_is_accepted_but_dirty_or_unknown_features_are_not(self):
         disk = bytearray(qcow())
