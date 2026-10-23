@@ -29,8 +29,8 @@ REQUIRED_RUNTIME = ('runtime/python-3.12.14/python.exe',
                     'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
                     'runtime/qemu-11.1.0/qemu-img.exe',
                     'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd')
-MASTER_HASHES = {'work_sha256': '1d956fa12ea129cdd281d0f5ea92950532f6c088ed1596e4bb215b77aaa8320b',
-                 'vars_sha256': 'ad9781adbf767683842e8e75e851f1f8e83d9703064379a1d76430046652e822'}
+MASTER_HASHES = {'work_sha256': '6aca214a43e2a70eae5f02459d1d0f241f2ad7572ee63a698d2904b6798d84ed',
+                 'vars_sha256': '9faa958a28a165e3837bc4a5bb3c94d76eec3810ae715e30d41f6a1bca01daa6'}
 validate_release_info = pack.validate_release_info
 
 
