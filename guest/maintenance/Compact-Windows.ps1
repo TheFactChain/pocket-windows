@@ -12,6 +12,12 @@ function Assert-MaintenanceCopy([string]$Serial, [bool]$Confirmed) {
     }
 }
 
+function Assert-WindowsLocation([string]$Directory,[string]$Drive) {
+    if ($Directory -ine 'C:\Windows' -or $Drive -ine 'C:') {
+        throw "Expected Windows on C:\Windows (reported: $Directory, $Drive)."
+    }
+}
+
 function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
     & $Executable @Arguments | Out-Host
     if ($LASTEXITCODE -ne 0) {
@@ -19,19 +25,38 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
     }
 }
 
-function Clear-Cache([string]$Directory, [datetime]$Before) {
-    $item = Get-Item -LiteralPath $Directory -Force
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-        throw "Refusing reparse point: $Directory"
+function Test-CacheBusy($Record) {
+    if ($Record.CategoryInfo.Category -in @('PermissionDenied','ObjectNotFound')) { return $true }
+    for ($errorObject=$Record.Exception; $null -ne $errorObject; $errorObject=$errorObject.InnerException) {
+        if (($errorObject.HResult -band 65535) -in @(2,3,5,32,33)) { return $true }
     }
-    foreach ($child in Get-ChildItem -LiteralPath $Directory -Force) {
-        if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
-        if ($child.PSIsContainer) {
-            Clear-Cache $child.FullName $Before
-        } elseif ($child.LastWriteTime -lt $Before) {
-            Remove-Item -LiteralPath $child.FullName -Force
+    return $false
+}
+
+function Clear-Cache([string]$Directory, [datetime]$Before) {
+    try {
+        $item = Get-Item -LiteralPath $Directory -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing reparse point: $Directory" }
+        $children = @(Get-ChildItem -LiteralPath $Directory -Force)
+    } catch {
+        if (Test-CacheBusy $_) { return 1 }
+        throw
+    }
+    $skipped = 0
+    foreach ($child in $children) {
+        if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skipped++; continue }
+        try {
+            if ($child.PSIsContainer) {
+                $skipped += (Clear-Cache $child.FullName $Before)
+            } elseif ($child.LastWriteTime -lt $Before -and $child.CreationTime -lt $Before) {
+                Remove-Item -LiteralPath $child.FullName -Force
+            }
+        } catch {
+            if (Test-CacheBusy $_) { $skipped++; continue }
+            throw
         }
     }
+    return $skipped
 }
 
 # All destructive operations and report writes are below this boundary.
@@ -39,20 +64,20 @@ Assert-MaintenanceCopy (Get-CimInstance Win32_ComputerSystemProduct).Identifying
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run PowerShell as administrator.' }
 $windows = (Get-CimInstance Win32_OperatingSystem).WindowsDirectory
-if ($windows -cne 'C:\Windows' -or $env:SystemDrive -cne 'C:') { throw 'Expected Windows on C:\Windows.' }
+Assert-WindowsLocation $windows $env:SystemDrive
 if ((Get-Item -LiteralPath $windows -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
     throw 'Windows directory is a reparse point.'
 }
 $reportPath = Join-Path $env:ProgramData ('WindowsClaude-compact-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json')
 $report = [ordered]@{ schema = 1; startedUtc = [datetime]::UtcNow.ToString('o'); success = $false;
-    freeBytesBefore = (Get-Volume -DriveLetter C).SizeRemaining; steps = @(); error = $null }
+    freeBytesBefore = (Get-Volume -DriveLetter C).SizeRemaining; steps = @(); cacheSkippedEntries = 0; error = $null }
 $exitCode = 1
 try {
     Invoke-Checked "$windows\System32\powercfg.exe" @('/hibernate', 'off')
     $report.steps += 'hibernate-disabled'
     Invoke-Checked "$windows\System32\dism.exe" @('/Online', '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase', '/NoRestart')
     $report.steps += 'component-cleanup'
-    Clear-Cache "$windows\Temp" (Get-Date).AddDays(-7)
+    $report.cacheSkippedEntries += (Clear-Cache "$windows\Temp" (Get-Date).AddDays(-7))
     $report.steps += 'windows-temp-older-than-7-days'
     $services = @(Get-Service -Name wuauserv, BITS)
     foreach ($service in $services) {
@@ -73,7 +98,7 @@ try {
         if ((Get-Item -LiteralPath "$windows\SoftwareDistribution" -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             throw 'SoftwareDistribution is a reparse point.'
         }
-        if (Test-Path -LiteralPath $downloads) { Clear-Cache $downloads ([datetime]::MaxValue) }
+        if (Test-Path -LiteralPath $downloads) { $report.cacheSkippedEntries += (Clear-Cache $downloads ([datetime]::MaxValue)) }
         $report.steps += 'update-download-cache'
     } finally {
         $restoreErrors = @()
@@ -96,6 +121,9 @@ try {
     $exitCode = 0
 } catch {
     $report.error = $_.Exception.Message
+    $report.errorCommand = [string]$_.InvocationInfo.MyCommand.Name
+    $report.errorLine = $_.InvocationInfo.ScriptLineNumber
+    $report.errorCategory = [string]$_.CategoryInfo.Category
     Write-Warning $report.error
 } finally {
     $report.finishedUtc = [datetime]::UtcNow.ToString('o')

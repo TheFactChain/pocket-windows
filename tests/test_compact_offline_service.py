@@ -98,6 +98,26 @@ try{Save-MaintenanceHive ([HiveFixture]::new()) $root 'install' (Join-Path $moun
 if(-not $refused -or [IO.File]::ReadAllText((Join-Path $mounted 'SYSTEM')) -cne 'changed'){throw 'Changed mounted hive was overwritten'}
 ''')
 
+    def test_resume_file_cleanup_is_bound_to_the_owned_mount(self):
+        self.run_guard_fixture(r'''
+$nonce='a'*32
+$operation=Join-Path $root ('compact-master-fixture\automatic-maintenance-'+$nonce)
+$mounted=Join-Path $operation 'mounted-windows'
+$null=New-Item -ItemType Directory -Path $mounted -Force
+$resume=Join-Path $mounted 'hiberfil.sys'
+[IO.File]::WriteAllText($resume,'fixture, never a real hibernation file')
+$global:aclCalls=0
+function takeown.exe {$global:aclCalls++;$global:LASTEXITCODE=0}
+function icacls.exe {$global:aclCalls++;$global:LASTEXITCODE=0}
+$refused=$false
+try{Remove-MaintenanceResumeFile $operation $nonce $root}catch{$refused=$true}
+if(-not $refused -or $global:aclCalls -ne 0 -or -not (Test-Path -LiteralPath $resume)){throw 'Wrong mount affected files'}
+Remove-MaintenanceResumeFile $operation $nonce $mounted
+if((Test-Path -LiteralPath $resume) -or $global:aclCalls -ne 2){throw 'Owned resume file was not removed'}
+Remove-MaintenanceResumeFile $operation $nonce $mounted
+if($global:aclCalls -ne 2){throw 'Absent file triggered ACL changes'}
+''')
+
 
 if __name__ == '__main__':
     unittest.main()

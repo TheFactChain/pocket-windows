@@ -35,6 +35,20 @@ function Assert-PlainFile([string]$Path,[string]$MountRoot='') {
     }
 }
 
+function Remove-MaintenanceResumeFile([string]$Root,[string]$Id,[string]$MountRoot) {
+    $checked=Assert-OperationCopy $Root $Id
+    if($MountRoot -cne (Join-Path $checked 'mounted-windows')){throw 'Resume-file cleanup requires this operation mount.'}
+    $path=Join-Path $MountRoot 'hiberfil.sys'
+    if(-not (Test-Path -LiteralPath $path)){return}
+    Assert-PlainFile $path $MountRoot
+    # A hybrid resume restores the old kernel cache and discards offline servicing changes.
+    & takeown.exe /F $path /A | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Cannot take ownership of the copy resume file.'}
+    & icacls.exe $path /grant '*S-1-5-32-544:F' | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Cannot remove the copy resume file safely.'}
+    Remove-Item -LiteralPath $path -Force
+}
+
 function Assert-MaintenanceResult($Result,$Installed,[string]$Id,[string]$Reports) {
     if(($Result.schema -isnot [int] -and $Result.schema -isnot [long]) -or $Result.schema -ne 1 -or
         $Result.nonce -cne $Id -or $Installed.nonce -cne $Id -or
@@ -128,6 +142,7 @@ try {
     $accessAdded=$true
     $systemHive=Join-Path $mount 'Windows\System32\config\SYSTEM'
     Assert-PlainFile $systemHive $mount
+    if($Mode -eq 'Install'){Remove-MaintenanceResumeFile $operationRoot $Nonce $mount}
     $phase=$Mode.ToLowerInvariant()
     $recovered=New-RecoveredHive $operationRoot $phase $systemHive $mount
     $registry=[OfflineMaintenanceRegistry]::Open($recovered)
@@ -164,8 +179,9 @@ try {
         $result=Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
         $installed=Get-Content -LiteralPath (Join-Path $operationRoot 'bootstrap-installed.json') -Raw | ConvertFrom-Json
         $collectionFailed=-not (Assert-MaintenanceResult $result $installed $Nonce $reports)
-        $null=$registry.Remove($Nonce,$installed.script_sha256)
-        Save-MaintenanceHive $registry $operationRoot $phase $systemHive $mount $Nonce
+        if($registry.Remove($Nonce,$installed.script_sha256)) {
+            Save-MaintenanceHive $registry $operationRoot $phase $systemHive $mount $Nonce
+        }
         foreach($file in Get-ChildItem -LiteralPath $guestFolder -Force) {Assert-PlainFile $file.FullName $mount;Remove-Item -LiteralPath $file.FullName -Force}
         Remove-Item -LiteralPath $guestFolder -Force
         foreach($file in Get-ChildItem -LiteralPath $programData -Filter 'WindowsClaude-compact-*.json' -File) {Assert-PlainFile $file.FullName $mount;Remove-Item -LiteralPath $file.FullName -Force}
@@ -175,6 +191,7 @@ try {
 } finally {
     try {
         if($registry){$registry.Dispose()}
+        if($accessAdded){Write-VolumeCache -Path (($part | Get-Volume).Path)}
     } finally {
         if($accessAdded){$part | Remove-PartitionAccessPath -AccessPath ($mount+'\')}
         if($attached){Dismount-VHD -Path $image}

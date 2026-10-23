@@ -116,7 +116,8 @@ def supervise(process, directory, state, inbox, save):
                 state['greeting_error'] = 'Missing maintenance QMP greeting'
         except queue.Empty:
             state['greeting_error'] = 'Maintenance QMP greeting timed out'
-        ready, requested, next_capture = False, False, time.monotonic() + 10
+        boot_started = time.monotonic()
+        ready, requested, next_capture = False, False, boot_started + 1
         while process.poll() is None:
             if not ready:
                 try:
@@ -163,9 +164,10 @@ def supervise(process, directory, state, inbox, save):
                     state['blocks'] = command('query-block')
                 except (QmpRefused, OSError) as error:
                     state['block_query_error'] = type(error).__name__ + ': ' + str(error)[:500]
-                next_capture = time.monotonic() + 30
+                # Early boot failures may reset before the usual screenshot interval.
+                next_capture = time.monotonic() + (1 if time.monotonic() - boot_started < 30 else 30)
             save_advisory(state, save)
-            time.sleep(2)
+            time.sleep(.5 if time.monotonic() - boot_started < 30 else 2)
     except QmpDisconnected as error:
         state['control_error'] = type(error).__name__ + ': ' + str(error)[:500]
         save_advisory(state, save)

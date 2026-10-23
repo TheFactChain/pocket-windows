@@ -23,7 +23,8 @@ class CompactVmTests(unittest.TestCase):
         event = {'event': 'SHUTDOWN', 'data': {'guest': True, 'reason': 'guest-shutdown'}}
         self.assertTrue(self.vm.shutdown_confirmed([event], 0))
         for events, code in (([], 0), ([event], 1), ([event], False),
-                             ([{'event': 'SHUTDOWN', 'data': {'guest': False, 'reason': 'host-qmp-quit'}}], 0)):
+                             ([{'event': 'SHUTDOWN', 'data': {'guest': False, 'reason': 'host-qmp-quit'}}], 0),
+                             ([{'event': 'SHUTDOWN', 'data': {'guest': True, 'reason': 'guest-reset'}}], 0)):
             with self.subTest(events=events, code=code):
                 self.assertFalse(self.vm.shutdown_confirmed(events, code))
 
