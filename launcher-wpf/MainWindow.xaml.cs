@@ -48,7 +48,8 @@ namespace WindowsClaude.Launcher
         string pendingStartReceipt, activeOperationAction, workState = "unknown", gatewayState = "unknown", suggestedAction = "retry", reportText = "", displayedChecks;
         bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing, reallyClose,
             panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, checksOpen, pulsing;
-        int operationRevision; string shownStatus;
+        int operationRevision, attentionPolls; string shownStatus, lastAttention;
+        bool trayNoticeShown, displayNoticeShown, attentionNoticeShown, trayPromotionStarted;
         readonly List<string> folders = new List<string>();
 
         // Connection editor state
@@ -348,8 +349,8 @@ namespace WindowsClaude.Launcher
                 if (!closing)
                 {
                     Busy(false);
-                    if (action == "start" && Bridge.Ok(completed) && ready && workState == "running" && !outcomeUnknown) HidePanelForSession();
-                    else if (panelHiddenForSession && (workState == "stopped" || workState == "failed" || outcomeUnknown || (action == "start" && !Bridge.Ok(completed)))) ShowPanelAutomatically();
+                    if (action == "start" && Bridge.Ok(completed) && ready && workState == "running" && !outcomeUnknown) HidePanelForSession("Windows started");
+                    else if (panelHiddenForSession && (workState == "stopped" || workState == "failed" || outcomeUnknown || (action == "start" && !Bridge.Ok(completed)))) ShowPanelAutomatically("after " + action + ", work=" + workState);
                     UpdateTray();
                 }
             }
@@ -631,14 +632,14 @@ namespace WindowsClaude.Launcher
         void StartLifecycle()
         {
             var menu = new Forms.ContextMenuStrip();
-            var open = new Forms.ToolStripMenuItem("Открыть панель"); open.Click += delegate { ShowPanel(false); };
+            var open = new Forms.ToolStripMenuItem("Открыть панель"); open.Click += delegate { ShowPanel(false, "tray menu"); };
             trayStop = new Forms.ToolStripMenuItem("Выключить Windows");
-            trayStop.Click += async delegate { ShowPanel(false); if (stopAvailable) await RunAction("stop", false); };
+            trayStop.Click += async delegate { ShowPanel(false, "tray: stop Windows"); if (stopAvailable) await RunAction("stop", false); };
             var quit = new Forms.ToolStripMenuItem("Закрыть панель (Windows продолжит работу)");
             quit.Click += delegate { reallyClose = true; Close(); };
             menu.Items.Add(open); menu.Items.Add(trayStop); menu.Items.Add(quit);
             trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Windows Claude", ContextMenuStrip = menu };
-            trayIcon.DoubleClick += delegate { ShowPanel(false); };
+            trayIcon.DoubleClick += delegate { ShowPanel(false, "tray double click"); };
             lifecycleTimer.Tick += async delegate { await RefreshRuntimeAsync(); };
             lifecycleTimer.Start(); UpdateTray();
         }
@@ -648,23 +649,86 @@ namespace WindowsClaude.Launcher
             if (trayIcon == null || closing) return;
             trayIcon.Visible = runtimeActive || panelHiddenForSession;
             trayStop.Enabled = stopAvailable && !busy && !outcomeUnknown;
+            if (trayIcon.Visible && !trayPromotionStarted) PromoteTrayIcon();
         }
 
-        void HidePanelForSession() { panelHiddenForSession = true; UpdateTray(); Hide(); }
-        void ShowPanelAutomatically() { if (!panelDismissedByUser) ShowPanel(true); }
-        void ShowPanel(bool home)
+        // Windows registers the icon a moment after it appears; retry briefly, then give up quietly.
+        void PromoteTrayIcon()
+        {
+            trayPromotionStarted = true;
+            string exe = System.Reflection.Assembly.GetExecutingAssembly().Location; int tries = 0;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            timer.Tick += delegate
+            {
+                bool done = TrayPromotion.TryPromote(exe);
+                if (done || ++tries >= 6) { timer.Stop(); UiLog("tray icon promotion: " + (done ? "done" : "no registry entry")); }
+            };
+            timer.Start();
+        }
+
+        // Why the panel hid or reappeared goes to logs/launcher-ui.log, so a flicker can be explained afterwards.
+        static void UiLog(string message)
+        {
+            try
+            {
+                string folder = System.IO.Path.Combine(Bridge.Root, "logs"), path = System.IO.Path.Combine(folder, "launcher-ui.log");
+                Directory.CreateDirectory(folder);
+                if (File.Exists(path) && new FileInfo(path).Length > 200 * 1024) File.Delete(path);
+                File.AppendAllText(path, DateTime.Now.ToString("HH:mm:ss.fff") + " " + message + Environment.NewLine);
+            }
+            catch (Exception) { }
+        }
+
+        void HidePanelForSession(string why)
+        {
+            panelHiddenForSession = true; attentionPolls = 0; lastAttention = null; UpdateTray(); Hide();
+            UiLog("panel hidden: " + why);
+            if (trayIcon != null && !trayNoticeShown)
+            {
+                trayNoticeShown = true;
+                trayIcon.ShowBalloonTip(4000, "Windows Claude", "Панель свёрнута в трей, значок у часов. Двойной щелчок открывает её, меню выключает Windows.", Forms.ToolTipIcon.Info);
+            }
+        }
+
+        void ShowPanelAutomatically(string why)
+        {
+            if (!panelDismissedByUser) { ShowPanel(true, "auto: " + why); return; }
+            // The user closed the panel on purpose: say so from the tray instead of reopening the window.
+            UiLog("auto-show skipped, user closed the panel: " + why);
+            if (trayIcon != null && !attentionNoticeShown)
+            {
+                attentionNoticeShown = true;
+                trayIcon.ShowBalloonTip(5000, "Windows Claude", "Windows требует внимания. Открой панель двойным щелчком по значку.", Forms.ToolTipIcon.Warning);
+            }
+        }
+        void ShowPanel(bool home, string why)
         {
             bool wasHidden = !IsVisible;
-            panelDismissedByUser = false; panelHiddenForSession = false;
+            panelDismissedByUser = false; panelHiddenForSession = false; attentionPolls = 0; lastAttention = null; attentionNoticeShown = false;
             if (home && wasHidden) Navigate(AppPage.Home);
             Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Activate(); UpdateTray();
+            UiLog("panel shown: " + why);
+        }
+
+        // Counts consecutive polls with the same reason; only a confirmed one brings the hidden panel back.
+        void Attention(string reason)
+        {
+            attentionPolls = reason == null ? 0 : reason == lastAttention ? attentionPolls + 1 : 1;
+            lastAttention = reason;
+            if (reason == null) return;
+            if (panelHiddenForSession && AttentionPolicy.ShouldReopen(reason, attentionPolls))
+            {
+                ShowPanelAutomatically(reason + " x" + attentionPolls);
+                if (reason == "status-unreadable") SetOperation("Не удалось обновить состояние. Повтори проверку.");
+            }
+            else UiLog("poll: " + reason + " x" + attentionPolls + (panelHiddenForSession ? ", panel stays in the tray" : ""));
         }
 
         void OnClosing(object sender, CancelEventArgs e)
         {
             if (!reallyClose && (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start")))
-            { e.Cancel = true; panelDismissedByUser = true; HidePanelForSession(); return; }
+            { e.Cancel = true; panelDismissedByUser = true; HidePanelForSession("closed by the user while Windows runs"); return; }
             closing = true; lifecycleTimer.Stop(); saveTimer.Stop();
             if (trayIcon != null) { trayIcon.Visible = false; trayIcon.Dispose(); trayIcon = null; }
         }
@@ -679,8 +743,10 @@ namespace WindowsClaude.Launcher
                 if (closing || busy || revision != operationRevision) return;
                 if (report == null || !report.ContainsKey("checks"))
                 {
-                    ShowPanelAutomatically(); StatusText.Text = "Состояние Windows не подтверждено"; NextStepText.Text = Bridge.Message(report);
-                    CheckedAtText.Text = "Состояние не обновилось. Повтори проверку."; return;
+                    UiLog("poll: status not readable: " + Bridge.Message(report));
+                    Attention(AttentionPolicy.Classify(false, workState, gatewayState, outcomeUnknown));
+                    if (IsVisible) { StatusText.Text = "Состояние Windows не подтверждено"; NextStepText.Text = Bridge.Message(report); CheckedAtText.Text = "Состояние не обновилось. Повтори проверку."; }
+                    return;
                 }
                 report = MergeRuntimeStatus(report);
                 var state = Child(report, "runtime");
@@ -690,13 +756,19 @@ namespace WindowsClaude.Launcher
                     || DisplayState(report) != DisplayState(readinessReport) || FileSharingState(report) != FileSharingState(readinessReport)
                     || Text(report, "message", "") != Text(readinessReport, "message", "") || (pendingOutcome != null && pendingOutcome.IsCompleted);
                 if (changed) { Display(report); Busy(false); }
-                bool workActive = workState == "running" || workState == "starting" || workState == "restarting" || workState == "stopping";
-                if (panelHiddenForSession && (!workActive || !Bridge.Ok(report) || outcomeUnknown || DisplayState(report) == "failed" || DisplayState(report) == "unconfirmed")) ShowPanelAutomatically();
+                Attention(AttentionPolicy.Classify(true, workState, gatewayState, outcomeUnknown));
+                string display = DisplayState(report);
+                if (panelHiddenForSession && (display == "failed" || display == "unconfirmed") && !displayNoticeShown && trayIcon != null)
+                {
+                    displayNoticeShown = true; UiLog("poll: Windows display " + display);
+                    trayIcon.ShowBalloonTip(5000, "Windows Claude", "Разрешение Windows не подтверждено. Открой панель, чтобы посмотреть подробности.", Forms.ToolTipIcon.Warning);
+                }
                 UpdateTray();
             }
-            catch (Exception)
+            catch (Exception error)
             {
-                if (!closing && !busy && revision == operationRevision) { ShowPanelAutomatically(); SetOperation("Не удалось обновить состояние. Повтори проверку."); }
+                UiLog("poll: exception " + error.GetType().Name);
+                if (!closing && !busy && revision == operationRevision) Attention(AttentionPolicy.Classify(false, workState, gatewayState, outcomeUnknown));
             }
             finally { runtimePolling = false; }
         }

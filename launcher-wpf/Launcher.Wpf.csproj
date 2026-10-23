@@ -42,6 +42,8 @@
     <Page Include="MainWindow.xaml" />
     <Compile Include="MainWindow.xaml.cs"><DependentUpon>MainWindow.xaml</DependentUpon></Compile>
     <Compile Include="Bridge.cs" />
+    <Compile Include="AttentionPolicy.cs" />
+    <Compile Include="TrayPromotion.cs" />
     <Compile Include="..\ui\ReleaseInfo.cs" Link="Shared\ReleaseInfo.cs" />
     <Compile Include="..\ui\PortableEntry.cs" Link="Shared\PortableEntry.cs" />
     <Resource Include="..\ui\AppIcon.ico" Link="AppIcon.ico" />
