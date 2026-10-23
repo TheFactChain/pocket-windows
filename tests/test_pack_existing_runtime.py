@@ -112,6 +112,42 @@ class PackagingTests(unittest.TestCase):
             self.assertNotIn(pack.PREFIX + 'config/files.json', archive.namelist())
             self.assertIn(pack.PREFIX + 'config/viewer.json', archive.namelist())
 
+    def test_public_archive_omits_gateway_duplicate_and_stores_disks(self):
+        payload = b'verified recovery fixture'
+        self.write(pack.GATEWAY_RECOVERY[1], payload)
+        self.write(pack.GATEWAY_RECOVERY[0], json.dumps({
+            'schema': 1, 'file': 'gateway-recovery.zip', 'sha256': hashlib.sha256(payload).hexdigest()}).encode())
+        destination, manifest = self.archive('public-compact.zip', mode='public')
+        self.assertFalse(manifest['gateway_recovery_included'])
+        with zipfile.ZipFile(destination) as archive:
+            for name in pack.GATEWAY_RECOVERY:
+                self.assertNotIn(pack.PREFIX + name, archive.namelist())
+            for member in archive.infolist():
+                if member.filename.endswith('.qcow2'):
+                    self.assertEqual(member.compress_type, zipfile.ZIP_STORED)
+
+    def test_zstd_windows_disk_is_accepted_but_dirty_or_unknown_features_are_not(self):
+        disk = bytearray(qcow())
+        struct.pack_into('>Q', disk, 72, 8)
+        struct.pack_into('>I', disk, 100, 112)
+        disk[104] = 1
+        self.write(pack.DATA_FILES[0], disk)
+        self.archive('zstd.zip', mode='public')
+        for features, algorithm in ((9, 1), (10, 1), (16, 1), (8, 0), (8, 2), (0, 1)):
+            struct.pack_into('>Q', disk, 72, features)
+            disk[104] = algorithm
+            self.write(pack.DATA_FILES[0], disk)
+            with self.subTest(features=features, algorithm=algorithm), self.assertRaises(ValueError):
+                pack.collect(self.project, mode='public')
+
+    def test_public_zip_keeps_its_instructions_and_component_notice_inside(self):
+        self.write('НАЧАТЬ.txt', 'Открой Launcher.exe'.encode('utf-8'))
+        self.write('third-party.md', b'component notice fixture')
+        destination, _ = self.archive('with-instructions.zip', mode='public')
+        with zipfile.ZipFile(destination) as archive:
+            self.assertEqual(archive.read(pack.PREFIX + 'НАЧАТЬ.txt'), 'Открой Launcher.exe'.encode('utf-8'))
+            self.assertEqual(archive.read(pack.PREFIX + 'third-party.md'), b'component notice fixture')
+
     def test_public_archive_preserves_release_provenance(self):
         info = {'schema': 1, 'release_id': '2026.10.23.1', 'source_commit': 'a' * 40}
         self.write('release-info.json', json.dumps(info).encode())

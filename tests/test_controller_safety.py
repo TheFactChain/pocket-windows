@@ -14,6 +14,22 @@ SOURCE = Path(__file__).resolve().parents[1] / 'scripts/control_guest_install.py
 
 
 class ControllerSafety(unittest.TestCase):
+    def test_every_windows_boot_passes_trim_to_the_qcow2_disk(self):
+        tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
+        branch = next(node for node in tree.body if isinstance(node, ast.If)
+                      and ast.unparse(node.test) == 'work')
+        with mock.patch.object(Path, 'exists', return_value=True):
+            root = Path('fixture-maintenance-root').resolve()
+            for guest in ('work-install', 'work-resume', 'work-boot'):
+                scope = {'work': True, 'root': root, 'arguments': [],
+                         'args': SimpleNamespace(guest=guest), 'install': guest == 'work-install',
+                         'windows_hardware': SimpleNamespace(arguments=lambda: []),
+                         'sha': lambda path: ('cad59a1a6303b8a89ac18f9353e1cff44212f5836c83473a345dfe7e199d7743'
+                             if path.suffix == '.iso' else 'a79d8fb7bf7a32f05b766b0d7e418ad1579be51805a77567d1f47fc2db19ec8f')}
+                exec(compile(ast.Module(body=[branch], type_ignores=[]), str(SOURCE), 'exec'), scope)
+                disks = [value for value in scope['arguments'] if 'file=images/workvm-empty.qcow2' in value]
+                self.assertEqual(disks, ['if=ide,index=0,format=qcow2,discard=unmap,file=images/workvm-empty.qcow2'], guest)
+
     def test_no_reboot_is_only_added_for_work_reboot_session(self):
         tree=ast.parse(SOURCE.read_text(encoding='utf-8'))
         boundary=next(node for node in tree.body if isinstance(node,ast.If)

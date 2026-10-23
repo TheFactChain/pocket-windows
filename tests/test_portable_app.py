@@ -19,6 +19,30 @@ if SCRIPT.exists():
 
 
 class PortableAppTests(unittest.TestCase):
+    def test_diagnose_busy_initial_check_returns_valid_json(self):
+        import package_integrity
+        with tempfile.TemporaryDirectory() as temporary:
+            output = io.StringIO()
+            with mock.patch.object(sys, 'argv', ['app', '--root', temporary, '--action', 'diagnose']), \
+                    mock.patch.object(package_integrity, 'verify_initial', return_value={'ok': False, 'code': 'busy', 'message': 'busy'}), \
+                    mock.patch.object(app, 'save_diagnostic_report', return_value='logs/fixture.json'), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(app.main(), 1)
+            reply = json.loads(output.getvalue())
+            self.assertEqual(reply['code'], 'busy')
+            self.assertEqual(reply['package_check']['code'], 'busy')
+
+    def test_start_rejects_damaged_initial_payload_before_preflight_or_spawn(self):
+        import package_integrity
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(package_integrity, 'verify_initial', side_effect=ValueError('damaged initial payload')), \
+                mock.patch.object(app, 'preflight', return_value={'ok': False}) as preflight, \
+                mock.patch.object(app.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(ValueError, 'damaged initial payload'):
+                app.start(Path(temporary))
+            preflight.assert_not_called()
+            spawn.assert_not_called()
+
     def test_quiet_status_skips_component_inspection_and_hashing(self):
         status = getattr(app, 'runtime_status', None)
         self.assertTrue(callable(status), 'A separate lightweight runtime status is required')

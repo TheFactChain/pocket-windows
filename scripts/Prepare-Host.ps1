@@ -230,7 +230,7 @@ function Start-ElevatedHostPreparation([string]$Root, [string]$OperationId) {
     $powershell = Join-Path ([PortableHostPreparationNative]::WindowsDirectory()) 'System32/WindowsPowerShell/v1.0/powershell.exe'
     $source = Join-Path $Root 'scripts/Prepare-Host.ps1'
     if ($Root.Contains('"')) { throw 'Invalid root' }
-    $arguments = '-NoProfile -NonInteractive -File "'+$source+'" -Root "'+$Root+'" -Elevated -OperationId '+$OperationId
+    $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$source+'" -Root "'+$Root+'" -Elevated -OperationId '+$OperationId
     $runner = [PowerShell]::Create()
     $null = $runner.AddScript('param($Executable,$Arguments) Start-Process -FilePath $Executable -ArgumentList $Arguments -Verb RunAs -WindowStyle Hidden -PassThru').AddArgument($powershell).AddArgument($arguments)
     $pending = $runner.BeginInvoke()

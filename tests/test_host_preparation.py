@@ -49,6 +49,29 @@ $result=Invoke-HostPreparation -Root 'ROOT'
         self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
         return json.loads(result.stdout.decode('utf-8-sig'))
 
+    def test_elevated_command_runs_marked_script_without_inherited_policy(self):
+        original = str(SOURCE).replace("'", "''")
+        root = str(self.root).replace("'", "''")
+        command = """
+$ProgressPreference='SilentlyContinue'
+$tokens=$null;$errors=$null
+$tree=[Management.Automation.Language.Parser]::ParseFile('SOURCE',[ref]$tokens,[ref]$errors)
+$node=$tree.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$arguments'},$true)
+$Root='ROOT';$source=Join-Path $Root 'scripts/Prepare-Host.ps1';$OperationId='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+. ([scriptblock]::Create($node.Extent.Text))
+$arguments
+""".replace('SOURCE', original).replace('ROOT', root)
+        encoded = base64.b64encode(command.encode('utf-16le')).decode('ascii')
+        args = subprocess.check_output([str(POWERSHELL), '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+                                       creationflags=subprocess.CREATE_NO_WINDOW).decode('utf-8-sig').strip()
+        self.script.write_text("param($Root,[switch]$Elevated,$OperationId)\nWrite-Output 'marked-elevated-script-ran'", encoding='utf-8-sig')
+        Path(str(self.script) + ':Zone.Identifier').write_text('[ZoneTransfer]\nZoneId=3\n')
+        env = dict(os.environ, PSExecutionPolicyPreference='RemoteSigned')
+        result = subprocess.run('"' + str(POWERSHELL) + '" ' + args, env=env, capture_output=True,
+                                timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
+        self.assertIn(b'marked-elevated-script-ran', result.stdout)
+
     def test_dot_source_is_safe_and_ready_host_does_not_elevate_or_create_state(self):
         data = self.run_fixture("""
 function Get-HostPreparationFacts { @{supported=$true;whpx=$true} }

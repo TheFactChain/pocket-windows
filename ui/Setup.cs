@@ -62,6 +62,8 @@ internal static class SetupInstaller
         return SafeName(name) && (Required.Contains(name) || name=="release-info.json" || name=="scripts/windows_guest_settings.py" || name=="scripts/windows_hardware.py" || name=="config/windows.json" || name=="config/viewer.json"
             || Regex.IsMatch(name,@"^runtime/host-files/(HostFiles\.exe|HostFilesGuest\.exe|SMBLibrary\.dll|SMBLibrary\.Win32\.dll|Utilities\.dll|SMBLibrary\.LICENSE\.txt|SMBLibrary-source\.zip|NOTICE\.txt|build-manifest\.json)$")
             || name=="runtime/gateway-recovery.json" || name=="runtime/gateway-recovery.zip"
+            || name=="scripts/package_integrity.py" || name=="scripts/pack_existing_runtime.py"
+            || name=="НАЧАТЬ.txt" || name=="third-party.md"
             || name.StartsWith("runtime/python-3.12.14/",StringComparison.Ordinal)
             || name.StartsWith("runtime/qemu-11.1.0/",StringComparison.Ordinal)
             || Regex.IsMatch(name,@"^gateway/packages/releases/[a-z0-9][a-z0-9._-]{0,63}/(manifest.json|gateway.qcow2)$"));

@@ -426,6 +426,10 @@ START_MESSAGES = {
 
 
 def start(root):
+    from package_integrity import verify_initial
+    integrity = verify_initial(root)
+    if not integrity['ok']:
+        return integrity
     report = preflight(root)
     if not report['ok']:
         return report
@@ -614,7 +618,7 @@ def repair_gateway(root):
     from gateway_package import repair_package
     from file_snapshot import locked_read
     missing = {'ok': False, 'code': 'package_missing',
-               'message': 'Не найден пакет восстановления шлюза. Распакуй полный комплект с runtime/gateway-recovery.json и gateway-recovery.zip.'}
+               'message': 'Не найден пакет восстановления шлюза. Для восстановления нужен исходный ZIP этого выпуска. Данные Windows и подключений сохранены.'}
     if not (root / 'runtime').exists():
         return missing
     with _pinned_directory(root / 'runtime', create=False):
@@ -753,7 +757,10 @@ def main():
         elif args.action == 'status':
             result = runtime_status(root)
         elif args.action == 'diagnose':
-            result = preflight(root)
+            from package_integrity import verify_initial
+            integrity = verify_initial(root)
+            result = preflight(root) if integrity['ok'] else dict(integrity)
+            result['package_check'] = integrity
             try:
                 result['diagnostic_report'] = save_diagnostic_report(root, result)
             except (OSError, ValueError):

@@ -172,13 +172,13 @@ def verify_release(release):
         raise ValueError('Application and release provenance differ')
     if common_records(app) != validate_common_records(manifest.get('common_files')):
         raise ValueError('Application payload differs from release inventory')
+    archive_name = 'Windows-Claude-' + info['release_id'] + '.zip'
     artifacts = {'Setup.exe', 'Windows-Claude.zip', 'Windows-Claude.zip.sha256',
-                 'Windows-Claude.zip.manifest.json', 'НАЧАТЬ.txt', 'third-party.md'}
+                 'Windows-Claude.zip.manifest.json', archive_name, archive_name + '.sha256',
+                 archive_name + '.manifest.json', 'НАЧАТЬ.txt', 'third-party.md'}
     for name, row in manifest['artifacts'].items():
         if name not in artifacts or row.get('path') != name or file_record(pack.file_under(release, name), name) != row:
             raise ValueError('Release artifact differs from manifest: ' + name)
-    if 'Setup.exe' not in manifest['artifacts']:
-        raise ValueError('Setup is missing')
     return manifest
 
 
@@ -290,12 +290,27 @@ def apply_update(release, target):
         raise ValueError('Release and installed application must be separate directories')
     manifest = verify_release(release)
     with _pinned_directory(target, create=False):
+        if project_processes(target):
+            raise RuntimeError('Close Launcher and shut down Windows and gateway before updating')
+        from package_integrity import verify_initial
+        integrity = verify_initial(target)
+        if not integrity['ok']:
+            raise RuntimeError('Initial package verification is busy; stop this copy before updating')
+        legacy_without_manifest = integrity['code'] == 'legacy' and not (target / 'MANIFEST.json').exists()
         directory(target / 'state')
         with runtime.ProjectLock(target) as acquired, ExitStack() as pins:
             if not acquired or project_processes(target):
                 raise RuntimeError('Close Launcher and shut down Windows and gateway before updating')
             if (target / JOURNAL).exists():
                 raise RuntimeError('An unfinished update requires explicit rollback first')
+            if legacy_without_manifest:
+                legacy_marker = target / 'state/package-legacy-format.json'
+                expected_legacy = {'schema': 1, 'legacy_format': True}
+                _plain(legacy_marker)
+                if legacy_marker.exists() and read_json(legacy_marker, 4096) != expected_legacy:
+                    raise ValueError('Invalid legacy format declaration; retain it for inspection')
+                if not legacy_marker.exists():
+                    atomic_json(legacy_marker, expected_legacy)
             previous_bytes = 0
             for row in manifest['common_files']:
                 path = target / row['path']
@@ -371,7 +386,7 @@ def source_commit(source):
 def validate_build_inputs(source, commit):
     paths = sorted((source / 'ui').glob('*.cs'))
     paths += [source / name for name in ('ui/app.manifest', 'ui/AppIcon.ico',
-              'scripts/Build-Launcher.ps1', 'scripts/Build-Setup.ps1', 'docs/third-party.md', *pack.APP_FILES)]
+              'scripts/Build-Launcher.ps1', 'docs/third-party.md', *pack.APP_FILES)]
     for path in paths:
         name = path.relative_to(source).as_posix()
         _plain(path)
@@ -422,7 +437,7 @@ def prepare_release(source, output, master, release_id):
             raise ValueError('QEMU engine source pins differ: ' + name)
     directory(output)
     powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    for script, destination in (('Build-Launcher.ps1', output / 'app'), ('Build-Setup.ps1', output)):
+    for script, destination in (('Build-Launcher.ps1', output / 'app'),):
         run_logged([powershell, '-NoProfile', '-NonInteractive', '-File', source / 'scripts' / script,
                     '-OutputDirectory', destination], source, output / (script + '.log'))
     app = output / 'app'
@@ -441,7 +456,7 @@ def prepare_release(source, output, master, release_id):
         raise RuntimeError('Source commit changed while preparing release')
     validate_build_inputs(source, commit)
     manifest = dict(info, created_utc=datetime.now(timezone.utc).isoformat(), common_files=common_records(app),
-                    artifacts={'Setup.exe': file_record(output / 'Setup.exe', 'Setup.exe')},
+                    artifacts={},
                     master=dict(MASTER_HASHES), manual_acceptance=None)
     atomic_json(output / 'RELEASE.json', manifest)
     verify_release(output)
@@ -454,7 +469,8 @@ def package_release(release, source, master):
     if source_commit(source) != manifest['source_commit']:
         raise ValueError('Package sources must match the release commit')
     stage = release / 'public'
-    if stage.exists() or (release / 'Windows-Claude.zip').exists():
+    archive_name = 'Windows-Claude-' + manifest['release_id'] + '.zip'
+    if stage.exists() or (release / archive_name).exists():
         raise FileExistsError('Public staging or archive already exists')
     needed = (absolute(master) / 'candidate.qcow2').stat().st_size * 3 + 4 * 1024**3
     if shutil.disk_usage(release).free < needed:
@@ -473,19 +489,21 @@ def package_release(release, source, master):
     from portable_app import repair_gateway
     if not repair_gateway(stage)['ok']:
         raise RuntimeError('Could not prepare the approved gateway package')
+    instructions = ('Windows Claude Portable — ' + manifest['release_id'] + '\n\n'
+                    'Распакуй ' + archive_name + ' Проводником в новую папку.\n'
+                    'Открой Windows-Claude\\Launcher.exe. Ярлык можно создать в разделе Справка.\n'
+                    'Файл .sha256 служит для проверки целостности архива.\n'
+                    'Личные подключения в этот комплект не входят.\n')
+    (stage / 'НАЧАТЬ.txt').write_text(instructions, encoding='utf-8-sig')
+    shutil.copyfile(source / 'docs/third-party.md', stage / 'third-party.md')
     python = source / 'runtime/python-3.12.14/python.exe'
     run_logged([python, '-X', 'utf8', '-I', '-S', '-B', source / 'scripts/pack_existing_runtime.py',
-                '--mode', 'public', '--project', stage, '--output', release / 'Windows-Claude.zip'],
+                '--mode', 'public', '--project', stage, '--output', release / archive_name],
                source, release / 'package.log')
-    for name in ('Windows-Claude.zip', 'Windows-Claude.zip.sha256', 'Windows-Claude.zip.manifest.json'):
+    for name in (archive_name, archive_name + '.sha256', archive_name + '.manifest.json'):
         manifest['artifacts'][name] = file_record(release / name, name)
-    shutil.copyfile(source / 'docs/third-party.md', release / 'third-party.md')
-    instructions = ('Windows Claude Portable — ' + manifest['release_id'] + '\n\n'
-                    'Для установки открой Setup.exe. Оставь рядом Windows-Claude.zip и файл .sha256.\n'
-                    'После установки запускай Launcher.exe из установленной папки.\n'
-                    'Личные подключения в этот комплект не входят.\n')
-    (release / 'НАЧАТЬ.txt').write_text(instructions, encoding='utf-8-sig')
     for name in ('НАЧАТЬ.txt', 'third-party.md'):
+        shutil.copyfile(stage / name, release / name)
         manifest['artifacts'][name] = file_record(release / name, name)
     atomic_json(release / 'RELEASE.json', manifest)
     return verify_release(release)
@@ -501,15 +519,15 @@ def publish_release(release, destination):
             or acceptance.get('release_id') != manifest['release_id']
             or acceptance.get('launcher') is not True or acceptance.get('vm') is not True):
         raise RuntimeError('Owner acceptance of Launcher and VM is required before publication')
-    required = {'Setup.exe', 'Windows-Claude.zip', 'Windows-Claude.zip.sha256', 'Windows-Claude.zip.manifest.json',
+    archive_name = 'Windows-Claude-' + manifest['release_id'] + '.zip'
+    required = {archive_name, archive_name + '.sha256', archive_name + '.manifest.json',
                 'НАЧАТЬ.txt', 'third-party.md'}
     if set(manifest['artifacts']) != required:
         raise ValueError('Public release is incomplete')
     stage = destination.with_name('.' + destination.name + '-release-' + uuid.uuid4().hex)
     directory(stage)
-    for name, row in manifest['artifacts'].items():
-        copy_record(release / name, stage / name, row)
-    atomic_json(stage / 'RELEASE.json', manifest)
+    for name in (archive_name, archive_name + '.sha256'):
+        copy_record(release / name, stage / name, manifest['artifacts'][name])
     backup = release.parent / ('previous-installer-' + manifest['release_id'])
     if backup.exists():
         raise FileExistsError('Previous installer backup already exists')

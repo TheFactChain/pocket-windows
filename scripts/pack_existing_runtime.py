@@ -27,8 +27,9 @@ import launch_runtime as runtime
 PREFIX = 'Windows-Claude/'
 DATA_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 PUBLIC_FILES = ('Launcher.exe', 'config/runtime.json')
+DOCUMENT_FILES = ('НАЧАТЬ.txt', 'third-party.md')
 APP_FILES = tuple('scripts/' + name for name in (
-    'portable_app.py', 'launch_runtime.py', 'control_guest_install.py',
+    'portable_app.py', 'package_integrity.py', 'pack_existing_runtime.py', 'launch_runtime.py', 'control_guest_install.py',
     'runtime_network_plan.py', 'runtime_config.py', 'windows_hardware.py', 'connection_profile.py',
     'profile_store.py', 'gateway_controller.py', 'gateway_package.py',
     'gateway_profile.py', 'session_carrier.py', 'file_snapshot.py', 'runtime_logs.py', 'windows_guest_settings.py',
@@ -55,7 +56,7 @@ def safe_name(name):
 
 def allowed(name):
     return safe_name(name) and (name in (*DATA_FILES, *PUBLIC_FILES, *APP_FILES, *COMPONENT_FILES,
-        *GATEWAY_RECOVERY, *FILE_COMPONENT_FILES, PROFILE_FILE, 'gateway/packages/current.json',
+        *GATEWAY_RECOVERY, *FILE_COMPONENT_FILES, *DOCUMENT_FILES, PROFILE_FILE, 'gateway/packages/current.json',
         'config/windows.json', 'config/viewer.json', 'config/files.json', 'release-info.json')
         or name.startswith(RUNTIME_PREFIXES)
         or re.fullmatch(r'gateway/packages/releases/[a-z0-9][a-z0-9._-]{0,63}/(manifest.json|gateway.qcow2)', name))
@@ -133,15 +134,21 @@ def validate_public_file(name, reader):
         if offset < 64 or reader.read(6) != b'PE\0\0\x64\x86':
             raise ValueError('Launcher.exe must be a built x64 PE executable')
     elif name.endswith('.qcow2'):
-        header = reader.read(104)
-        if len(header) != 104 or header[:4] != b'QFI\xfb':
+        header = reader.read(112)
+        if len(header) < 104 or header[:4] != b'QFI\xfb':
             raise ValueError('A standalone qcow2 disk is required')
         version = struct.unpack_from('>I', header, 4)[0]
         backing, length = struct.unpack_from('>QI', header, 8)
         virtual = struct.unpack_from('>Q', header, 24)[0]
         encryption = struct.unpack_from('>I', header, 32)[0]
         incompatible = struct.unpack_from('>Q', header, 72)[0] if version == 3 else 0
-        if version not in (2, 3) or backing or length or not virtual or encryption or incompatible:
+        zstd = (incompatible == 8 and len(header) >= 112
+                and struct.unpack_from('>I', header, 100)[0] >= 112 and header[104] == 1)
+        invalid_compression = (version == 3 and len(header) >= 112
+                               and struct.unpack_from('>I', header, 100)[0] >= 112
+                               and bool(header[104]) != bool(incompatible & 8))
+        if (version not in (2, 3) or backing or length or not virtual or encryption
+                or (incompatible and not zstd) or invalid_compression):
             raise ValueError('Disk is dirty, encrypted, unsupported or depends on another file')
     reader.seek(0)
 
@@ -209,6 +216,9 @@ def collect(project, source=None, mode='personal'):
             add(name)
         if _optional_file(project, 'release-info.json'):
             add('release-info.json')
+        for name in DOCUMENT_FILES:
+            if _optional_file(project, name):
+                add(name)
         if _optional_file(project, 'config/windows.json'):
             add('config/windows.json')
         if _optional_file(project, 'config/viewer.json'):
@@ -260,7 +270,7 @@ def collect(project, source=None, mode='personal'):
             with locked_read(entries[PROFILE_FILE]) as reader:
                 if _json(reader, 8 * 1024 * 1024) != profiles:
                     raise ValueError('Profiles changed during inventory')
-        recovery = [_optional_file(project, name) for name in GATEWAY_RECOVERY]
+        recovery = [_optional_file(project, name) for name in GATEWAY_RECOVERY] if mode == 'personal' else [False, False]
         if any(recovery) and not all(recovery):
             raise ValueError('Gateway recovery catalog and package must both be present')
         if all(recovery):
@@ -308,8 +318,8 @@ def write_archive(entries, destination, commit=None):
                         for name, path in sorted(entries.items()):
                             if not allowed(name):
                                 raise ValueError('Unexpected payload path')
-                            if entries.mode == 'public' and name in (PROFILE_FILE, 'config/files.json'):
-                                raise ValueError('Public archives must not include profiles or host folder paths')
+                            if entries.mode == 'public' and name in (PROFILE_FILE, 'config/files.json', *GATEWAY_RECOVERY):
+                                raise ValueError('Public archives must not include profiles, host paths or duplicate gateway recovery')
                             with ExitStack() as context:
                                 context.enter_context(_pinned_directory(path.parent, create=False))
                                 reader = held.get(name) or context.enter_context(locked_read(file_under(entries.project, name)))
@@ -319,7 +329,8 @@ def write_archive(entries, destination, commit=None):
                                 validate_public_file(name, reader)
                                 digest, size = hashlib.sha256(), 0
                                 info = zipfile.ZipInfo.from_file(path, PREFIX + name)
-                                info.compress_type, info._compresslevel = zipfile.ZIP_DEFLATED, 1
+                                info.compress_type = zipfile.ZIP_STORED if entries.mode == 'public' and name.endswith('.qcow2') else zipfile.ZIP_DEFLATED
+                                info._compresslevel = 1
                                 with archive.open(info, 'w', force_zip64=True) as member:
                                     while chunk := reader.read(CHUNK):
                                         member.write(chunk)

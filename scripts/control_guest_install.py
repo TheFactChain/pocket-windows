@@ -84,7 +84,7 @@ if work:
     if not firmware.exists():
         original=root/'runtime/qemu-11.1.0/share/edk2-i386-vars.fd'
         with firmware.open('xb') as file:file.write(original.read_bytes())
-    arguments+=['-drive','if=pflash,unit=0,format=raw,readonly=on,file=runtime/qemu-11.1.0/share/edk2-x86_64-code.fd','-drive','if=pflash,unit=1,format=raw,file=state/workvm-vars.fd','-drive','if=ide,index=0,format=qcow2,file=images/workvm-empty.qcow2']
+    arguments+=['-drive','if=pflash,unit=0,format=raw,readonly=on,file=runtime/qemu-11.1.0/share/edk2-x86_64-code.fd','-drive','if=pflash,unit=1,format=raw,file=state/workvm-vars.fd','-drive','if=ide,index=0,format=qcow2,discard=unmap,file=images/workvm-empty.qcow2']
     if install or args.guest=='work-resume':
         iso=root/'build/tiny11-normal-26300.9457-ru-RU-20261019T223332091Z/tiny11-packonly-20261019T231246022Z.iso'
         assert sha(iso)=='cad59a1a6303b8a89ac18f9353e1cff44212f5836c83473a345dfe7e199d7743'

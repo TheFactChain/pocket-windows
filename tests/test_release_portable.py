@@ -77,6 +77,93 @@ class ReleaseTests(unittest.TestCase):
     def unchanged_private(self):
         self.assertEqual({name: (self.target / name).read_bytes() for name in self.protected}, self.before)
 
+    def test_update_preserves_initial_check_for_fresh_and_legacy_extractions(self):
+        from test_pack_existing_runtime import PackagingTests
+        import package_integrity
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                fixture = PackagingTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                archive, manifest = fixture.archive(mode='public')
+                extracted = fixture.root / 'unpacked'
+                with zipfile.ZipFile(archive) as payload:
+                    payload.extractall(extracted)
+                target = extracted / 'Windows-Claude'
+                if legacy:
+                    new = {'scripts/package_integrity.py', 'scripts/pack_existing_runtime.py'}
+                    manifest['files'] = [row for row in manifest['files'] if row['path'] not in new]
+                    for name in new:
+                        (target / name).unlink()
+                    raw = json.dumps(manifest).encode()
+                    (target / 'MANIFEST.json').write_bytes(raw)
+                    sums = ''.join(row['sha256'] + '  ' + row['path'] + '\n' for row in manifest['files'])
+                    (target / 'MANIFEST.sha256').write_bytes((sums + hashlib.sha256(raw).hexdigest() + '  MANIFEST.json\n').encode())
+                    (target / 'images/workvm-empty.qcow2').write_bytes(b'Windows changed during ordinary use')
+                release.apply_update(self.bundle, target)
+                result = package_integrity.verify_initial(target)
+                self.assertTrue(result['ok'])
+                self.assertEqual(result['code'], 'legacy' if legacy else 'cached')
+
+    def test_update_keeps_explicit_legacy_policy_when_old_copy_has_no_manifest(self):
+        import package_integrity
+        self.info['release_id'] = '2026.10.23.2'
+        self.write(self.app, 'release-info.json', json.dumps(self.info).encode())
+        self.manifest['release_id'] = self.info['release_id']
+        self.manifest['common_files'] = release.common_records(self.app)
+        self.save_manifest()
+        release.apply_update(self.bundle, self.target)
+        marker = self.target / 'state/package-legacy-format.json'
+        self.assertTrue(marker.is_file())
+        self.assertEqual(json.loads(marker.read_bytes()), {'schema': 1, 'legacy_format': True})
+        self.assertEqual(package_integrity.verify_initial(self.target)['code'], 'legacy')
+        self.unchanged_private()
+
+    def test_prepare_compiles_only_launcher_and_creates_no_setup(self):
+        for name in release.pack.FILE_COMPONENT_FILES:
+            self.write(self.app, name, b'file component fixture')
+        for name in release.pack.GATEWAY_RECOVERY:
+            self.write(self.app, name, b'recovery fixture')
+        engine_hash = hashlib.sha256((self.app / release.REQUIRED_RUNTIME[1]).read_bytes()).hexdigest()
+        for name in ('portable_app.py', 'control_guest_install.py', 'reference_vm.py', 'patch_qemu_engine.py'):
+            self.write(self.app, 'scripts/' + name, ('ENGINE_SHA256 = ' + repr(engine_hash)).encode())
+        rows = json.loads((self.app / release.pack.COMPONENT_FILES[0]).read_bytes())['files']
+        output = self.base / 'prepared'
+        commands = []
+        def build(args, source, log):
+            commands.append([str(value) for value in args])
+            self.write(output, 'app/Launcher.exe', (self.app / 'Launcher.exe').read_bytes())
+        with mock.patch.object(release, 'source_commit', return_value=self.info['source_commit']), \
+                mock.patch.object(release, 'validate_build_inputs'), \
+                mock.patch.object(release, 'master_files'), \
+                mock.patch.object(release.bundle, 'inventory', return_value={'files': rows}), \
+                mock.patch.object(release, 'run_logged', side_effect=build):
+            manifest = release.prepare_release(self.app, output, self.base / 'master', self.info['release_id'])
+        self.assertEqual(len(commands), 1)
+        self.assertIn('Build-Launcher.ps1', ' '.join(commands[0]))
+        self.assertNotIn('Build-Setup.ps1', ' '.join(commands[0]))
+        self.assertFalse((output / 'Setup.exe').exists())
+        self.assertEqual(manifest['artifacts'], {})
+
+    def test_launcher_only_release_does_not_require_setup(self):
+        (self.bundle / 'Setup.exe').unlink()
+        self.manifest['artifacts'] = {}
+        self.save_manifest()
+        self.assertEqual(release.verify_release(self.bundle)['release_id'], self.info['release_id'])
+        release.apply_update(self.bundle, self.target)
+        self.unchanged_private()
+
+    def test_versioned_zip_is_verified_and_tampering_is_rejected(self):
+        name = 'Windows-Claude-' + self.info['release_id'] + '.zip'
+        data = b'archive fixture'
+        self.write(self.bundle, name, data)
+        self.manifest['artifacts'] = {name: record(name, data)}
+        self.save_manifest()
+        release.verify_release(self.bundle)
+        self.write(self.bundle, name, b'tampered')
+        with self.assertRaises(ValueError):
+            release.verify_release(self.bundle)
+
     def test_update_installs_exact_release_and_preserves_private_data(self):
         result = release.apply_update(self.bundle, self.target)
         self.assertEqual(result['release_id'], self.info['release_id'])
@@ -244,6 +331,20 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             release.publish_release(self.bundle, self.base / 'Installer')
         self.assertFalse((self.base / 'Installer').exists())
+
+    def test_publication_exposes_only_the_versioned_zip_and_checksum(self):
+        name = 'Windows-Claude-' + self.info['release_id'] + '.zip'
+        self.manifest['artifacts'] = {}
+        for artifact in (name, name + '.sha256', name + '.manifest.json', 'НАЧАТЬ.txt', 'third-party.md'):
+            content = artifact.encode('utf-8')
+            self.write(self.bundle, artifact, content)
+            self.manifest['artifacts'][artifact] = record(artifact, content)
+        self.manifest['manual_acceptance'] = dict(self.info, launcher=True, vm=True)
+        self.save_manifest()
+        destination = self.base / 'Выпуск'
+        release.publish_release(self.bundle, destination)
+        self.assertEqual({item.name for item in destination.iterdir()}, {name, name + '.sha256'})
+        self.assertTrue((self.bundle / 'RELEASE.json').is_file())
 
 
 if __name__ == '__main__':

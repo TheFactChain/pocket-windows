@@ -34,12 +34,14 @@ internal static class DesktopLifecycleWiring
     static Dictionary<string, object> Success() { return new Dictionary<string, object> { { "ok", true }, { "message", "Шлюз восстановлен" } }; }
     static void TimeoutCases()
     {
-        foreach (string action in new[] { "start", "test-profile" }) Assert(Bridge.TimeoutMilliseconds(action) == 330000, "Start/profile budget must cover the backend wait");
+        Assert(Bridge.TimeoutMilliseconds("start") == 600000, "Start budget must cover initial disk verification and backend wait");
+        Assert(Bridge.TimeoutMilliseconds("test-profile") == 330000, "Profile test budget must cover the backend wait");
         Assert(Bridge.TimeoutMilliseconds("stop") == 510000, "Stop budget must cover graceful shutdown");
         Assert(Bridge.TimeoutMilliseconds("repair-gateway") == 180000, "Gateway recovery budget changed");
         Assert(Bridge.TimeoutMilliseconds("recover-session") >= 150000, "Session recovery must cover graceful gateway stop and ownership checks");
         Assert(Bridge.TimeoutMilliseconds("prepare-host") == 210000, "Host preparation budget must cover its bounded helper wait");
-        Assert(Bridge.TimeoutMilliseconds("diagnose") == 30000, "Ordinary checks must remain bounded");
+        Assert(Bridge.TimeoutMilliseconds("diagnose") == 300000, "Initial package checks need time to hash the Windows disk");
+        Assert(Bridge.TimeoutMilliseconds("status") == 30000, "Background status must remain bounded");
     }
     static void MappingCases()
     {

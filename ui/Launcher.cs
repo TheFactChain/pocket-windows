@@ -69,7 +69,8 @@ internal static class Bridge
     {
         switch (action)
         {
-            case "start":
+            case "start": return 600000;
+            case "diagnose": return 300000;
             case "test-profile": return 330000;
             case "stop": return 510000;
             case "repair-gateway":
@@ -87,7 +88,7 @@ internal static class Bridge
             string script = Path.Combine(root, "scripts", "Prepare-Host.ps1");
             if (!File.Exists(script)) return Failure("Не найден сценарий подготовки этого ПК. Распакуй полный комплект.");
             string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-            ProcessStartInfo prepare = new ProcessStartInfo(powershell, String.Join(" ", new[] { "-NoProfile", "-NonInteractive", "-File", script, "-Root", root }.Select(Quote)));
+            ProcessStartInfo prepare = new ProcessStartInfo(powershell, String.Join(" ", new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Root", root }.Select(Quote)));
             prepare.WorkingDirectory = root;
             Dictionary<string,object> reply = await RunProcessAsync(prepare, TimeoutMilliseconds(action)).ConfigureAwait(false);
             string code = reply.ContainsKey("code") ? Convert.ToString(reply["code"]) : "error";
@@ -207,7 +208,7 @@ internal static class Bridge
         string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
         string script = Path.Combine(root, "scripts", "Prepare-Dependencies.ps1");
         if (!File.Exists(script)) return Failure("Не найден сценарий подготовки. Распакуй полный комплект приложения.");
-        ProcessStartInfo info = new ProcessStartInfo(powershell, String.Join(" ", new[] { "-NoProfile", "-NonInteractive", "-File", script, "-Project", root }.Select(Quote)));
+        ProcessStartInfo info = new ProcessStartInfo(powershell, String.Join(" ", new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Project", root }.Select(Quote)));
         info.WorkingDirectory = root;
         Dictionary<string, object> reply = await RunProcessAsync(info, 180000).ConfigureAwait(false);
         string code = reply.ContainsKey("code") ? Convert.ToString(reply["code"]) : "error";
@@ -221,7 +222,7 @@ internal static class Bridge
         };
         if (messages.ContainsKey(code)) reply["message"] = messages[code];
         else if (code == "invalid_response" || code == "process_failed")
-            reply["message"] = "Windows PowerShell не подтвердил подготовку. Проверь разрешение запуска scripts/Prepare-Dependencies.ps1 в свойствах комплекта и политике Windows. Политика выполнения не изменялась; исход подготовки не подтверждён.";
+            reply["message"] = "Windows PowerShell не подтвердил подготовку. Проверь целостность комплекта и ограничения Windows. Постоянная политика выполнения не изменялась; исход подготовки не подтверждён.";
         return reply;
     }
 
@@ -1359,12 +1360,18 @@ internal sealed partial class MainForm : Form
             "Окно можно уменьшать и разворачивать: картинка масштабируется, Windows остаётся в своём разрешении."),1,0);
         grid.Controls.Add(HelpCard("Файлы ПК", null,
             "Режим и папки выбираются в «Настройки → Файлы ПК». Windows подключает папки сама при входе, они видны в Проводнике.\n\nПапка программы и автозагрузка ПК из Windows недоступны."),0,1);
+        Button shortcut=MakeButton("Создать ярлык на рабочем столе",false);
+        shortcut.Font=new Font("Segoe UI",9);shortcut.Padding=new Padding(10,8,10,8);shortcut.MinimumSize=new Size(120,40);shortcut.Margin=new Padding(0,8,0,0);
+        shortcut.Click+=delegate {
+            try {PortableEntry.CreateShortcut(Bridge.Root,Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));MessageBox.Show(shortcut.FindForm(),"Ярлык этой копии создан на рабочем столе.","Ярлык",MessageBoxButtons.OK,MessageBoxIcon.Information);}
+            catch(Exception error) {MessageBox.Show(shortcut.FindForm(),"Ярлык не создан. "+error.GetBaseException().Message,"Ярлык",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+        };
         grid.Controls.Add(HelpCard("Выключение и перенос", null,
-            "Выключай кнопкой «Выключить» или из меню «Пуск» в Windows. Закрытие панели Windows не выключает.\n\nДля переноса скопируй всю папку программы после выключения."),1,1);
+            "Закрытие панели Windows не выключает. Для переноса выключи Windows и скопируй всю папку программы.",shortcut),1,1);
         return grid;
     }
 
-    private static RoundedPanel HelpCard(string title, string[][] keys, string note)
+    private static RoundedPanel HelpCard(string title, string[][] keys, string note,Button action=null)
     {
         RoundedPanel card = new RoundedPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(16,12,16,12), Margin = new Padding(0,0,10,10) };
         TableLayoutPanel lines = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty, BackColor = Color.White };
@@ -1383,7 +1390,9 @@ internal sealed partial class MainForm : Form
             Label text = new Label { Text = note, AutoSize = true, ForeColor = keys == null ? NativeStyle.Ink : NativeStyle.Muted, Font = new Font("Segoe UI", keys == null ? 9.5f : 9), Margin = new Padding(0,keys == null ? 0 : 6,0,0) };
             lines.RowStyles.Add(new RowStyle(SizeType.AutoSize)); lines.Controls.Add(text,0,row); lines.SetColumnSpan(text,2);
             lines.SizeChanged += delegate { text.MaximumSize = new Size(Math.Max(60,lines.ClientSize.Width),0); };
+            row++;
         }
+        if(action!=null) {lines.RowStyles.Add(new RowStyle(SizeType.AutoSize));lines.Controls.Add(action,0,row);lines.SetColumnSpan(action,2);}
         lines.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         card.Controls.Add(lines);
         return card;
