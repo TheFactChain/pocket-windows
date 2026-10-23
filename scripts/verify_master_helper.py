@@ -1,7 +1,7 @@
-"""Offline acceptance of a compact master: boot it twice on a throwaway overlay without network.
+"""Offline acceptance of a compact master or of an extracted release: boot it twice on a throwaway overlay.
 
-Each boot must report the requested Windows mode through the guest helper receipt on COM1 and then
-shut down on an ACPI power button press. The master itself is only read as a backing file.
+Each boot has no network, must report the requested Windows mode through the guest helper receipt on
+COM1 and then shut down on an ACPI power button press. The tested disk is only read as a backing file.
 """
 import argparse
 from collections import deque
@@ -131,7 +131,8 @@ def boot(project, operation, settings, helper_bytes, index, idle, shutdown_timeo
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True, help='project with the prepared runtime and helper')
-    parser.add_argument('--master', type=Path, required=True, help='compact-master folder with candidate.qcow2 and vars.fd')
+    parser.add_argument('--master', type=Path, help='compact-master folder with candidate.qcow2 and vars.fd; '
+                        'omit it to test the images/ and state/ of an extracted release given as --source')
     parser.add_argument('--output', type=Path, required=True, help='new folder for the evidence and the overlay')
     parser.add_argument('--helper-sha256', required=True, help='SHA256 of the HostFilesGuest.exe installed in the master')
     parser.add_argument('--width', type=int, default=1920)
@@ -148,14 +149,16 @@ def main(argv=None):
     with engine.open('rb') as stream:
         if hashlib.file_digest(stream, 'sha256').hexdigest() != compact.ENGINE_SHA256:
             raise ValueError('Unexpected QEMU engine')
+    base_disk = args.master / 'candidate.qcow2' if args.master else project / 'images/workvm-empty.qcow2'
+    base_vars = args.master / 'vars.fd' if args.master else project / 'state/workvm-vars.fd'
     operation.mkdir(parents=True)
     disk, firmware = operation / 'verification.qcow2', operation / 'verification-vars.fd'
     subprocess.run([str(project / 'runtime/qemu-11.1.0/qemu-img.exe'), 'create', '-f', 'qcow2', '-F', 'qcow2', '-b',
-                    compact.qemu_path(args.master / 'candidate.qcow2'), compact.qemu_path(disk)],
+                    compact.qemu_path(base_disk), compact.qemu_path(disk)],
                    check=True, creationflags=subprocess.CREATE_NO_WINDOW, stdout=subprocess.DEVNULL)
-    shutil.copyfile(args.master / 'vars.fd', firmware)
+    shutil.copyfile(base_vars, firmware)
     results = [boot(project, operation, settings, helper_bytes, index, args.idle, args.shutdown_timeout) for index in (1, 2)]
-    runtime.atomic_json(operation / 'ACCEPTANCE.json', {'passed': True, 'master': str(args.master), 'results': results})
+    runtime.atomic_json(operation / 'ACCEPTANCE.json', {'passed': True, 'master': str(args.master or project), 'results': results})
     for name in ('verification.qcow2', 'verification-vars.fd'):
         (operation / name).unlink()
     for frame in operation.glob('boot-*/*.ppm'):
