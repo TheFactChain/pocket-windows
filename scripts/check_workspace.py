@@ -47,7 +47,8 @@ def workspace_problems(project):
             if service.is_dir() else []
         if len(versions) > 2:
             problems.append('Keep at most two folders of ' + kind + ', found ' + str(len(versions)) + ': ' + ', '.join(versions))
-    for item in sorted(service.glob('release-*/public')) + sorted(service.glob('release-*/app')) if service.is_dir() else []:
+    # app/ stays: `verify` and `publish` compare the release inventory with it; public/ is the ZIP's staging copy.
+    for item in sorted(service.glob('release-*/public')) if service.is_dir() else []:
         problems.append('Build leftover to delete after the ZIP is verified: ' + str(item.relative_to(project)))
     sources = project / 'Разработка/Исходники'
     for name in ('bin', 'obj'):
