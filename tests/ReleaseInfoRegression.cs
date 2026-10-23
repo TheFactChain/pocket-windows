@@ -1,8 +1,6 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Text;
-using System.Windows.Forms;
 
 internal static class ReleaseInfoRegression
 {
@@ -36,15 +34,7 @@ internal static class ReleaseInfoRegression
                 Assert(ReleaseInfo.StartupBlockReason(root).Contains("Обновление программы не завершено"),"Any unfinished transaction marker must block startup without parsing or running UI");
             }
             File.Delete(marker);Assert(ReleaseInfo.StartupBlockReason(root)==null,"Removing a completed marker must allow startup");
-            Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-            using(var form=new MainForm(false,(action,payload)=>Bridge.Failure("No backend in release fixture")))
-            {
-                var page=(Control)typeof(MainForm).GetField("helpPage",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(form);
-                Func<Control,bool> version=control=>control.Text.StartsWith("Версия ",StringComparison.Ordinal);
-                Assert(page.Controls.Cast<Control>().SelectMany(control=>control.Controls.Cast<Control>()).SelectMany(control=>control.Controls.Cast<Control>())
-                    .SelectMany(control=>control.Controls.Cast<Control>()).Any(version),"Help must contain a readable release/development version label");
-            }
-            Console.WriteLine("PASS: release metadata, strict validation/development fallback, Help version and pure update startup guard");return 0;
+            Console.WriteLine("PASS: release metadata, strict validation/development fallback and pure update startup guard");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }

@@ -1,4 +1,4 @@
-// Copied unchanged from ui/Launcher.cs (WinForms launcher): the same backend protocol, timeouts and safety rules.
+// Backend protocol, timeouts and safety rules of the launcher (carried over from the former WinForms panel, now removed).
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

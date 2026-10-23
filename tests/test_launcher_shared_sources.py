@@ -19,7 +19,8 @@ class LauncherSharedSourcesTests(unittest.TestCase):
                            '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll',
                            '/reference:System.Web.Extensions.dll',
                            '/win32manifest:' + str(ROOT / 'ui/app.manifest'), '/out:' + str(executable),
-                           *map(str, sorted((ROOT / 'ui').glob('*.cs'))), str(ROOT / 'tests' / (name + '.cs'))]
+                           *map(str, sorted((ROOT / 'ui').glob('*.cs'))), str(ROOT / 'launcher-wpf/Bridge.cs'),
+                           str(ROOT / 'tests' / (name + '.cs'))]
                 build = subprocess.run(command, capture_output=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
                 self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
                 result = subprocess.run([str(executable), temporary], capture_output=True, timeout=45,
