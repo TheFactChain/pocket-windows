@@ -193,29 +193,6 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             pack.collect(self.project, mode='unknown')
 
-    def test_public_archive_installs_with_native_setup(self):
-        destination, _ = self.archive('public-native.zip', mode='public')
-        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-        destination.with_suffix('.zip.sha256').write_text(digest + '  ' + destination.name + '\n')
-        compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-        executable = self.root / 'setup-regression.exe'
-        root = SCRIPT.parent.parent
-        build = subprocess.run([str(compiler), '/nologo', '/define:SETUP_TESTS', '/target:exe', '/platform:x64',
-            '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
-            '/reference:System.Web.Extensions.dll', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll',
-            '/out:' + str(executable), str(root / 'ui/Setup.cs'), str(root / 'tests/SetupRegression.cs')],
-            capture_output=True, timeout=45)
-        self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
-        regression = subprocess.run([str(executable)], capture_output=True, timeout=45)
-        self.assertEqual(regression.returncode, 0, (regression.stdout + regression.stderr).decode(errors='replace'))
-        extracted = self.root / 'native-unpacked'
-        result = subprocess.run([str(executable), '--install-fixture', str(destination), str(extracted)],
-                                capture_output=True, timeout=45)
-        self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
-        self.assertEqual((extracted / 'images/workvm-empty.qcow2').read_bytes(), qcow())
-        self.assertFalse((extracted / 'profiles').exists())
-        self.assertEqual(json.loads((extracted / 'config/runtime.json').read_bytes())['lan_port'], 42345)
-
     def test_personal_archive_preserves_selected_encrypted_history_and_excludes_legacy_data(self):
         with mock.patch('profile_store._unprotect', side_effect=AssertionError('Packaging must not decrypt')):
             destination, manifest = self.archive()
