@@ -91,6 +91,24 @@ class DisplayControllerTests(unittest.TestCase):
             self.assertIn('VGA.xres=1920', arguments)
             self.assertIn('VGA.yres=1080', arguments)
 
+    def test_normal_boot_uses_saved_guest_mode_for_vga(self):
+        block = next(node for node in self.tree().body if isinstance(node, ast.If)
+                     and ast.unparse(node.test) == 'normal_runtime')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'config').mkdir()
+            (root / 'config/windows.json').write_text('{"width":2560,"height":1440}', encoding='utf-8')
+            output = root / 'logs/session'
+            output.mkdir(parents=True)
+            arguments = ['-machine', 'q35', '-display', 'sdl,gl=off', '-serial', 'none']
+            scope = dict(root=root, output=output, arguments=arguments, normal_runtime=True,
+                         session_nonce='a' * 32, windows_settings=settings,
+                         load_viewer_settings=config.load_viewer_settings)
+            with mock.patch.object(settings, 'host_display', return_value=SCREEN):
+                exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
+            self.assertEqual([arguments[i + 1] for i, name in enumerate(arguments) if name == '-global'],
+                             ['VGA.xres=2560', 'VGA.yres=1440', 'VGA.vgamem_mb=16'])
+
     def test_controller_never_retitles_the_qemu_window(self):
         # The branded engine sets a fixed caption itself; a second writer would make it flicker.
         function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'observe_work_window')

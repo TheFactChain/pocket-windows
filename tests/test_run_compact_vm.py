@@ -32,6 +32,8 @@ class CompactVmTests(unittest.TestCase):
         args = self.vm.arguments(Path('project'), Path('operation'), 'baseline')
         self.assertEqual(args[args.index('-nic') + 1], 'none')
         self.assertEqual(args[args.index('-display') + 1], 'none')
+        self.assertEqual([args[i + 1] for i, name in enumerate(args) if name == '-global' and args[i + 1].startswith('VGA.')],
+                         ['VGA.xres=1920', 'VGA.yres=1080', 'VGA.vgamem_mb=16'])
         self.assertEqual(args[args.index('-qmp') + 1], 'stdio')
         self.assertEqual(args[args.index('-m') + 1], '4096')
         self.assertIn('discard=unmap', ' '.join(args))

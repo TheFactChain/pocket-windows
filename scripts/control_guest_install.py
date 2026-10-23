@@ -152,10 +152,8 @@ if normal_runtime:
     arguments[arguments.index('-machine') + 1] = 'q35,i8042=off'
     arguments += ['-device', 'usb-tablet,id=wcabspointer,bus=wcsettingsusb.0',
                   '-device', 'usb-kbd,id=wckeyboard,bus=wcsettingsusb.0']
-    arguments += ['-global', 'VGA.xres=' + str(display_settings['width']),
-                  '-global', 'VGA.yres=' + str(display_settings['height']),
-                  '-global', 'VGA.vgamem_mb=' + str(windows_settings.vga_memory_mib(display_settings)),
-                  '-chardev', 'ringbuf,id=wcdisplay,size=8192']
+    arguments += windows_settings.vga_arguments(display_settings)
+    arguments += ['-chardev', 'ringbuf,id=wcdisplay,size=8192']
     arguments[arguments.index('-serial') + 1] = 'chardev:wcdisplay'
     # SDL's close button otherwise cuts guest power without an ACPI shutdown.
     arguments[arguments.index('-display') + 1] = ('sdl,gl=off,window-close=off'

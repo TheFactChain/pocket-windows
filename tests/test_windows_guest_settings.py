@@ -58,6 +58,13 @@ class WindowsGuestSettingsTests(unittest.TestCase):
         self.assertEqual(guest.vga_memory_mib({'width': 1920, 'height': 1080}), 16)
         self.assertEqual(guest.vga_memory_mib({'width': 3840, 'height': 2160}), 32)
 
+    def test_vga_arguments_validate_saved_mode_before_emitting_globals(self):
+        self.assertEqual(guest.vga_arguments({'width': 1600, 'height': 900}),
+                         ['-global', 'VGA.xres=1600', '-global', 'VGA.yres=900',
+                          '-global', 'VGA.vgamem_mb=16'])
+        with self.assertRaises(ValueError):
+            guest.vga_arguments({'width': True})
+
     @unittest.skipUnless(sys.platform == 'win32', 'Windows monitor coordinates')
     def test_monitor_work_area_and_metrics_are_physical_at_125_percent(self):
         user, shcore = mock.Mock(), mock.Mock()

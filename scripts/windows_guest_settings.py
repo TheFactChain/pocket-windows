@@ -105,6 +105,13 @@ def vga_memory_mib(settings):
     return next(size for size in (16, 32, 64, 128) if needed <= size * 1024 * 1024)
 
 
+def vga_arguments(settings):
+    settings = validate_settings(settings)
+    return ['-global', 'VGA.xres=' + str(settings['width']),
+            '-global', 'VGA.yres=' + str(settings['height']),
+            '-global', 'VGA.vgamem_mb=' + str(vga_memory_mib(settings))]
+
+
 def load_settings(root):
     from file_snapshot import locked_read
     from profile_store import _pinned_directory, _plain

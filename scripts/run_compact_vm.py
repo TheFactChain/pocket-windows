@@ -21,6 +21,7 @@ from reference_vm import read_qmp_stream
 from runtime_logs import CappedWriter, start_capped_drain
 from runtime_config import load_settings
 import windows_hardware
+import windows_guest_settings as windows_settings
 
 
 def qemu_path(path):
@@ -45,6 +46,7 @@ def arguments(project, operation, phase):
             '-cpu', windows_hardware.CPU_MODEL, '-smp', str(settings['vcpus']), '-m', str(settings['work_memory_mib']), '-L', qemu_path(share),
             '-nic', 'none', '-display', 'none', '-vga', 'std', '-serial', 'none',
             '-parallel', 'none', '-monitor', 'none', '-qmp', 'stdio', '-no-reboot',
+            *windows_settings.vga_arguments(windows_settings.DEFAULTS),
             *windows_hardware.arguments(serial='WC-MAINTENANCE-COPY'),
             '-drive', 'if=pflash,unit=0,format=raw,readonly=on,file=' + escape(share / 'edk2-x86_64-code.fd'),
             '-drive', 'if=pflash,unit=1,format=raw,file=' + escape(operation / (phase + '-vars.fd')),

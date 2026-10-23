@@ -20,6 +20,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launch_runtime as runtime
 import windows_hardware
+import windows_guest_settings as windows_settings
 from file_snapshot import locked_read, QEMU_IMG_SHA256
 from profile_store import _plain, _pinned_directory
 import reference_prep
@@ -97,6 +98,7 @@ def arguments(operation, reference_id, settings, gateway=False, template_nonce=N
             '-device', 'usb-storage,drive=wcrefhand,bus=wcrefusb.0,removable=on',
             '-boot', 'order=c,strict=on']
     result += windows_hardware.arguments(serial)
+    result += windows_settings.vga_arguments(windows_settings.DEFAULTS)
     if gateway:
         result += network_arguments('work', relative, lan_port=settings['lan_port'])
     return result

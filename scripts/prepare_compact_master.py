@@ -17,6 +17,7 @@ from file_snapshot import QEMU_IMG_SHA256
 from runtime_config import load_settings
 import launch_runtime as runtime
 import windows_hardware
+import windows_guest_settings as windows_settings
 
 
 def plain_path(value, directory=False):
@@ -50,6 +51,7 @@ def arguments(project, master, settings):
             '-m', str(settings['work_memory_mib']), '-L', str(share),
             '-nic', 'none', '-display', 'sdl,gl=off,window-close=off', '-vga', 'std',
             '-serial', 'none', '-parallel', 'none', '-monitor', 'none',
+            *windows_settings.vga_arguments(windows_settings.DEFAULTS),
             *windows_hardware.arguments(serial='WC-MAINTENANCE-COPY'),
             '-drive', 'if=pflash,unit=0,format=raw,readonly=on,file=' + escape(share / 'edk2-x86_64-code.fd'),
             '-drive', 'if=pflash,unit=1,format=raw,file=' + escape(firmware),

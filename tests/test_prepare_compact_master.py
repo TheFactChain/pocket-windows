@@ -73,6 +73,8 @@ Write-Output 'cache handling PASS; protected files retained'
             args = maintenance.arguments(ROOT, master, {'vcpus': 2, 'work_memory_mib': 4096})
         self.assertEqual(args[args.index('-nic') + 1], 'none')
         self.assertEqual(args[args.index('-display') + 1], 'sdl,gl=off,window-close=off')
+        self.assertEqual([args[i + 1] for i, name in enumerate(args) if name == '-global' and args[i + 1].startswith('VGA.')],
+                         ['VGA.xres=1920', 'VGA.yres=1080', 'VGA.vgamem_mb=16'])
         self.assertIn('serial=WC-MAINTENANCE-COPY', next(value for value in args if 'type=1,' in value))
         self.assertTrue(any('discard=unmap,file=' + str(master / 'candidate.qcow2').replace('\\', '/') in value for value in args))
         self.assertTrue(any('readonly=on,file=fat:' in value for value in args))

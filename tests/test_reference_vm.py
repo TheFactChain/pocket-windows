@@ -32,6 +32,8 @@ class ReferenceVmTests(unittest.TestCase):
         args = vm.arguments(self.op, self.ref, {'vcpus': 2, 'work_memory_mib': 4096})
         self.assertEqual(args[args.index('-nic') + 1], 'none')
         self.assertEqual(args[args.index('-display') + 1], 'sdl,gl=off')
+        self.assertEqual([args[i + 1] for i, name in enumerate(args) if name == '-global' and args[i + 1].startswith('VGA.')],
+                         ['VGA.xres=1920', 'VGA.yres=1080', 'VGA.vgamem_mb=16'])
         self.assertIn('-S', args)
         self.assertIn('-no-reboot', args)
         self.assertTrue(any(value.startswith('type=1,') and value.endswith(',serial=WCREFERENCE-' + self.ref) for value in args))
