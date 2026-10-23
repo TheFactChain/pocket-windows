@@ -89,11 +89,14 @@ class WindowsGuestSettingsTests(unittest.TestCase):
         self.assertEqual((display['frame'], display['caption']), (15, 29))
         self.assertEqual(user.SetThreadDpiAwarenessContext.call_args.args[0].value, 111)
 
-    def test_request_allows_fitted_sizes_but_saved_settings_only_listed_ones(self):
-        self.assertEqual(guest.validate_request({'width': 1752, 'height': 1096})['width'], 1752)
-        with self.assertRaises(ValueError):
-            guest.validate_settings({'width': 1752, 'height': 1096})
-        for bad in ({'width': 1750, 'height': 1096}, {'width': 600, 'height': 400}, {'width': 8000, 'height': 4000}, {'fit': 1}):
+    def test_only_standard_modes_reach_windows_and_no_preset_is_rejected(self):
+        for width, height in guest.MODES:
+            with self.subTest(mode=(width, height)), self.temporary() as temporary:
+                guest.write_settings(Path(temporary), {'width': width, 'height': height}, self.NONCE)
+                sent = json.loads((Path(temporary) / 'SETTINGS.JSN').read_bytes())
+                self.assertEqual((sent['width'], sent['height']), (width, height))
+        for bad in ({'width': 1752, 'height': 1096}, {'width': 1750, 'height': 1096},
+                    {'width': 600, 'height': 400}, {'width': 8000, 'height': 4000}, {'fit': True}, {'fit': 1}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 guest.validate_request(bad)
 

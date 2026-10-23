@@ -232,7 +232,7 @@ def preflight(root, host=None, *, full=True):
                 display_state = {'status': 'pending'}
                 display = work_state.get('windows_display', {})
                 if display.get('status') in ('applied', 'failed') and display.get('generation') == work_state.get('generation'):
-                    # "As the PC screen" sends a fitted size: check the guest against what this session requested.
+                    # Check against this session's selected standard mode, even after the panel setting changes.
                     requested = windows_settings.validate_request(display['requested']) if 'requested' in display else display_settings
                     receipt = windows_settings.validate_receipt(json.dumps(display.get('receipt')), requested, work_state.get('session_nonce'))
                     display_state['requested'] = {key: requested[key] for key in ('width', 'height')}
@@ -726,7 +726,7 @@ def profile_error(error):
         'Unsupported connection protocol': 'Выбери Hysteria2, SOCKS5, HTTP или HTTPS CONNECT.',
         'Enter credentials again when changing protocol or obfuscation':
             'При смене протокола или маскировки введи пароль заново.',
-        'Request exceeds 64 KiB': 'Запрос слишком большой. Максимальный размер — 64 КиБ.',
+        'Request exceeds 64 KiB': 'Запрос слишком большой. Максимальный размер 64 КиБ.',
     }
     return messages.get(str(error),
         'Проверь поля подключения или формат импорта. Некорректные данные не сохранены.')

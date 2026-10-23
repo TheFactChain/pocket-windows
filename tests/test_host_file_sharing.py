@@ -26,7 +26,7 @@ class FileSharingTests(unittest.TestCase):
                             'HostFilesMemoryRegression', 'GuestFilesRegression'):
                 with self.subTest(harness=harness):
                     executable = output / (harness + '.exe')
-                    sources = [root / 'guest/files/GuestFiles.cs'] if harness == 'GuestFilesRegression' else sorted((root / 'host/files').glob('*.cs'))
+                    sources = [root / 'guest/files/GuestFiles.cs', root / 'guest/GuestEnvironment.cs'] if harness == 'GuestFilesRegression' else sorted((root / 'host/files').glob('*.cs'))
                     command = [str(compiler), '/nologo', '/target:exe', '/platform:x64', '/main:' + harness,
                                '/reference:System.Web.Extensions.dll', '/reference:System.Windows.Forms.dll', '/reference:Microsoft.CSharp.dll',
                                *['/reference:' + str(output / name) for name in ('SMBLibrary.dll', 'SMBLibrary.Win32.dll', 'Utilities.dll')],

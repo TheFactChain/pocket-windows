@@ -21,7 +21,6 @@ public static class GuestSettingsRegression
         Invalid(valid.Replace("}", ",}")); Invalid(valid + "{}"); Invalid(valid.Replace("abcdef", "ABCDEF")); Invalid(new string(' ', 4097));
         Check(Program.IsSetupMarker("{\"app\":\"WindowsClaude\",\"schema\":1}"), "setup marker");
         Check(!Program.IsSetupMarker("{\"app\":\"WindowsClaude\",\"schema\":1,\"path\":\"x\"}"), "strict marker");
-        Check(Program.IsQemu("QEMU") && !Program.IsQemu("QEMU compatible") && !Program.IsQemu("Microsoft Corporation"), "guest guard");
         Check(Program.SameLocalUser(null,"S-1-5-21-1-2-3-1001","guest","GUEST"),"local identity");
         Check(!Program.SameLocalUser("S-1-5-21-1-2-3-1001","S-1-5-21-1-2-3-1002","guest","guest"),"UAC identity changed");
         Check(!Program.SameLocalUser(null,"S-1-5-21-1-2-3-1001","domain","guest"),"domain identity refused");

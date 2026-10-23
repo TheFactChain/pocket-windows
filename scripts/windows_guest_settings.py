@@ -49,9 +49,9 @@ def validate_settings(value):
 
 
 def validate_request(value):
-    """The size actually sent to Windows: a listed mode or one fitted to the screen."""
+    """The guest receives the selected standard mode, never host window dimensions."""
     result = _checked(value)
-    if not (640 <= result['width'] <= 7680 and 480 <= result['height'] <= 4320) or result['width'] % 8:
+    if result['fit'] or (result['width'], result['height']) not in MODES:
         raise ValueError('Invalid Windows resolution')
     return result
 

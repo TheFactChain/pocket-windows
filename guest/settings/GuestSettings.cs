@@ -74,11 +74,6 @@ namespace WindowsClaude.GuestSettings
             catch (FormatException) { return false; }
         }
 
-        public static bool IsQemu(string manufacturer)
-        {
-            return String.Equals((manufacturer ?? "").Trim(), "QEMU", StringComparison.OrdinalIgnoreCase);
-        }
-
         public static bool SameLocalUser(string expectedSid, string actualSid, string domain, string machine)
         {
             return Regex.IsMatch(actualSid ?? "", @"^S-1-5-21-[0-9]+-[0-9]+-[0-9]+-[0-9]+$") &&
@@ -151,8 +146,7 @@ namespace WindowsClaude.GuestSettings
 
         static void RequireGuest()
         {
-            using (var key = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS", false))
-                if (key == null || !IsQemu(key.GetValue("SystemManufacturer") as string)) throw new InvalidOperationException("GUEST_GUARD_REFUSED");
+            GuestEnvironment.Require();
         }
 
         static bool IsAdmin() { return new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator); }

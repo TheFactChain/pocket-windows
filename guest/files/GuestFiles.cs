@@ -219,8 +219,7 @@ namespace WindowsClaude.GuestFiles
             catch{if(outcome.Success)outcome.Code="EXPLORER_LABEL_FAILED";}
         }
         public static string Receipt(Config config,Outcome outcome){return Json.Serialize(new{schema=1,session_nonce=config==null?null:config.Nonce,success=outcome.Success,code=outcome.Code,mappings=outcome.Mappings.Select(item=>new{name=item.Name,letter=item.Letter}).ToArray()});}
-        public static bool IsQemu(string manufacturer){return String.Equals((manufacturer??"").Trim(),"QEMU",StringComparison.OrdinalIgnoreCase);}
-        static void RequireGuest(){using(var bios=Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS",false))if(bios==null||!IsQemu(bios.GetValue("SystemManufacturer") as string))throw new InvalidOperationException("GUEST_GUARD_REFUSED");}
+        static void RequireGuest(){GuestEnvironment.Require();}
         static void NoReparse(string path){for(string item=Path.GetFullPath(path);!String.IsNullOrEmpty(item);item=Path.GetDirectoryName(item))if((File.Exists(item)||Directory.Exists(item))&&(File.GetAttributes(item)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("REPARSE_PATH_REFUSED");}
         static string ReadBounded(string path)
         {
