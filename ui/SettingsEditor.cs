@@ -17,8 +17,7 @@ internal sealed class SettingsEditor : UserControl
     internal readonly CheckBox StartFullscreen = new CheckBox { Text = "Открывать Windows на весь экран", Dock = DockStyle.Top, Font = new Font("Segoe UI Semibold",10), Margin = Padding.Empty };
     internal readonly CheckBox RememberWindow = new CheckBox { Text = "Запоминать размер и положение панели", Dock = DockStyle.Top, Font = new Font("Segoe UI Semibold",10), Margin = Padding.Empty };
     internal readonly Button RecommendedButton = new RoundedButton { Text = "Поставить рекомендуемые значения", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(16,8,16,8), Margin = new Padding(0,14,0,0), Enabled = false };
-    internal const int MemoryStepMiB = 256;
-    internal readonly TrackBar MemorySlider = new TrackBar { Minimum = 4, Maximum = 64, SmallChange = 1, LargeChange = 4, AutoSize = false, TickStyle = TickStyle.None, BackColor = Color.White, Dock = DockStyle.Top, Height = 28, Margin = new Padding(0,8,0,2), AccessibleName = "Память Windows", AccessibleDescription = "Одна позиция — 0,25 ГиБ. Стрелки меняют память на 0,25 ГиБ." };
+    internal readonly TextBox MemoryInput = new TextBox { Width = 130, TextAlign = HorizontalAlignment.Right, Font = new Font("Segoe UI Semibold",13), Anchor = AnchorStyles.Right, Margin = Padding.Empty, AccessibleName = "Память Windows в ГиБ", AccessibleDescription = "Введи число от 1 до 32. Дробную часть можно отделить запятой или точкой." };
     private readonly string[] keys = { "work_memory_mib", "vcpus" };
     private readonly string[] labels = { "Память Windows", "Процессоры каждой VM" };
     private readonly int[] minimum = {1024,1};
@@ -51,9 +50,7 @@ internal sealed class SettingsEditor : UserControl
     private readonly ListBox sharedFolders = new ListBox { Dock = DockStyle.Top, IntegralHeight = false, Height = 100, DrawMode = DrawMode.OwnerDrawFixed, BorderStyle = BorderStyle.None, BackColor = Color.White, AccessibleName = "Выбранные папки ПК", Margin = Padding.Empty, AllowDrop = true };
     private readonly List<RoundedButton> modeButtons = new List<RoundedButton>();
     private int hostTotal = -1, hostAvailable = -1, hostProcessors = -1;
-    private readonly Label memoryGib = new Label { Text = "—", AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Anchor = AnchorStyles.Right, Font = new Font("Segoe UI Semibold",13), Margin = Padding.Empty };
     private readonly Label hostMemory = new Label { Text = "Данные памяти ПК пока недоступны.", AutoSize = true, Anchor = AnchorStyles.None, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = new Padding(8,0,8,0) };
-    private readonly Label memoryMax = new Label { Text = "16 ГиБ", AutoSize = true, Anchor = AnchorStyles.Right, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = Padding.Empty };
     private Label cpuHelp;
     private readonly int[,] dimensions = {{800,600},{1024,768},{1280,720},{1280,800},{1366,768},{1440,900},{1600,900},{1680,1050},{1920,1080},{1920,1200},{2560,1440}};
     private readonly Label diskCapacity = new Label { Text = "80 ГиБ", AutoSize = true, Anchor = AnchorStyles.Right, Margin = Padding.Empty };
@@ -62,9 +59,6 @@ internal sealed class SettingsEditor : UserControl
 
     internal SettingsEditor()
     {
-        // A changing AutoSize label relayouts the whole card during every slider step.
-        memoryGib.Size = TextRenderer.MeasureText("32,75 ГиБ", memoryGib.Font);
-        memoryGib.FontChanged += delegate { memoryGib.Size = TextRenderer.MeasureText("32,75 ГиБ", memoryGib.Font); };
         Section = -1;
         DoubleBuffered = true;
         Dock = DockStyle.Fill;
@@ -91,7 +85,7 @@ internal sealed class SettingsEditor : UserControl
         root.Controls.Add(tabs,0,1);
         Panel scroll = new BufferedPanel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty };
 
-        // Resources: memory slider, CPU stepper, read-only disk; the text fields stay the single source of the values.
+        // Resources: numeric GiB input, CPU stepper, read-only disk; stored memory stays in MiB.
         for(int index=0;index<keys.Length;index++)
         {
             TextBox input = new TextBox { Font = new Font("Segoe UI Semibold",10), BorderStyle = BorderStyle.None, TextAlign = HorizontalAlignment.Center, BackColor = Color.White, Width = 44, Anchor = AnchorStyles.None, Margin = Padding.Empty, AccessibleName = labels[index] };
@@ -101,19 +95,21 @@ internal sealed class SettingsEditor : UserControl
         TextBox memory=Fields["work_memory_mib"],cpu=Fields["vcpus"];
         memory.Visible=false;
         memory.TextChanged+=delegate{
-            int mib;bool valid=Int32.TryParse(memory.Text,NumberStyles.None,CultureInfo.InvariantCulture,out mib);
-            memoryGib.Text=valid?Gib(mib,"0.##")+" ГиБ":"—";
-            MemorySlider.AccessibleDescription="Выделено "+memoryGib.Text+". Одна позиция — 0,25 ГиБ; стрелки меняют значение на одну позицию.";
-            if(!valid||syncing)return;
+            if(syncing)return;
+            int mib;syncing=true;
+            MemoryInput.Text=Int32.TryParse(memory.Text,NumberStyles.None,CultureInfo.InvariantCulture,out mib)?Gib(mib,"0.##########"):"";
+            syncing=false;};
+        MemoryInput.TextChanged+=delegate{
+            if(syncing)return;
+            decimal gib;bool valid=Decimal.TryParse(MemoryInput.Text.Trim().Replace(',','.'),NumberStyles.AllowDecimalPoint,CultureInfo.InvariantCulture,out gib)&&gib>=1&&gib<=32;
             syncing=true;
-            if(mib>MemorySlider.Maximum*MemoryStepMiB)SetMemoryRange(Math.Min(maximum[0],mib));
-            SetMemorySliderValue(mib);syncing=false;};
-        MemorySlider.ValueChanged+=delegate{if(!syncing){syncing=true;memory.Text=(MemorySlider.Value*MemoryStepMiB).ToString(CultureInfo.InvariantCulture);syncing=false;}};
-        memory.EnabledChanged+=delegate{MemorySlider.Enabled=memory.Enabled;};
-        syncing=true;SetMemorySliderValue(minimum[0]);syncing=false;
-        Label memoryMin = new Label { Text = "1 ГиБ", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = Padding.Empty };
-        TableLayoutPanel memoryRow = Stack(Line(0,Title("Память Windows"),memoryGib),MemorySlider,Line(1,memoryMin,hostMemory,memoryMax),memory);
-        memoryRow.SizeChanged+=delegate{hostMemory.MaximumSize=new Size(Math.Max(100,memoryRow.ClientSize.Width-memoryMin.Width-memoryMax.Width-20),0);};
+            memory.Text=valid?Decimal.Round(gib*1024,0,MidpointRounding.AwayFromZero).ToString(CultureInfo.InvariantCulture):"";
+            syncing=false;};
+        memory.EnabledChanged+=delegate{MemoryInput.Enabled=memory.Enabled;};
+        Label unit = new Label { Text = "ГиБ", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(8,0,0,0) };
+        TableLayoutPanel memoryRow = Stack(Line(0,Title("Память Windows"),Line(-1,MemoryInput,unit)),hostMemory,memory);
+        hostMemory.Anchor=AnchorStyles.Left;hostMemory.TextAlign=ContentAlignment.MiddleLeft;hostMemory.Margin=new Padding(0,8,0,0);
+        memoryRow.SizeChanged+=delegate{hostMemory.MaximumSize=new Size(Math.Max(100,memoryRow.ClientSize.Width),0);};
         RoundedPanel stepper = new RoundedPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Right, Radius = 10, BackColor = Color.FromArgb(209,209,214), Padding = new Padding(1), Margin = Padding.Empty };
         RoundedButton fewer = StepButton("−","Меньше процессоров"), more = StepButton("+","Больше процессоров");
         TableLayoutPanel stepperRow = Line(-1,fewer,cpu,more);stepperRow.BackColor=Color.White;stepperRow.Dock=DockStyle.None;stepperRow.Location=new Point(1,1);stepper.Controls.Add(stepperRow);
@@ -284,13 +280,6 @@ internal sealed class SettingsEditor : UserControl
         return new RoundedButton { Text = text, CenterText = true, Size = new Size(40,36), Font = new Font("Segoe UI",12), Margin = Padding.Empty, AccessibleName = name };
     }
     private static string Gib(long mib,string format) { return ((decimal)mib/1024).ToString(format,CultureInfo.CurrentCulture); }
-    private void SetMemoryRange(int max)
-    {
-        int positions=Math.Max(MemorySlider.Minimum,max/MemoryStepMiB);
-        if (MemorySlider.Maximum == positions) return;
-        MemorySlider.Maximum=positions;memoryMax.Text=Gib(positions*MemoryStepMiB,"0.##")+" ГиБ";
-    }
-    private void SetMemorySliderValue(int mib) { MemorySlider.Value=Math.Max(MemorySlider.Minimum,Math.Min(MemorySlider.Maximum,mib/MemoryStepMiB)); }
     private int CpuLimit { get { return hostProcessors>0?Math.Min(maximum[1],hostProcessors):maximum[1]; } }
     private void StepCpu(int delta)
     {
@@ -423,10 +412,7 @@ internal sealed class SettingsEditor : UserControl
         string free=hostTotal>0&&hostAvailable>=0?"на ПК свободно "+Gib(hostAvailable,"0.#")+" из "+Gib(hostTotal,"0.#")+" ГиБ":null;
         hostMemory.Text=free==null?"Данные памяти ПК пока недоступны.":recommended>=1024?"Рекомендуется "+Gib(recommended,"0.##")+" ГиБ, "+free:"Н"+free.Substring(1);
         cpuHelp.Text=hostProcessors>0?"Ядра у Windows; у ПК "+hostProcessors+" логических":"Ядра у Windows.";
-        int current=ResourceValue(original,"work_memory_mib"),typed;
-        if(Int32.TryParse(Fields["work_memory_mib"].Text,NumberStyles.None,CultureInfo.InvariantCulture,out typed))current=Math.Max(current,typed);
-        int limit=hostTotal>0?(int)Math.Min(maximum[0],(long)hostTotal*3/4/1024*1024):16384;
-        syncing=true;SetMemoryRange(Math.Min(maximum[0],Math.Max(Math.Max(2048,limit),current)));if(typed>=minimum[0])SetMemorySliderValue(typed);syncing=false;
+
     }
     private void ApplyRecommendedValues()
     {
@@ -481,12 +467,13 @@ internal sealed class SettingsEditor : UserControl
             bool valid=Int32.TryParse(field.Text.Trim(),NumberStyles.None,CultureInfo.InvariantCulture,out number)&&number>=minimum[index]&&number<=maximum[index];
             field.ForeColor=valid?NativeStyle.Ink:Color.FromArgb(175,59,48);
             if(valid)value[keys[index]]=number;
-            else {errors++;if(first==null){first=field;message=labels[index]+": целое "+minimum[index]+"–"+maximum[index]+".";}}
+            else {errors++;if(first==null){first=field;message=index==0?"Память Windows: введи число от 1 до 32 ГиБ, например 4 или 3,5.":labels[index]+": целое "+minimum[index]+"–"+maximum[index]+".";}}
         }
         Error.Visible = errors > 0;
         Error.Text=message+(errors>1?" Проверь ещё полей: "+(errors-1)+".":"");
+        MemoryInput.ForeColor=Fields["work_memory_mib"].ForeColor;
         if(errors==0)return true;
         value=null;
-        Control target=first.Visible?(Control)first:MemorySlider;target.Focus();if(target==first)first.SelectAll();return false;
+        TextBox target=first.Visible?first:MemoryInput;target.Focus();target.SelectAll();return false;
     }
 }

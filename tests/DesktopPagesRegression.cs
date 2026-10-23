@@ -74,7 +74,7 @@ internal static class DesktopPagesRegression
             Context();Pump(form.NavigateAsync(AppPage.Settings));Layout(form);
             Inside(form.SettingsPage.SaveButton,form,"Settings save at font scale "+scale);
             if(scale==2f)Render(form,Path.Combine(logs,"ui-pages-settings-font200.png"));
-            Inside(form.SettingsPage.MemorySlider,form,"Memory slider scale "+scale);
+            Inside(form.SettingsPage.MemoryInput,form,"Memory input scale "+scale);
             foreach(TextBox field in form.SettingsPage.Fields.Values.Where(Shown))
             {
                 Inside(field,form,"Settings field "+field.AccessibleName+" scale "+scale);

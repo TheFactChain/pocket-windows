@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -41,7 +41,7 @@ internal static class SettingsLayoutRegression
             editor.LoadHostValues(new Dictionary<string,object>{{"ram_total_mib",16384},{"ram_available_mib",10000},{"logical_processors",12}});recommend.PerformClick();
             Dictionary<string,object> runtime;Assert(editor.TryGetValue(out runtime)&&(int)runtime["work_memory_mib"]==7424&&(int)runtime["vcpus"]==4,"Recommendation must reserve gateway plus 1 GiB and round RAM down to 256 MiB");
             Assert((int)runtime["gateway_memory_mib"]==1536&&(int)runtime["lan_port"]==42345,"Recommendations must preserve hidden runtime values");
-            Assert(Tree(editor).OfType<Label>().Any(label=>label.Text.Contains("7,25")||label.Text.Contains("7.25")),"Windows memory needs a compact GiB value");
+            Assert(editor.MemoryInput.Text=="7,25"||editor.MemoryInput.Text=="7.25","Windows memory needs an editable GiB value");
             editor.LoadHostValues(new Dictionary<string,object>{{"ram_total_mib",8192},{"ram_available_mib",2048},{"logical_processors",1}});recommend.PerformClick();
             Assert(editor.Fields["work_memory_mib"].Text=="7424"&&editor.Fields["vcpus"].Text=="4"&&!String.IsNullOrEmpty(editor.Error.Text),"Insufficient RAM must explain the problem and preserve both fields");
             editor.LoadHostValues(new Dictionary<string,object>{{"ram_total_mib",8192},{"ram_available_mib",8192},{"logical_processors",1}});recommend.PerformClick();Assert(editor.TryGetValue(out runtime)&&(int)runtime["work_memory_mib"]==4096&&(int)runtime["vcpus"]==1,"Recommendation must cap at half host RAM and retain at least one CPU");
@@ -49,9 +49,9 @@ internal static class SettingsLayoutRegression
             editor.CancelButton.PerformClick();Assert(editor.TryGetValue(out runtime)&&(int)runtime["work_memory_mib"]==3072&&(int)runtime["vcpus"]==2,"Cancel must restore loaded resource values after recommendations");
             editor.LoadHostValues(null);Assert(!recommend.Enabled,"Missing host evidence must disable recommendations");
             Assert(!editor.Dirty,"Loaded settings must not report unsaved changes");
-            editor.MemorySlider.Value=4096/SettingsEditor.MemoryStepMiB;Assert(editor.Fields["work_memory_mib"].Text=="4096"&&editor.Dirty,"The memory slider must edit the memory value and mark the draft unsaved");
-            editor.Fields["work_memory_mib"].Text="5120";Assert(editor.MemorySlider.Value*SettingsEditor.MemoryStepMiB==5120,"A typed memory value must move the slider");
-            editor.CancelButton.PerformClick();Assert(!editor.Dirty&&editor.MemorySlider.Value*SettingsEditor.MemoryStepMiB==3072,"Cancel must clear the unsaved-changes note and restore the slider");
+            editor.MemoryInput.Text="4";Assert(editor.Fields["work_memory_mib"].Text=="4096"&&editor.Dirty,"The numeric input must edit the memory value and mark the draft unsaved");
+            editor.Fields["work_memory_mib"].Text="5120";Assert(editor.MemoryInput.Text=="5","A loaded MiB value must update the GiB input");
+            editor.CancelButton.PerformClick();Assert(!editor.Dirty&&editor.MemoryInput.Text=="3","Cancel must clear the unsaved-changes note and restore the input");
         }
     }
     [STAThread]
@@ -107,7 +107,7 @@ internal static class SettingsLayoutRegression
                     Assert(box.Height<=field.PreferredHeight+32,"Settings input background stretched: "+box.Height+" vs text "+field.PreferredHeight);
                     Assert(field.Height>=field.PreferredHeight,"Settings text clipped");Inside(field,host,"Settings input");
                 }
-                Inside(editor.MemorySlider,host,"Memory slider");Inside(editor.SaveButton,host,"Save");Inside(editor.CancelButton,host,"Cancel");
+                Inside(editor.MemoryInput,host,"Memory input");Inside(editor.SaveButton,host,"Save");Inside(editor.CancelButton,host,"Cancel");
                 Assert(editor.RecommendedButton.Width>=editor.RecommendedButton.GetPreferredSize(Size.Empty).Width,"Recommendations button text clipped at scale "+scale);
                 Panel pages=Tree(editor).OfType<Panel>().Single(panel=>panel.AutoScroll);
                 for(int section=0;section<3;section++)

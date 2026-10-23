@@ -43,7 +43,7 @@ class DesktopLauncherTests(unittest.TestCase):
 
     def test_reported_visual_regressions(self):
         compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-        for name in ('DesktopShellRegression', 'SettingsLayoutRegression', 'SliderInteractionRegression', 'ConnectionLayoutRegression',
+        for name in ('DesktopShellRegression', 'SettingsLayoutRegression', 'MemoryInputRegression', 'ConnectionLayoutRegression',
                      'DesktopPanelLifecycleRegression', 'ProfileDialogsRegression', 'WindowPreferencesRegression', 'FileSharingSettingsRegression', 'DesktopNavigationRegression', 'ReleaseInfoRegression', 'PortableEntryRegression'):
             with self.subTest(harness=name), tempfile.TemporaryDirectory(prefix='desktop-reported-') as temporary:
                 executable = Path(temporary) / (name + '.exe')
