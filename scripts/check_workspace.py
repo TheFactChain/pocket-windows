@@ -49,9 +49,13 @@ def workspace_problems(project):
             problems.append('Keep at most two folders of ' + kind + ', found ' + str(len(versions)) + ': ' + ', '.join(versions))
     for item in sorted(service.glob('release-*/public')) + sorted(service.glob('release-*/app')) if service.is_dir() else []:
         problems.append('Build leftover to delete after the ZIP is verified: ' + str(item.relative_to(project)))
+    sources = project / 'Разработка/Исходники'
     for name in ('bin', 'obj'):
-        if (project / 'Разработка/Исходники/launcher-wpf' / name).exists():
+        if (sources / 'launcher-wpf' / name).exists():
             problems.append('Build output left in sources: launcher-wpf/' + name)
+    # The release inventory compares runtime/ with its manifest, so a bytecode cache makes `prepare` fail.
+    for item in sorted((sources / 'runtime').rglob('__pycache__')) if (sources / 'runtime').is_dir() else []:
+        problems.append('Bytecode cache inside runtime (run bundled Python with -B): ' + str(item.relative_to(project)))
     return problems
 
 

@@ -18,7 +18,9 @@ class RepositoryHygieneTests(unittest.TestCase):
             for name in ('release-2026.10.23.7/public', 'release-2026.10.23.6', 'release-2026.10.24.1',
                          'compact-master-2026.10.23.7', 'slider-fix-20261023', 'Разработка-и-история'):
                 (service / name).mkdir(parents=True)
+            (Path(folder) / 'Разработка/Исходники/runtime/python-3.12.14/Lib/__pycache__').mkdir(parents=True)
             text = '\n'.join(check_workspace.workspace_problems(Path(folder)))
+            self.assertIn('Bytecode cache inside runtime', text)
             self.assertIn('slider-fix-20261023', text)
             self.assertIn('Keep at most two folders of release', text)
             self.assertIn('release-2026.10.23.7', text.split('Build leftover')[1])
