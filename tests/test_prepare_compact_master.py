@@ -28,15 +28,7 @@ foreach($fn in $ast.FindAll({param($n)$n -is [Management.Automation.Language.Fun
 $root=ROOT
 $blocked=Join-Path $root 'protected-cache';$normal=Join-Path $root 'normal-cache'
 [IO.File]::WriteAllText($blocked,'protected');[IO.File]::WriteAllText($normal,'old cache')
-$global:unexpected=$false
-function Remove-Item {
-    [CmdletBinding()]param([string]$LiteralPath,[switch]$Force)
-    if($LiteralPath -eq $blocked) {
-        if($global:unexpected){throw [IO.IOException]::new('fixture unexpected disk failure')}
-        throw [UnauthorizedAccessException]::new('fixture protected cache')
-    }
-    Microsoft.PowerShell.Management\Remove-Item -LiteralPath $LiteralPath -Force:$Force
-}
+[IO.File]::SetAttributes($blocked,[IO.FileAttributes]::ReadOnly)
 $skipped=Clear-Cache $root ([datetime]::MaxValue)
 if($skipped -ne 1 -or -not [IO.File]::Exists($blocked) -or [IO.File]::Exists($normal)){throw 'Cache handling lost a protected file or did not clean an accessible file'}
 $fresh=Join-Path $root 'fresh-with-old-file-date'
@@ -44,9 +36,9 @@ $fresh=Join-Path $root 'fresh-with-old-file-date'
 [IO.File]::SetLastWriteTime($fresh,(Get-Date).AddDays(-30))
 $null=Clear-Cache $root (Get-Date).AddDays(-7)
 if(-not [IO.File]::Exists($fresh)){throw 'A recently created cache file was deleted because of its old embedded date'}
-$global:unexpected=$true;$refused=$false
-try{Clear-Cache $root ([datetime]::MaxValue)}catch{if($_.Exception.Message -notlike '*unexpected disk failure*'){throw};$refused=$true}
-if(-not $refused){throw 'Unexpected IO failure was hidden'}
+$record=[Management.Automation.ErrorRecord]::new([IO.IOException]::new('fixture unexpected disk failure'),'fixture',[Management.Automation.ErrorCategory]::WriteError,$blocked)
+if(Test-CacheBusy $record){throw 'Unexpected IO failure was hidden'}
+[IO.File]::SetAttributes($blocked,[IO.FileAttributes]::Normal)
 Write-Output 'cache handling PASS; protected files retained'
 '''.replace('SCRIPT', "'" + str(ROOT / 'guest/maintenance/Compact-Windows.ps1').replace("'", "''") + "'").replace(
                 'ROOT', "'" + temporary.replace("'", "''") + "'")

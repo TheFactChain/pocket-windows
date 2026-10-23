@@ -49,7 +49,8 @@ function Clear-Cache([string]$Directory, [datetime]$Before) {
             if ($child.PSIsContainer) {
                 $skipped += (Clear-Cache $child.FullName $Before)
             } elseif ($child.LastWriteTime -lt $Before -and $child.CreationTime -lt $Before) {
-                Remove-Item -LiteralPath $child.FullName -Force
+                # File.Delete preserves native access/sharing errors; Remove-Item can wrap them as ArgumentException.
+                [IO.File]::Delete($child.FullName)
             }
         } catch {
             if (Test-CacheBusy $_) { $skipped++; continue }
@@ -121,7 +122,7 @@ try {
     $exitCode = 0
 } catch {
     $report.error = $_.Exception.Message
-    $report.errorCommand = [string]$_.InvocationInfo.MyCommand.Name
+    $report.errorCommand = [string]$_.InvocationInfo.MyCommand
     $report.errorLine = $_.InvocationInfo.ScriptLineNumber
     $report.errorCategory = [string]$_.CategoryInfo.Category
     Write-Warning $report.error
