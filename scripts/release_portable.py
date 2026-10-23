@@ -385,6 +385,8 @@ def source_commit(source):
 
 def validate_build_inputs(source, commit):
     paths = sorted((source / 'ui').glob('*.cs'))
+    paths += sorted(path for pattern in ('*.cs', '*.xaml', '*.csproj', 'app.manifest')
+                    for path in (source / 'launcher-wpf').glob(pattern))
     paths += [source / name for name in ('ui/app.manifest', 'ui/AppIcon.ico',
               'scripts/Build-Launcher.ps1', 'docs/third-party.md', *pack.APP_FILES)]
     for path in paths:

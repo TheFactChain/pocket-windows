@@ -14,6 +14,9 @@ the approved executable and updates component recovery without binary patching.
 QEMU retains its GPLv2 license. The existing DLLs and firmware are preserved. Debian and sing-box
 remain installed in the existing gateway disk. Windows remains in its existing disk.
 
+`Launcher.exe` is built from `launcher-wpf` (WPF, .NET Framework 4.8) and embeds
+WPF-UI 3.0.5 (lepoco/wpfui, MIT license) restored from NuGet at build time.
+
 This local copy is not a public software release or a grant of redistribution rights.
 No new EULA is accepted by the packaging script. Confirm Windows licensing and any
 third-party license/source obligations before a separate redistribution decision.

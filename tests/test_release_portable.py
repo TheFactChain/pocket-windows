@@ -306,6 +306,19 @@ class ReleaseTests(unittest.TestCase):
         with mock.patch.object(release, '_git', side_effect=git), self.assertRaises(RuntimeError):
             release.validate_build_inputs(self.app, self.info['source_commit'])
 
+    def test_uncommitted_wpf_launcher_input_cannot_enter_a_release(self):
+        self.write(self.app, 'launcher-wpf/Extra.xaml', b'<Grid />')
+        checked = []
+        def git(source, *args):
+            if args[0] == 'rev-parse':
+                checked.append(args[1])
+                if args[1].endswith(':launcher-wpf/Extra.xaml'):
+                    raise release.subprocess.CalledProcessError(128, args)
+            return 'b' * 40
+        with mock.patch.object(release, '_git', side_effect=git), self.assertRaises(RuntimeError):
+            release.validate_build_inputs(self.app, self.info['source_commit'])
+        self.assertTrue(any(name.endswith(':launcher-wpf/Extra.xaml') for name in checked))
+
     def test_oversized_journal_refuses_update_before_file_replacement(self):
         with mock.patch.object(release, 'JSON_LIMIT', 1024, create=True), self.assertRaises(ValueError):
             release.apply_update(self.bundle, self.target)
