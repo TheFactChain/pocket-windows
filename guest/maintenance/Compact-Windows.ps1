@@ -1,5 +1,5 @@
 # Run as administrator ONLY inside the disposable maintenance copy.
-# DISM /ResetBase prevents uninstalling already installed Windows updates.
+# Preserve this master's component store: ResetBase regressed its next cold boot (0x5A).
 [CmdletBinding()]
 param([switch]$ConfirmMaintenanceCopy, [switch]$ShutdownOnSuccess)
 
@@ -21,7 +21,7 @@ function Assert-WindowsLocation([string]$Directory,[string]$Drive) {
 function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
     & $Executable @Arguments | Out-Host
     if ($LASTEXITCODE -ne 0) {
-        throw "$Executable failed with exit code $LASTEXITCODE (3010 requires a manual restart, then rerun)."
+        throw "$Executable failed with exit code $LASTEXITCODE."
     }
 }
 
@@ -76,8 +76,7 @@ $exitCode = 1
 try {
     Invoke-Checked "$windows\System32\powercfg.exe" @('/hibernate', 'off')
     $report.steps += 'hibernate-disabled'
-    Invoke-Checked "$windows\System32\dism.exe" @('/Online', '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase', '/NoRestart')
-    $report.steps += 'component-cleanup'
+    $report.steps += 'component-store-preserved'
     $report.cacheSkippedEntries += (Clear-Cache "$windows\Temp" (Get-Date).AddDays(-7))
     $report.steps += 'windows-temp-older-than-7-days'
     $services = @(Get-Service -Name wuauserv, BITS)

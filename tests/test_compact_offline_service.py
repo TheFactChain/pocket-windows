@@ -68,7 +68,7 @@ $result.success=$true;$result.exit_code=0
 $result.report_file='C:\ProgramData\WindowsClaude-compact-20261023-000001.json'
 $rejected=$false;try{Assert-MaintenanceResult $result $installed $nonce $root}catch{$rejected=$true}
 if(-not $rejected){throw 'Missing cleanup report was accepted'}
-$report=@{schema=1;success=$true;steps=@('hibernate-disabled','component-cleanup','windows-temp-older-than-7-days','update-download-cache','trim-enabled-and-retrim-complete')}
+$report=@{schema=1;success=$true;steps=@('hibernate-disabled','component-store-preserved','windows-temp-older-than-7-days','update-download-cache','trim-enabled-and-retrim-complete')}
 $report | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'WindowsClaude-compact-20261023-000001.json')
 if(-not (Assert-MaintenanceResult $result $installed $nonce $root)){throw 'Matching success refused'}
 $result.script_sha256='c'*64

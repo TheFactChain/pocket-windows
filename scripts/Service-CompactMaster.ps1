@@ -65,7 +65,7 @@ function Assert-MaintenanceResult($Result,$Installed,[string]$Id,[string]$Report
     if((Get-Item -LiteralPath $reportPath).Length -gt 65536){throw 'Cleanup report is oversized.'}
     $report=Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
     if($report.schema -ne 1 -or $report.success -isnot [bool] -or -not $report.success){throw 'Cleanup report is not successful.'}
-    foreach($step in @('hibernate-disabled','component-cleanup','windows-temp-older-than-7-days','update-download-cache','trim-enabled-and-retrim-complete')) {
+    foreach($step in @('hibernate-disabled','component-store-preserved','windows-temp-older-than-7-days','update-download-cache','trim-enabled-and-retrim-complete')) {
         if($report.steps -cnotcontains $step){throw ('Cleanup report lacks step: '+$step)}
     }
     return $true
