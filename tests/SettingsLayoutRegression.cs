@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -49,9 +49,9 @@ internal static class SettingsLayoutRegression
             editor.CancelButton.PerformClick();Assert(editor.TryGetValue(out runtime)&&(int)runtime["work_memory_mib"]==3072&&(int)runtime["vcpus"]==2,"Cancel must restore loaded resource values after recommendations");
             editor.LoadHostValues(null);Assert(!recommend.Enabled,"Missing host evidence must disable recommendations");
             Assert(!editor.Dirty,"Loaded settings must not report unsaved changes");
-            editor.MemorySlider.Value=4096;Assert(editor.Fields["work_memory_mib"].Text=="4096"&&editor.Dirty,"The memory slider must edit the memory value and mark the draft unsaved");
-            editor.Fields["work_memory_mib"].Text="5120";Assert(editor.MemorySlider.Value==5120,"A typed memory value must move the slider");
-            editor.CancelButton.PerformClick();Assert(!editor.Dirty&&editor.MemorySlider.Value==3072,"Cancel must clear the unsaved-changes note and restore the slider");
+            editor.MemorySlider.Value=4096/SettingsEditor.MemoryStepMiB;Assert(editor.Fields["work_memory_mib"].Text=="4096"&&editor.Dirty,"The memory slider must edit the memory value and mark the draft unsaved");
+            editor.Fields["work_memory_mib"].Text="5120";Assert(editor.MemorySlider.Value*SettingsEditor.MemoryStepMiB==5120,"A typed memory value must move the slider");
+            editor.CancelButton.PerformClick();Assert(!editor.Dirty&&editor.MemorySlider.Value*SettingsEditor.MemoryStepMiB==3072,"Cancel must clear the unsaved-changes note and restore the slider");
         }
     }
     [STAThread]

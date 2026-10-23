@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -255,76 +255,6 @@ internal sealed class RoundedPanel : Panel
         if (previous != null) previous.Dispose();
     }
     protected override void OnPaintBackground(PaintEventArgs e) { NativeStyle.Surface(this, e.Graphics, Radius); }
-}
-
-// A horizontal slider in the panel style: thin track, accent fill, round thumb; arrows move by Step.
-internal sealed class Slider : Control
-{
-    internal int Minimum, Maximum = 100, Step = 1;
-    private int value;
-    internal event EventHandler ValueChanged;
-    internal Slider()
-    {
-        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
-        TabStop = true; Cursor = Cursors.Hand; AccessibleRole = AccessibleRole.Slider;
-    }
-    internal int Value
-    {
-        get { return value; }
-        set
-        {
-            int next = Math.Max(Minimum, Math.Min(Maximum, value));
-            if (next == this.value) return;
-            this.value = next; Invalidate(); AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
-            if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
-        }
-    }
-    private int Snap(long raw) { return Minimum + (int)Math.Round((raw - Minimum) / (double)Step) * Step; }
-    private void SetFromX(int x) { double ratio = Math.Max(0, Math.Min(1, (x - 10) / (double)Math.Max(1, Width - 20))); Value = Snap(Minimum + (long)Math.Round(ratio * (Maximum - Minimum))); }
-    protected override void OnMouseDown(MouseEventArgs e) { Focus(); if (e.Button == MouseButtons.Left) SetFromX(e.X); base.OnMouseDown(e); }
-    protected override void OnMouseMove(MouseEventArgs e) { if (e.Button == MouseButtons.Left) SetFromX(e.X); base.OnMouseMove(e); }
-    protected override bool IsInputKey(Keys keyData)
-    {
-        switch (keyData) { case Keys.Left: case Keys.Right: case Keys.Up: case Keys.Down: case Keys.Home: case Keys.End: case Keys.PageUp: case Keys.PageDown: return true; }
-        return base.IsInputKey(keyData);
-    }
-    protected override void OnKeyDown(KeyEventArgs e)
-    {
-        int page = Step * 4;
-        switch (e.KeyCode)
-        {
-            case Keys.Left: case Keys.Down: Value = Snap(Value - Step); break;
-            case Keys.Right: case Keys.Up: Value = Snap(Value + Step); break;
-            case Keys.PageDown: Value = Snap(Value - page); break;
-            case Keys.PageUp: Value = Snap(Value + page); break;
-            case Keys.Home: Value = Minimum; break;
-            case Keys.End: Value = Maximum; break;
-            default: base.OnKeyDown(e); return;
-        }
-        e.Handled = true;
-    }
-    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
-    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
-    protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        e.Graphics.Clear(Parent == null ? NativeStyle.Background : Parent.BackColor);
-        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        int middle = Height / 2, width = Math.Max(1, Width - 20);
-        int thumb = 10 + (int)Math.Round(width * (Maximum > Minimum ? (value - Minimum) / (double)(Maximum - Minimum) : 0));
-        Color fill = Enabled ? NativeStyle.Accent : Color.FromArgb(174, 174, 178);
-        using (GraphicsPath track = NativeStyle.Rounded(new Rectangle(10, middle - 2, width, 4), 2)) using (Brush brush = new SolidBrush(Color.FromArgb(209, 209, 214))) e.Graphics.FillPath(brush, track);
-        using (GraphicsPath done = NativeStyle.Rounded(new Rectangle(10, middle - 2, Math.Max(1, thumb - 10), 4), 2)) using (Brush brush = new SolidBrush(fill)) e.Graphics.FillPath(brush, done);
-        Rectangle knob = new Rectangle(thumb - 9, middle - 9, 18, 18);
-        using (Brush brush = new SolidBrush(Color.White)) e.Graphics.FillEllipse(brush, knob);
-        using (Pen pen = new Pen(Focused && ShowFocusCues ? NativeStyle.Accent : Color.FromArgb(199, 199, 204), Focused && ShowFocusCues ? 2f : 1f)) e.Graphics.DrawEllipse(pen, knob);
-    }
-    protected override AccessibleObject CreateAccessibilityInstance() { return new SliderAccessibleObject(this); }
-    private sealed class SliderAccessibleObject : Control.ControlAccessibleObject
-    {
-        internal SliderAccessibleObject(Slider owner) : base(owner) { }
-        public override string Value { get { return Owner.Text; } }
-    }
 }
 
 internal sealed class RoundedFlowPanel : FlowLayoutPanel

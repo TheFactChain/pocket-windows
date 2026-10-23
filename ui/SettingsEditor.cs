@@ -17,7 +17,8 @@ internal sealed class SettingsEditor : UserControl
     internal readonly CheckBox StartFullscreen = new CheckBox { Text = "Открывать Windows на весь экран", Dock = DockStyle.Top, Font = new Font("Segoe UI Semibold",10), Margin = Padding.Empty };
     internal readonly CheckBox RememberWindow = new CheckBox { Text = "Запоминать размер и положение панели", Dock = DockStyle.Top, Font = new Font("Segoe UI Semibold",10), Margin = Padding.Empty };
     internal readonly Button RecommendedButton = new RoundedButton { Text = "Поставить рекомендуемые значения", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(16,8,16,8), Margin = new Padding(0,14,0,0), Enabled = false };
-    internal readonly Slider MemorySlider = new Slider { Minimum = 1024, Maximum = 16384, Step = 256, Dock = DockStyle.Top, Height = 28, Margin = new Padding(0,8,0,2), AccessibleName = "Память Windows", AccessibleDescription = "Стрелки меняют память на 0,25 ГиБ." };
+    internal const int MemoryStepMiB = 256;
+    internal readonly TrackBar MemorySlider = new TrackBar { Minimum = 4, Maximum = 64, SmallChange = 1, LargeChange = 4, AutoSize = false, TickStyle = TickStyle.None, BackColor = Color.White, Dock = DockStyle.Top, Height = 28, Margin = new Padding(0,8,0,2), AccessibleName = "Память Windows", AccessibleDescription = "Одна позиция — 0,25 ГиБ. Стрелки меняют память на 0,25 ГиБ." };
     private readonly string[] keys = { "work_memory_mib", "vcpus" };
     private readonly string[] labels = { "Память Windows", "Процессоры каждой VM" };
     private readonly int[] minimum = {1024,1};
@@ -101,14 +102,15 @@ internal sealed class SettingsEditor : UserControl
         memory.Visible=false;
         memory.TextChanged+=delegate{
             int mib;bool valid=Int32.TryParse(memory.Text,NumberStyles.None,CultureInfo.InvariantCulture,out mib);
-            memoryGib.Text=valid?Gib(mib,"0.##")+" ГиБ":"—";MemorySlider.Text=memoryGib.Text;
+            memoryGib.Text=valid?Gib(mib,"0.##")+" ГиБ":"—";
+            MemorySlider.AccessibleDescription="Выделено "+memoryGib.Text+". Одна позиция — 0,25 ГиБ; стрелки меняют значение на одну позицию.";
             if(!valid||syncing)return;
             syncing=true;
-            if(mib>MemorySlider.Maximum)SetMemoryRange(Math.Min(maximum[0],mib));
-            MemorySlider.Value=mib;syncing=false;};
-        MemorySlider.ValueChanged+=delegate{if(!syncing){syncing=true;memory.Text=MemorySlider.Value.ToString(CultureInfo.InvariantCulture);syncing=false;}};
+            if(mib>MemorySlider.Maximum*MemoryStepMiB)SetMemoryRange(Math.Min(maximum[0],mib));
+            SetMemorySliderValue(mib);syncing=false;};
+        MemorySlider.ValueChanged+=delegate{if(!syncing){syncing=true;memory.Text=(MemorySlider.Value*MemoryStepMiB).ToString(CultureInfo.InvariantCulture);syncing=false;}};
         memory.EnabledChanged+=delegate{MemorySlider.Enabled=memory.Enabled;};
-        syncing=true;MemorySlider.Value=minimum[0];syncing=false;
+        syncing=true;SetMemorySliderValue(minimum[0]);syncing=false;
         Label memoryMin = new Label { Text = "1 ГиБ", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = Padding.Empty };
         TableLayoutPanel memoryRow = Stack(Line(0,Title("Память Windows"),memoryGib),MemorySlider,Line(1,memoryMin,hostMemory,memoryMax),memory);
         memoryRow.SizeChanged+=delegate{hostMemory.MaximumSize=new Size(Math.Max(100,memoryRow.ClientSize.Width-memoryMin.Width-memoryMax.Width-20),0);};
@@ -284,9 +286,11 @@ internal sealed class SettingsEditor : UserControl
     private static string Gib(long mib,string format) { return ((decimal)mib/1024).ToString(format,CultureInfo.CurrentCulture); }
     private void SetMemoryRange(int max)
     {
-        if (MemorySlider.Maximum == max) return;
-        MemorySlider.Maximum=max;MemorySlider.Invalidate();memoryMax.Text=Gib(max,"0.##")+" ГиБ";
+        int positions=Math.Max(MemorySlider.Minimum,max/MemoryStepMiB);
+        if (MemorySlider.Maximum == positions) return;
+        MemorySlider.Maximum=positions;memoryMax.Text=Gib(positions*MemoryStepMiB,"0.##")+" ГиБ";
     }
+    private void SetMemorySliderValue(int mib) { MemorySlider.Value=Math.Max(MemorySlider.Minimum,Math.Min(MemorySlider.Maximum,mib/MemoryStepMiB)); }
     private int CpuLimit { get { return hostProcessors>0?Math.Min(maximum[1],hostProcessors):maximum[1]; } }
     private void StepCpu(int delta)
     {
@@ -422,7 +426,7 @@ internal sealed class SettingsEditor : UserControl
         int current=ResourceValue(original,"work_memory_mib"),typed;
         if(Int32.TryParse(Fields["work_memory_mib"].Text,NumberStyles.None,CultureInfo.InvariantCulture,out typed))current=Math.Max(current,typed);
         int limit=hostTotal>0?(int)Math.Min(maximum[0],(long)hostTotal*3/4/1024*1024):16384;
-        syncing=true;SetMemoryRange(Math.Min(maximum[0],Math.Max(Math.Max(2048,limit),current)));if(typed>=minimum[0])MemorySlider.Value=typed;syncing=false;
+        syncing=true;SetMemoryRange(Math.Min(maximum[0],Math.Max(Math.Max(2048,limit),current)));if(typed>=minimum[0])SetMemorySliderValue(typed);syncing=false;
     }
     private void ApplyRecommendedValues()
     {
