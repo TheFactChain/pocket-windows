@@ -50,7 +50,7 @@ internal sealed class SettingsEditor : UserControl
     private readonly ListBox sharedFolders = new ListBox { Dock = DockStyle.Top, IntegralHeight = false, Height = 100, DrawMode = DrawMode.OwnerDrawFixed, BorderStyle = BorderStyle.None, BackColor = Color.White, AccessibleName = "Выбранные папки ПК", Margin = Padding.Empty, AllowDrop = true };
     private readonly List<RoundedButton> modeButtons = new List<RoundedButton>();
     private int hostTotal = -1, hostAvailable = -1, hostProcessors = -1;
-    private readonly Label memoryGib = new Label { Text = "—", AutoSize = true, Anchor = AnchorStyles.Right, Font = new Font("Segoe UI Semibold",13), Margin = Padding.Empty };
+    private readonly Label memoryGib = new Label { Text = "—", AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Anchor = AnchorStyles.Right, Font = new Font("Segoe UI Semibold",13), Margin = Padding.Empty };
     private readonly Label hostMemory = new Label { Text = "Данные памяти ПК пока недоступны.", AutoSize = true, Anchor = AnchorStyles.None, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = new Padding(8,0,8,0) };
     private readonly Label memoryMax = new Label { Text = "16 ГиБ", AutoSize = true, Anchor = AnchorStyles.Right, Font = new Font("Segoe UI",9), ForeColor = NativeStyle.Muted, Margin = Padding.Empty };
     private Label cpuHelp;
@@ -61,6 +61,9 @@ internal sealed class SettingsEditor : UserControl
 
     internal SettingsEditor()
     {
+        // A changing AutoSize label relayouts the whole card during every slider step.
+        memoryGib.Size = TextRenderer.MeasureText("32,75 ГиБ", memoryGib.Font);
+        memoryGib.FontChanged += delegate { memoryGib.Size = TextRenderer.MeasureText("32,75 ГиБ", memoryGib.Font); };
         Section = -1;
         DoubleBuffered = true;
         Dock = DockStyle.Fill;
