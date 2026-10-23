@@ -34,3 +34,6 @@ __pycache__/
 *.pcap
 *.pcapng
 *.log
+*.png
+*.jpg
+*.ppm
