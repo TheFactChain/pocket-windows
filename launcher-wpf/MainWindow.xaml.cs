@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -47,7 +48,7 @@ namespace WindowsClaude.Launcher
         string pendingStartReceipt, activeOperationAction, workState = "unknown", gatewayState = "unknown", suggestedAction = "retry", reportText = "", displayedChecks;
         bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing, reallyClose,
             panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, checksOpen, pulsing;
-        int operationRevision;
+        int operationRevision; string shownStatus;
         readonly List<string> folders = new List<string>();
 
         // Connection editor state
@@ -62,15 +63,28 @@ namespace WindowsClaude.Launcher
         static void Show(UIElement element, bool visible) { element.Visibility = visible ? Visibility.Visible : Visibility.Collapsed; }
         static readonly IEasingFunction EaseOut = new CubicEase { EasingMode = EasingMode.EaseOut };
 
+        // Fade in while sliding up a little; used for the window parts, list rows and status changes.
+        // Never replaces another transform: buttons keep the ScaleTransform their press animation targets.
+        static void Rise(UIElement element, double delayMs)
+        {
+            var begin = TimeSpan.FromMilliseconds(delayMs);
+            element.Opacity = 0;
+            element.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320)) { BeginTime = begin, EasingFunction = EaseOut });
+            var shift = element.RenderTransform as TranslateTransform;
+            if (shift == null && element.RenderTransform != null && element.RenderTransform != Transform.Identity) return;
+            if (shift == null || shift.IsFrozen) { shift = new TranslateTransform(); element.RenderTransform = shift; }
+            shift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(12, 0, TimeSpan.FromMilliseconds(380)) { BeginTime = begin, EasingFunction = EaseOut });
+        }
+
         public MainWindow()
         {
             InitializeComponent();
             string[] steps = { "Шлюз", "VPN", "Windows", "Файлы" };
             for (int index = 0; index < 4; index++)
             {
-                stepDots[index] = new Ellipse { Width = 8, Height = 8, Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
-                stepTexts[index] = new TextBlock { Text = steps[index], FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center };
-                stepCards[index] = new Border { CornerRadius = new CornerRadius(12), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(3, 0, 3, 0),
+                stepDots[index] = new Ellipse { Width = 7, Height = 7, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center };
+                stepTexts[index] = new TextBlock { Text = steps[index], FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+                stepCards[index] = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(4, 5, 4, 5), Margin = new Thickness(2),
                     Child = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Children = { stepDots[index], stepTexts[index] } } };
                 Steps.Children.Add(stepCards[index]);
             }
@@ -78,9 +92,9 @@ namespace WindowsClaude.Launcher
             for (int index = 0; index < Modes.GetLength(0); index++) ResolutionBox.Items.Add(Modes[index, 0] + " × " + Modes[index, 1]);
             VersionText.Text = ReleaseInfo.Read(Bridge.Root).DisplayText;
 
-            InputBindings.Add(new KeyBinding(new Command(() => OpenSheet(AppPage.Connection)), Key.D2, ModifierKeys.Control));
-            InputBindings.Add(new KeyBinding(new Command(() => OpenSheet(AppPage.Help)), Key.F1, ModifierKeys.None));
-            InputBindings.Add(new KeyBinding(new Command(CloseSheet), Key.Escape, ModifierKeys.None));
+            InputBindings.Add(new KeyBinding(new Command(() => Navigate(AppPage.Connection)), Key.D2, ModifierKeys.Control));
+            InputBindings.Add(new KeyBinding(new Command(() => Navigate(AppPage.Help)), Key.F1, ModifierKeys.None));
+            InputBindings.Add(new KeyBinding(new Command(OnEscape), Key.Escape, ModifierKeys.None));
             InputBindings.Add(new KeyBinding(new Command(() => { var task = RunAction("diagnose", true); }), Key.F5, ModifierKeys.None));
             InputBindings.Add(new KeyBinding(new Command(() => {
                 if (OpenDesktopButton.IsVisible && OpenDesktopButton.IsEnabled) OnOpenDesktop(null, null);
@@ -91,7 +105,14 @@ namespace WindowsClaude.Launcher
             toastTimer.Tick += delegate { toastTimer.Stop(); if (!busy) HideToast(); };
             ProtocolBox.SelectedIndex = 0; NewProfile(); Show(FoldersRow, false);
             Busy(false);
-            Loaded += async delegate { StartLifecycle(); await RunAction("diagnose", false); };
+            // Fixed window: WPF-UI's chrome still reports resize edges, so turn them into plain client area.
+            Loaded += async delegate
+            {
+                var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
+                if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
+                Rise(LaunchCard, 0); Rise(HomePage, 90);
+                StartLifecycle(); await RunAction("diagnose", false);
+            };
             Closing += OnClosing;
         }
 
@@ -116,69 +137,97 @@ namespace WindowsClaude.Launcher
             for (int index = 0; index < keys.Length; index++)
             {
                 if (index > 0) HelpRows.Children.Add(new Border { Style = (Style)FindResource("Separator"), Margin = new Thickness(16, 0, 0, 0) });
-                var row = new DockPanel { Margin = new Thickness(16, 13, 16, 13) };
+                var row = new DockPanel { Margin = new Thickness(16, 9, 16, 9) };
                 var cap = KeyCap(keys[index][0]); DockPanel.SetDock(cap, Dock.Right); row.Children.Add(cap);
                 row.Children.Add(new TextBlock { Text = keys[index][1], Style = (Style)FindResource("RowText") });
                 HelpRows.Children.Add(row);
             }
         }
 
-        // ---------- Sheets and navigation ----------
+        // ---------- Home list, pages over it, and the modal card ----------
+        AppPage currentPage = AppPage.Home;
+
         void Navigate(AppPage page)
         {
-            if (page == AppPage.Connection || page == AppPage.Help) { OpenSheet(page); return; }
+            if (page == AppPage.Help) { OpenSheet("Клавиши", HelpSheet); return; }
             CloseSheet();
-            if (page == AppPage.Settings) SettingsGroup.BringIntoView();
-            if (page == AppPage.Diagnostics) { SetChecksOpen(true); Dispatcher.BeginInvoke(new Action(() => ChecksPanel.BringIntoView()), DispatcherPriority.Loaded); }
-            if (page == AppPage.Home) MainScroll.ScrollToTop();
+            ShowPage(page);
         }
 
-        void OpenSheet(AppPage page)
+        // Pages slide over the home list like iOS; "Назад" returns.
+        void ShowPage(AppPage page)
         {
-            Show(ConnectionSheet, page == AppPage.Connection); Show(EditorSheet, false); Show(HelpSheet, page == AppPage.Help); Show(SheetBack, false);
-            SheetTitle.Text = page == AppPage.Help ? "Клавиши" : "Подключение";
-            if (page == AppPage.Connection && !profilesLoaded) { var task = LoadProfilesAsync(); }
-            if (SheetHost.Visibility == Visibility.Visible) return;
+            checksOpen = page == AppPage.Diagnostics;
+            if (page == AppPage.Connection && !profilesLoaded && !busy) { var task = LoadProfilesAsync(); }
+            if (page == currentPage) return;
+            bool forward = currentPage == AppPage.Home;
+            currentPage = page;
+            if (page != AppPage.Home)
+            {
+                PageTitle.Text = page == AppPage.Connection ? "Подключения" : page == AppPage.Settings ? "Windows" : "Проверка";
+                Show(ConnectionsPane, page == AppPage.Connection); Show(SettingsPane, page == AppPage.Settings); Show(ChecksPanel, page == AppPage.Diagnostics);
+                Show(RefreshButton, page == AppPage.Diagnostics);
+            }
+            if (page != AppPage.Home && !forward) return; // page to page: content already swapped
+            // iOS push: the outgoing layer drifts a little and fades, the incoming one slides in from its side.
+            bool toPage = page != AppPage.Home;
+            UIElement incoming = toPage ? (UIElement)PageHost : HomePage, outgoing = toPage ? (UIElement)HomePage : PageHost;
+            Slide(outgoing, 0, toPage ? -40 : 90, 1, 0, 200, () => { if ((currentPage != AppPage.Home) == toPage) Show(outgoing, false); });
+            Show(incoming, true); incoming.IsHitTestVisible = true; outgoing.IsHitTestVisible = false;
+            Slide(incoming, toPage ? 90 : -40, 0, 0, 1, 340, null);
+        }
+
+        static void Slide(UIElement element, double fromX, double toX, double fromOpacity, double toOpacity, int ms, Action done)
+        {
+            var shift = element.RenderTransform as TranslateTransform;
+            if (shift == null || shift.IsFrozen) { shift = new TranslateTransform(); element.RenderTransform = shift; }
+            var ease = new QuinticEase { EasingMode = EasingMode.EaseOut };
+            var move = new DoubleAnimation(fromX, toX, TimeSpan.FromMilliseconds(ms)) { EasingFunction = ease };
+            var fade = new DoubleAnimation(fromOpacity, toOpacity, TimeSpan.FromMilliseconds(ms)) { EasingFunction = ease };
+            if (done != null) fade.Completed += delegate { done(); };
+            shift.BeginAnimation(TranslateTransform.XProperty, move);
+            element.BeginAnimation(OpacityProperty, fade);
+        }
+
+        void OpenSheet(string title, UIElement content)
+        {
+            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet }) Show(part, part == content);
+            SheetTitle.Text = title;
+            if (SheetHost.Visibility == Visibility.Visible) { content.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))); return; }
             Show(SheetHost, true);
-            SheetDim.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200)));
-            Sheet.UpdateLayout();
-            ((TranslateTransform)Sheet.RenderTransform).BeginAnimation(TranslateTransform.YProperty,
-                new DoubleAnimation(Math.Max(300, Sheet.ActualHeight), 0, TimeSpan.FromMilliseconds(280)) { EasingFunction = EaseOut });
-            if (page == AppPage.Connection) LinkInput.Focus();
+            SheetDim.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
+            Sheet.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
+            ((TranslateTransform)Sheet.RenderTransform).BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(24, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = EaseOut });
         }
 
-        void ShowEditor(string title)
-        {
-            Show(ConnectionSheet, false); Show(EditorSheet, true); Show(SheetBack, true); SheetTitle.Text = title;
-            var shift = new TranslateTransform(); EditorSheet.RenderTransform = shift;
-            EditorSheet.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
-            shift.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(40, 0, TimeSpan.FromMilliseconds(220)) { EasingFunction = EaseOut });
-        }
+        void ShowEditor(string title) { Show(EditorExtras, profileId != null); OpenSheet(title, EditorSheet); }
 
         void CloseSheet()
         {
             if (SheetHost.Visibility != Visibility.Visible) return;
-            var slide = new DoubleAnimation(0, Math.Max(300, Sheet.ActualHeight), TimeSpan.FromMilliseconds(220)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn } };
-            slide.Completed += delegate { Show(SheetHost, false); };
-            SheetDim.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(220)));
-            ((TranslateTransform)Sheet.RenderTransform).BeginAnimation(TranslateTransform.YProperty, slide);
+            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(160));
+            fade.Completed += delegate { Show(SheetHost, false); };
+            SheetDim.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(160)));
+            Sheet.BeginAnimation(OpacityProperty, fade);
         }
 
+        void OnEscape() { if (SheetHost.Visibility == Visibility.Visible) CloseSheet(); else ShowPage(AppPage.Home); }
         void OnCloseSheet(object sender, RoutedEventArgs e) { CloseSheet(); }
         void OnDimClick(object sender, MouseButtonEventArgs e) { CloseSheet(); }
-        void OnSheetBack(object sender, RoutedEventArgs e) { OpenSheet(AppPage.Connection); ConnectionSheet.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180))); }
-        void OnConnectionRow(object sender, RoutedEventArgs e) { OpenSheet(AppPage.Connection); }
-        void OnHelp(object sender, RoutedEventArgs e) { OpenSheet(AppPage.Help); }
-        void OnDiagnosticsRow(object sender, RoutedEventArgs e) { SetChecksOpen(!checksOpen); if (readinessReport == null && !busy) { var task = RunAction("diagnose", false); } }
+        void OnBack(object sender, RoutedEventArgs e) { ShowPage(AppPage.Home); }
+        void OnConnectionRow(object sender, RoutedEventArgs e) { Navigate(AppPage.Connection); }
+        void OnSettingsRow(object sender, RoutedEventArgs e) { Navigate(AppPage.Settings); }
+        void OnChecksRow(object sender, RoutedEventArgs e) { Navigate(AppPage.Diagnostics); if (readinessReport == null && !busy) { var task = RunAction("diagnose", false); } }
+        void OnHelp(object sender, RoutedEventArgs e) { Navigate(AppPage.Help); }
+        // The link is pasted once, so it lives in the card, not on the page.
+        void OnAddRow(object sender, RoutedEventArgs e) { ProfileErrorText(""); OpenSheet("Новое подключение", AddSheet); LinkInput.Focus(); }
 
-        void SetChecksOpen(bool open)
+        void UpdateAddRows() { Show(AddSeparator, profiles.Count > 0); }
+
+        void UpdateWindowsSummary()
         {
-            if (checksOpen == open) return;
-            checksOpen = open; Show(ChecksPanel, open);
-            ((RotateTransform)DiagnosticChevron.RenderTransform).BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(open ? 180 : 0, TimeSpan.FromMilliseconds(200)) { EasingFunction = EaseOut });
-            if (open) ChecksPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)));
+            WindowsSummary.Text = MemoryInput.Text + " ГиБ памяти, " + CpuInput.Text + " ЦП, экран " + (ResolutionBox.SelectedItem ?? "") + (FilesSwitch.IsChecked == true ? ", файлы ПК" : "");
         }
-
         // ---------- Toast ----------
         void SetOperation(string text)
         {
@@ -251,6 +300,7 @@ namespace WindowsClaude.Launcher
             Show(StartButton, !runtimeActive && !outcomeUnknown && workState != "running");
             Show(OpenDesktopButton, workState == "running");
             OpenDesktopButton.IsEnabled = !busy && !outcomeUnknown && workState == "running";
+            Show(StatusGlyph, StartButton.Visibility != Visibility.Visible && OpenDesktopButton.Visibility != Visibility.Visible);
             Show(StopButton, stopAvailable);
             StopButton.IsEnabled = !busy && !outcomeUnknown && stopAvailable;
         }
@@ -329,7 +379,9 @@ namespace WindowsClaude.Launcher
         static string Friendly(string message)
         {
             if (message == null) return "";
-            if (message.StartsWith("Supervisor", StringComparison.Ordinal) || message.Contains("receipt"))
+            // Start results end with the receipt path on a second line; only the first line is for people.
+            int lineEnd = message.IndexOf('\n'); if (lineEnd >= 0) message = message.Substring(0, lineEnd).TrimEnd();
+            if (message.StartsWith("Supervisor", StringComparison.Ordinal))
                 return "Windows не запустилась: шлюз не смог подключиться к серверу. Проверь подключение и нажми «Запустить» ещё раз.";
             return message;
         }
@@ -459,12 +511,12 @@ namespace WindowsClaude.Launcher
                 runtimeActive = ActiveVmState(workState) || ActiveVmState(gatewayState);
                 var connection = Child(result, "connection");
                 var selected = Child(connection, "selected_profile");
-                if (selected == null) { ConnectionValue.Text = "Добавить сервер"; ConnectionDetail.Text = "Вставь ссылку от своего VPS"; }
+                if (selected == null) { ConnectionValue.Text = "Добавить подключение"; ConnectionDetail.Text = "Вставь ссылку от своего VPS"; }
                 else
                 {
                     string protocol = Text(selected, "protocol", ""); protocol = protocol == "hysteria2" ? "Hysteria2" : protocol.ToUpperInvariant();
                     ConnectionValue.Text = Text(selected, "name", "Профиль");
-                    ConnectionDetail.Text = protocol + " · " + (Flag(selected, "needs_credentials") ? "нужно ввести пароль заново" : Flag(connection, "verified") ? "подключено и проверено" : "проверится при запуске");
+                    ConnectionDetail.Text = protocol + ", " + (Flag(selected, "needs_credentials") ? "нужно ввести пароль заново" : Flag(connection, "verified") ? "подключено и проверено" : "проверится при запуске");
                 }
             }
             else
@@ -475,9 +527,13 @@ namespace WindowsClaude.Launcher
             var report = readinessReport ?? result;
             var checks = Checks(report);
             int failed = checks.Count(item => !Flag(item, "passed"));
-            DiagnosticSummary.Text = checks.Count == 0 ? "Проверка ПК и комплекта" : failed == 0 ? "Всё в порядке" : "Требует внимания: " + failed;
-            DiagnosticGlyph.Symbol = checks.Count > 0 && failed > 0 ? SymbolRegular.ErrorCircle24 : SymbolRegular.Checkmark24;
-            DiagnosticBadge.Background = checks.Count == 0 ? Grey : failed == 0 ? Green : Orange;
+            DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? "Всё в порядке" : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
+            DiagnosticPill.Background = checks.Count == 0 ? GreySoft : failed == 0 ? GreenSoft : Hex("#FFF1DE");
+            DiagnosticSummary.Foreground = checks.Count == 0 ? Grey : failed == 0 ? GreenInk : Hex("#B36200");
+            ChecksHeroTitle.Text = checks.Count == 0 ? "Проверка не выполнялась" : failed == 0 ? "Всё в порядке" : "Нужно исправить: " + failed;
+            ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : (checks.Count - failed) + " из " + checks.Count + " проверок пройдено";
+            ChecksHeroBadge.Background = DiagnosticPill.Background; ChecksHeroGlyph.Foreground = DiagnosticSummary.Foreground;
+            ChecksHeroGlyph.Symbol = checks.Count == 0 ? SymbolRegular.Pulse24 : failed == 0 ? SymbolRegular.Checkmark24 : SymbolRegular.Warning24;
 
             Dictionary<string, object> blocker = null;
             if (!Bridge.Ok(result))
@@ -501,6 +557,7 @@ namespace WindowsClaude.Launcher
             string filesState = FileSharingState(report);
             if (blocker == null && (filesState == "failed" || filesState == "unavailable")) NextStepText.Text = "Проверь доступность выбранных папок ПК. Windows подключит их снова при следующем входе.";
             UpdateHero(report, filesState);
+            if (StatusText.Text != shownStatus) { shownStatus = StatusText.Text; Rise(StatusText, 0); Rise(NextStepText, 60); }
             string warning = runtimeActive ? Text(report, "network_warning", "") : "";
             NetworkText.Text = warning; Show(NetworkText, warning.Length > 0);
 
@@ -508,7 +565,14 @@ namespace WindowsClaude.Launcher
             if (signature != displayedChecks)
             {
                 displayedChecks = signature; CheckCards.Children.Clear();
-                foreach (var item in checks) AddCheckRow(Flag(item, "passed"), Text(item, "title", "Проверка"), Text(item, "detail", ""));
+                // Problems go full width on top; passed checks are tags that wrap, so long names are never cut.
+                var passedGrid = new WrapPanel { Margin = new Thickness(10, 7, 10, 7) };
+                foreach (var item in checks)
+                {
+                    var row = CheckRow(Flag(item, "passed"), Text(item, "title", "Проверка"), Text(item, "detail", ""));
+                    if (Flag(item, "passed")) passedGrid.Children.Add(row); else CheckCards.Children.Add(row);
+                }
+                if (passedGrid.Children.Count > 0) CheckCards.Children.Add(passedGrid);
                 if (checks.Count == 0) CheckCards.Children.Add(new TextBlock { Text = Bridge.Message(result), Style = (Style)FindResource("Caption"), Margin = new Thickness(16, 6, 16, 10) });
             }
             var lines = checks.Select(item => (Flag(item, "passed") ? "Готово: " : "Нужно исправить: ") + Text(item, "title", "Проверка") + Environment.NewLine + Text(item, "detail", "")).ToList();
@@ -521,20 +585,25 @@ namespace WindowsClaude.Launcher
             reportText = String.Join(Environment.NewLine + Environment.NewLine, lines);
             Busy(busy);
             SettingsNote.Foreground = Grey;
-            SettingsNote.Text = runtimeActive ? "Настройки можно менять, когда Windows выключена." : "Изменения сохраняются сами и применятся при следующем запуске.";
+            SettingsNote.Text = runtimeActive ? "Настройки можно менять, когда Windows выключена." : "Сохраняется само, применится при следующем запуске.";
         }
 
-        void AddCheckRow(bool passed, string title, string detail)
+        UIElement CheckRow(bool passed, string title, string detail)
         {
-            if (CheckCards.Children.Count > 0) CheckCards.Children.Add(new Border { Style = (Style)FindResource("Separator") });
-            var row = new DockPanel { Margin = new Thickness(16, 10, 16, 10) };
-            var dot = new Border { Width = 24, Height = 24, CornerRadius = new CornerRadius(12), Background = passed ? GreenSoft : Hex("#FFF1DE"), Margin = new Thickness(3, 1, 16, 0), VerticalAlignment = VerticalAlignment.Top,
-                Child = new SymbolIcon { Symbol = passed ? SymbolRegular.Checkmark16 : SymbolRegular.Warning16, FontSize = 13, Foreground = passed ? GreenInk : Hex("#B36200") } };
+            // A passed check is a small green tag with its detail in a tooltip.
+            if (passed)
+                return new Border { CornerRadius = new CornerRadius(13), Background = GreenSoft, Padding = new Thickness(8, 3, 10, 3), Margin = new Thickness(2.5), ToolTip = detail.Length > 0 ? detail : null,
+                    Child = new StackPanel { Orientation = Orientation.Horizontal, Children = {
+                        new SymbolIcon { Symbol = SymbolRegular.Checkmark16, FontSize = 12, Foreground = GreenInk, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center },
+                        new TextBlock { Text = title, FontSize = 12.5, Foreground = GreenInk, VerticalAlignment = VerticalAlignment.Center } } } };
+            var row = new DockPanel { Margin = new Thickness(16, 9, 12, 9), Background = Brushes.Transparent };
+            var dot = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = Hex("#FFF1DE"), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top,
+                Child = new SymbolIcon { Symbol = SymbolRegular.Warning16, FontSize = 12, Foreground = Hex("#B36200") } };
             DockPanel.SetDock(dot, Dock.Left); row.Children.Add(dot);
-            row.Children.Add(new StackPanel { Children = {
-                new TextBlock { Text = title, FontSize = 14, FontWeight = passed ? FontWeights.Normal : FontWeights.SemiBold, Foreground = Ink },
-                new TextBlock { Text = detail, Style = (Style)FindResource("Caption"), Margin = new Thickness(0, 1, 0, 0) } } });
-            CheckCards.Children.Add(row);
+            var text = new StackPanel { Children = { new TextBlock { Text = title, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Ink, TextTrimming = TextTrimming.CharacterEllipsis } } };
+            if (detail.Length > 0) text.Children.Add(new TextBlock { Text = detail, Style = (Style)FindResource("Caption"), Margin = new Thickness(0, 1, 0, 0) });
+            row.Children.Add(text);
+            return row;
         }
 
         void UpdateHero(Dictionary<string, object> report, string filesState)
@@ -551,9 +620,9 @@ namespace WindowsClaude.Launcher
                 stepDots[index].Fill = done[index] ? Green : active[index] ? Blue : Hex("#C7C7CC");
                 stepTexts[index].Foreground = done[index] ? GreenInk : active[index] ? BlueInk : Grey;
                 stepCards[index].Background = done[index] ? GreenSoft : active[index] ? BlueSoft : Brushes.White;
-                stepTexts[index].Text = new[] { "Шлюз", "VPN", "Windows", "Файлы" }[index] + (index == 3 && filesState == "off" ? " — выкл." : "");
+                stepCards[index].ToolTip = index == 3 && filesState == "off" ? "Файлы ПК выключены" : null;
             }
-            Show(Steps, runtimeActive || (busy && activeOperationAction == "start"));
+            Show(Steps, (runtimeActive && workState != "running") || (busy && activeOperationAction == "start")); // steps only while starting
         }
 
         static string FormatGiB(int mib) { return ((decimal)mib / 1024).ToString("0.######", CultureInfo.CurrentCulture); }
@@ -662,7 +731,7 @@ namespace WindowsClaude.Launcher
                 var saved = originalFiles != null && originalFiles.ContainsKey("folders") ? originalFiles["folders"] as IEnumerable : null;
                 if (saved != null) foreach (var folder in saved) folders.Add(Convert.ToString(folder));
                 FilesSwitch.IsChecked = mode != "off"; FilesAll.IsChecked = mode != "selected"; FilesSelected.IsChecked = mode == "selected";
-                UpdateFilesRows();
+                UpdateFilesRows(); UpdateWindowsSummary();
             }
             finally { applyingSettings = false; }
         }
@@ -693,7 +762,7 @@ namespace WindowsClaude.Launcher
             }
         }
 
-        void ScheduleSave() { if (applyingSettings || !settingsLoaded) return; saveTimer.Stop(); saveTimer.Start(); }
+        void ScheduleSave() { if (applyingSettings || !settingsLoaded) return; UpdateWindowsSummary(); saveTimer.Stop(); saveTimer.Start(); }
         void CommitPendingSettings() { if (saveTimer.IsEnabled) { saveTimer.Stop(); var task = SaveSettingsAsync(); } }
         void OnSettingChanged(object sender, RoutedEventArgs e) { ScheduleSave(); }
         void OnSettingEdited(object sender, KeyboardFocusChangedEventArgs e) { ScheduleSave(); }
@@ -728,6 +797,13 @@ namespace WindowsClaude.Launcher
         }
         void OnMemoryDown(object sender, RoutedEventArgs e) { StepMemory(-0.5m); }
         void OnMemoryUp(object sender, RoutedEventArgs e) { StepMemory(0.5m); }
+        void StepResolution(int delta)
+        {
+            int next = Math.Min(ResolutionBox.Items.Count - 1, Math.Max(0, ResolutionBox.SelectedIndex + delta));
+            if (next != ResolutionBox.SelectedIndex) ResolutionBox.SelectedIndex = next; // SelectionChanged schedules the save
+        }
+        void OnResolutionDown(object sender, RoutedEventArgs e) { StepResolution(-1); }
+        void OnResolutionUp(object sender, RoutedEventArgs e) { StepResolution(1); }
         void OnCpuDown(object sender, RoutedEventArgs e) { StepCpu(-1); }
         void OnCpuUp(object sender, RoutedEventArgs e) { StepCpu(1); }
 
@@ -735,11 +811,11 @@ namespace WindowsClaude.Launcher
         {
             value = null; error = null;
             decimal gib; int original; Int32.TryParse(Text(originalSettings, "work_memory_mib", "0"), out original);
-            if (!TryGiB(MemoryInput.Text, out gib) || gib < 1 || gib > 32) { error = "Память — число от 1 до 32 ГиБ, например 6 или 6,5."; return false; }
+            if (!TryGiB(MemoryInput.Text, out gib) || gib < 1 || gib > 32) { error = "Память: число от 1 до 32 ГиБ, например 6 или 6,5."; return false; }
             // Unchanged text keeps an old exact MiB value such as 5000.
             int mib = MemoryInput.Text.Trim() == FormatGiB(original) ? original : (int)Math.Round(gib * 1024, MidpointRounding.AwayFromZero);
             int cpus;
-            if (!Int32.TryParse(CpuInput.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out cpus) || cpus < 1 || cpus > 32) { error = "Процессоры — целое число от 1 до 32."; return false; }
+            if (!Int32.TryParse(CpuInput.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out cpus) || cpus < 1 || cpus > 32) { error = "Процессоры: целое число от 1 до 32."; return false; }
             bool filesOn = FilesSwitch.IsChecked == true;
             string mode = !filesOn ? "off" : FilesSelected.IsChecked == true ? "selected" : "all";
             if (mode == "selected" && folders.Count == 0) { error = "Добавь хотя бы одну папку ПК."; return false; }
@@ -802,7 +878,7 @@ namespace WindowsClaude.Launcher
                     if (status != null && status.ContainsKey("checks")) Display(status);
                     SetOperation(Bridge.Message(result));
                 }
-                else if (action == "test-profile") ProfileStateText.Text = Flag(result, "verified") ? "Проверка пройдена: сервер отвечает." : "Проверка не подтверждена. Подробности — в «Проверке».";
+                else if (action == "test-profile") ProfileStateText.Text = Flag(result, "verified") ? "Проверка пройдена: сервер отвечает." : "Проверка не подтверждена. Подробности в разделе «Проверка».";
                 return result;
             }
             catch (Exception)
@@ -828,24 +904,26 @@ namespace WindowsClaude.Launcher
             ProfileList.Children.Clear();
             foreach (var item in profiles)
             {
-                if (ProfileList.Children.Count > 0) ProfileList.Children.Add(new Border { Style = (Style)FindResource("Separator"), Margin = new Thickness(16, 0, 0, 0) });
+                if (ProfileList.Children.Count > 0) ProfileList.Children.Add(new Border { Style = (Style)FindResource("Separator") });
                 string id = Text(item, "profile_id", ""), protocol = Text(item, "protocol", "");
                 protocol = protocol == "hysteria2" ? "Hysteria2" : protocol.ToUpperInvariant();
                 bool selected = Flag(item, "selected");
-                var row = new DockPanel();
-                var edit = new System.Windows.Controls.Button { Style = (Style)FindResource("TextAction"), Content = "Изменить", VerticalAlignment = VerticalAlignment.Center };
+                // The selected connection is marked by its blue check badge and bold name; no square fill inside the rounded group.
+                var row = new DockPanel { Background = Brushes.Transparent };
+                var edit = new System.Windows.Controls.Button { Style = (Style)FindResource("TextAction"), Content = "Изменить", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
                 edit.Click += async delegate { var view = await ProfileAction("get-profile-view", new Dictionary<string, object> { { "profile_id", id } }); if (Bridge.Ok(view)) ShowEditor("Изменить подключение"); };
                 DockPanel.SetDock(edit, Dock.Right); row.Children.Add(edit);
-                var check = new SymbolIcon { Symbol = SymbolRegular.Checkmark24, FontSize = 18, Foreground = Blue, Width = 22, Margin = new Thickness(0, 0, 12, 0), Visibility = selected ? Visibility.Visible : Visibility.Hidden };
-                DockPanel.SetDock(check, Dock.Left); row.Children.Add(check);
-                row.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = {
-                    new TextBlock { Text = Text(item, "name", "Профиль"), Style = (Style)FindResource("RowText"), TextTrimming = TextTrimming.CharacterEllipsis },
-                    new TextBlock { Text = protocol + " · " + Text(item, "host", "") + (Flag(item, "needs_credentials") ? " · нужен пароль" : ""), Style = (Style)FindResource("Caption"), TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap } } });
-                var button = new System.Windows.Controls.Button { Style = (Style)FindResource("RowNoScale"), Content = row, ToolTip = selected ? "Используется для запуска" : "Использовать для запуска" };
+                var badge = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(15), Background = selected ? Blue : GreySoft, Margin = new Thickness(16, 0, 14, 0), VerticalAlignment = VerticalAlignment.Center,
+                    Child = new SymbolIcon { Symbol = selected ? SymbolRegular.Checkmark20 : SymbolRegular.Globe20, FontSize = 16, Foreground = selected ? Brushes.White : Grey } };
+                DockPanel.SetDock(badge, Dock.Left); row.Children.Add(badge);
+                row.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 9, 0, 9), Children = {
+                    new TextBlock { Text = Text(item, "name", "Профиль"), Style = (Style)FindResource("RowText"), FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal, TextTrimming = TextTrimming.CharacterEllipsis },
+                    new TextBlock { Text = protocol + ", " + Text(item, "host", "") + (Flag(item, "needs_credentials") ? ", нужен пароль" : ""), Style = (Style)FindResource("Caption"), TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap } } });
+                var button = new System.Windows.Controls.Button { Style = (Style)FindResource("RowNoScale"), Content = row, Padding = new Thickness(0), ToolTip = selected ? "Используется для запуска" : "Использовать для запуска" };
                 button.Click += async delegate { if (!selected) await ProfileAction("select-profile", new Dictionary<string, object> { { "profile_id", id } }); };
-                ProfileList.Children.Add(button);
+                Rise(row, ProfileList.Children.Count * 45); ProfileList.Children.Add(button);
             }
-            Show(ProfilesTitle, profiles.Count > 0); Show(ProfilesGroup, profiles.Count > 0);
+            UpdateAddRows();
             Busy(busy);
         }
 
@@ -861,7 +939,7 @@ namespace WindowsClaude.Launcher
             ObfsSwitch.IsChecked = loadedObfs == "salamander";
             ProxyAuthSwitch.IsChecked = loadedProtocol != "hysteria2" && Flag(view, "auth_present");
             ProfileAuth.Password = ProfileObfsPassword.Password = ProfilePassword.Password = ""; ProfileUser.Text = "";
-            AuthCaption.Text = authPresent ? "Пароль (сохранён — оставь пустым, чтобы не менять)" : "Пароль";
+            AuthCaption.Text = authPresent ? "сохранён, можно не вводить" : "пароль от сервера";
             EditorErrorText(""); UpdateProfileRows(); Busy(busy);
         }
 
@@ -870,7 +948,7 @@ namespace WindowsClaude.Launcher
             profileId = null; loadedProtocol = null; loadedObfs = null; authPresent = false;
             ProfileName.Text = ProfileHost.Text = ProfileSni.Text = ProfileUser.Text = ""; ProfilePort.Text = "443";
             ProfileAuth.Password = ProfileObfsPassword.Password = ProfilePassword.Password = "";
-            AuthCaption.Text = "Пароль";
+            AuthCaption.Text = "пароль от сервера";
             ProtocolBox.SelectedIndex = 0; ObfsSwitch.IsChecked = false; ProxyAuthSwitch.IsChecked = false;
             EditorErrorText(""); UpdateProfileRows(); Busy(busy);
         }
@@ -880,13 +958,24 @@ namespace WindowsClaude.Launcher
         void OnProfileToggle(object sender, RoutedEventArgs e) { UpdateProfileRows(); }
         void UpdateProfileRows()
         {
-            if (HysteriaRows == null) return;
-            bool hy = ProtocolBox.SelectedIndex == 0;
-            Show(HysteriaRows, hy); Show(ProxyRows, !hy); Show(ObfsRow, ObfsSwitch.IsChecked == true);
-            Show(ProxyAuthRow, ProxyAuthSwitch.IsChecked == true); Show(SniRow, hy || ProtocolBox.SelectedIndex == 3);
+            if (TypeHttps == null) return; // SelectionChanged fires while XAML is still loading
+            int kind = Math.Max(0, ProtocolBox.SelectedIndex); bool hy = kind == 0;
+            TypeHysteria.IsChecked = kind == 0; TypeSocks.IsChecked = kind == 1; TypeHttp.IsChecked = kind == 2; TypeHttps.IsChecked = kind == 3;
+            Show(HysteriaRows, hy); Show(AuthRow, hy); Show(ProxyRows, !hy); Show(ObfsRow, ObfsSwitch.IsChecked == true);
+            Show(ProxyAuthRow, ProxyAuthSwitch.IsChecked == true); Show(SniRow, hy || kind == 3);
+            UpdateHints();
         }
+        // Grey hints sit inside empty fields; PasswordBox has no bindable text, so all are updated here.
+        void UpdateHints()
+        {
+            Show(NameHint, ProfileName.Text.Length == 0); Show(HostHint, ProfileHost.Text.Length == 0); Show(SniHint, ProfileSni.Text.Length == 0);
+            Show(AuthCaption, ProfileAuth.Password.Length == 0); Show(ObfsHint, ProfileObfsPassword.Password.Length == 0); Show(ProxyHint, ProfilePassword.Password.Length == 0);
+        }
+        void OnHintText(object sender, TextChangedEventArgs e) { if (TypeHttps != null) UpdateHints(); }
+        void OnSecretChanged(object sender, RoutedEventArgs e) { if (TypeHttps != null) UpdateHints(); }
+        void OnTypeClick(object sender, RoutedEventArgs e) { ProtocolBox.SelectedIndex = Convert.ToInt32(((FrameworkElement)sender).Tag, CultureInfo.InvariantCulture); }
         void ProfileErrorText(string text) { ProfileError.Text = text ?? ""; Show(ProfileError, !String.IsNullOrEmpty(text)); EditorErrorText(text); }
-        void EditorErrorText(string text) { EditorError.Text = text ?? ""; Show(EditorError, !String.IsNullOrEmpty(text)); }
+        void EditorErrorText(string text) { EditorError.Text = text ?? ""; Show(EditorError, !String.IsNullOrEmpty(text)); Show(EditorExtras, String.IsNullOrEmpty(text) && profileId != null); }
 
         bool CanReuseCredentials
         {
@@ -897,7 +986,7 @@ namespace WindowsClaude.Launcher
         {
             request = null; int port;
             if (String.IsNullOrWhiteSpace(ProfileHost.Text)) { EditorErrorText("Укажи адрес сервера."); return false; }
-            if (!Int32.TryParse(ProfilePort.Text, NumberStyles.None, CultureInfo.InvariantCulture, out port) || port < 1 || port > 65535) { EditorErrorText("Порт — целое число от 1 до 65535."); return false; }
+            if (!Int32.TryParse(ProfilePort.Text, NumberStyles.None, CultureInfo.InvariantCulture, out port) || port < 1 || port > 65535) { EditorErrorText("Порт: целое число от 1 до 65535."); return false; }
             int kind = Math.Max(0, ProtocolBox.SelectedIndex); bool hy = kind == 0;
             string name = String.IsNullOrWhiteSpace(ProfileName.Text) ? ProfileHost.Text.Trim() : ProfileName.Text.Trim();
             var profile = new Dictionary<string, object> { { "name", name }, { "protocol", Protocols[kind] }, { "host", ProfileHost.Text.Trim() }, { "port", port } };
@@ -933,14 +1022,15 @@ namespace WindowsClaude.Launcher
             var saved = Child(result, "profile");
             if (!Bridge.Ok(result) || saved == null) return;
             if (!Flag(saved, "selected")) result = await ProfileAction("select-profile", new Dictionary<string, object> { { "profile_id", Text(saved, "profile_id", "") } });
-            if (Bridge.Ok(result)) { LinkInput.Text = ""; OpenSheet(AppPage.Connection); SetOperation("Готово: «" + Text(saved, "name", "подключение") + "» будет использовано при запуске."); }
+            if (Bridge.Ok(result)) { LinkInput.Text = ""; Navigate(AppPage.Connection); SetOperation("Готово: «" + Text(saved, "name", "подключение") + "» будет использовано при запуске."); }
         }
 
         async void OnSaveProfile(object sender, RoutedEventArgs e) { Dictionary<string, object> request; if (TryProfileRequest(out request)) await UseProfile(await ProfileAction("save-profile", request)); }
         async void OnTestProfile(object sender, RoutedEventArgs e)
         {
             var selected = profiles.FirstOrDefault(item => Flag(item, "selected"));
-            if (selected != null) await ProfileAction("test-profile", new Dictionary<string, object> { { "profile_id", Text(selected, "profile_id", "") } });
+            string id = profileId ?? (selected != null ? Text(selected, "profile_id", null) : null);
+            if (id != null) await ProfileAction("test-profile", new Dictionary<string, object> { { "profile_id", id } });
         }
         void OnLinkKey(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) OnAddLink(sender, e); }
         async void OnAddLink(object sender, RoutedEventArgs e)
@@ -971,20 +1061,23 @@ namespace WindowsClaude.Launcher
             await UseProfile(await ProfileAction("import-profile", new Dictionary<string, object> { { "profile", profile } }));
         }
 
-        async void OnExportProfile(object sender, RoutedEventArgs e)
+        // Export opens in the same card: the profile being edited, otherwise the selected one.
+        string exportId;
+        void OnExportProfile(object sender, RoutedEventArgs e)
         {
             var selected = profiles.FirstOrDefault(item => Flag(item, "selected"));
-            string id = selected != null ? Text(selected, "profile_id", null) : profileId;
-            if (id == null) { ProfileErrorText("Сначала добавь подключение."); return; }
-            var secrets = new CheckBox { Content = "Включить пароли", Margin = new Thickness(0, 0, 0, 10) };
-            var body = new StackPanel { Width = 400 };
-            body.Children.Add(secrets);
-            body.Children.Add(new TextBlock { Text = "Без галочки сохраняются только настройки. С галочкой пароли попадут в файл открытым текстом — передавай его только себе или доверенному человеку.", Style = (Style)FindResource("Caption") });
-            var dialog = new Wpf.Ui.Controls.MessageBox { Title = "Экспорт подключения", Content = body, PrimaryButtonText = "Выбрать файл", CloseButtonText = "Отмена", Owner = this };
-            if (await dialog.ShowDialogAsync() != Wpf.Ui.Controls.MessageBoxResult.Primary) return;
+            exportId = profileId ?? (selected != null ? Text(selected, "profile_id", null) : null);
+            if (exportId == null) { ProfileErrorText("Сначала добавь подключение."); return; }
+            ExportSecretsSwitch.IsChecked = false;
+            OpenSheet("Экспорт подключения", ExportSheet);
+        }
+
+        async void OnExportChoose(object sender, RoutedEventArgs e)
+        {
             var file = new Microsoft.Win32.SaveFileDialog { Title = "Экспорт подключения в новый файл", Filter = "JSON профиль (*.json)|*.json", DefaultExt = "json", AddExtension = true, OverwritePrompt = false, FileName = "connection.json" };
-            if (file.ShowDialog(this) == true)
-                await ProfileAction("export-profile", new Dictionary<string, object> { { "profile_id", id }, { "destination", file.FileName }, { "include_secrets", secrets.IsChecked == true } });
+            if (file.ShowDialog(this) != true) return;
+            var result = await ProfileAction("export-profile", new Dictionary<string, object> { { "profile_id", exportId }, { "destination", file.FileName }, { "include_secrets", ExportSecretsSwitch.IsChecked == true } });
+            if (Bridge.Ok(result)) CloseSheet();
         }
     }
 }

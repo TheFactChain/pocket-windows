@@ -57,7 +57,8 @@
                 <Setter Property="Margin" Value="56,0,0,0" />
             </Style>
 
-            <!-- Tap scale shared by all buttons -->
+            <!-- Tap scale shared by all buttons: a soft press and an unhurried release -->
+            <CubicEase x:Key="Soft" EasingMode="EaseOut" />
             <Style x:Key="Tappable" TargetType="ButtonBase">
                 <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
                 <Setter Property="RenderTransform"><Setter.Value><ScaleTransform /></Setter.Value></Setter>
@@ -66,24 +67,28 @@
                 <Style.Triggers>
                     <EventTrigger RoutedEvent="PreviewMouseLeftButtonDown">
                         <BeginStoryboard><Storyboard>
-                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="0.97" Duration="0:0:0.08" />
-                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="0.97" Duration="0:0:0.08" />
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="0.965" Duration="0:0:0.16" EasingFunction="{StaticResource Soft}" />
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="0.965" Duration="0:0:0.16" EasingFunction="{StaticResource Soft}" />
                         </Storyboard></BeginStoryboard>
                     </EventTrigger>
                     <EventTrigger RoutedEvent="PreviewMouseLeftButtonUp">
                         <BeginStoryboard><Storyboard>
-                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1" Duration="0:0:0.18"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.4" /></DoubleAnimation.EasingFunction></DoubleAnimation>
-                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1" Duration="0:0:0.18"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.4" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1" Duration="0:0:0.3" EasingFunction="{StaticResource Soft}" />
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1" Duration="0:0:0.3" EasingFunction="{StaticResource Soft}" />
                         </Storyboard></BeginStoryboard>
                     </EventTrigger>
                     <EventTrigger RoutedEvent="MouseLeave">
                         <BeginStoryboard><Storyboard>
-                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1" Duration="0:0:0.12" />
-                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1" Duration="0:0:0.12" />
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1" Duration="0:0:0.3" EasingFunction="{StaticResource Soft}" />
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1" Duration="0:0:0.3" EasingFunction="{StaticResource Soft}" />
                         </Storyboard></BeginStoryboard>
                     </EventTrigger>
                 </Style.Triggers>
             </Style>
+
+            <!-- Hover shade that fades in and out instead of switching -->
+            <Storyboard x:Key="ShadeIn"><DoubleAnimation Storyboard.TargetName="Shade" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18" EasingFunction="{StaticResource Soft}" /></Storyboard>
+            <Storyboard x:Key="ShadeOut"><DoubleAnimation Storyboard.TargetName="Shade" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.28" EasingFunction="{StaticResource Soft}" /></Storyboard>
 
             <!-- Big rounded main action -->
             <Style x:Key="Pill" TargetType="Button" BasedOn="{StaticResource Tappable}">
@@ -95,11 +100,16 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Border x:Name="Body" Background="{TemplateBinding Background}" CornerRadius="16" Padding="22,0">
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}" />
-                            </Border>
+                            <Grid x:Name="Body">
+                                <Border Background="{TemplateBinding Background}" CornerRadius="14" />
+                                <Border x:Name="Shade" Background="#14000000" CornerRadius="14" Opacity="0" />
+                                <ContentPresenter Margin="22,0" HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
                             <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="Opacity" Value="0.92" /></Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource ShadeIn}" /></Trigger.EnterActions>
+                                    <Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource ShadeOut}" /></Trigger.ExitActions>
+                                </Trigger>
                                 <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.45" /></Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -120,8 +130,15 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Border Background="Transparent" Padding="6,4"><ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" /></Border>
+                            <Grid>
+                                <Border x:Name="Shade" Background="#143390EC" CornerRadius="8" Opacity="0" />
+                                <ContentPresenter Margin="7,4" TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
                             <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource ShadeIn}" /></Trigger.EnterActions>
+                                    <Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource ShadeOut}" /></Trigger.ExitActions>
+                                </Trigger>
                                 <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4" /></Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -132,14 +149,19 @@
             <!-- A tappable settings row -->
             <Style x:Key="Row" TargetType="Button" BasedOn="{StaticResource Tappable}">
                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Padding" Value="16,8" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Border x:Name="Body" Background="Transparent" MinHeight="54" Padding="16,8">
-                                <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Stretch" />
-                            </Border>
+                            <Grid x:Name="Body" Background="Transparent" MinHeight="56">
+                                <Border x:Name="Shade" Background="#0B000000" CornerRadius="11" Margin="6,3" Opacity="0" />
+                                <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center" HorizontalAlignment="Stretch" />
+                            </Grid>
                             <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="Background" Value="{StaticResource Hover}" /></Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource ShadeIn}" /></Trigger.EnterActions>
+                                    <Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource ShadeOut}" /></Trigger.ExitActions>
+                                </Trigger>
                                 <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.45" /></Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -150,20 +172,174 @@
                 <Setter Property="RenderTransform"><Setter.Value><ScaleTransform /></Setter.Value></Setter>
             </Style>
 
+            <!-- App logo (same as AppIcon.ico): a white monitor with four panes; panes take the button colour and pop in one by one -->
+            <ControlTemplate x:Key="LogoMark" TargetType="ContentControl">
+                <Viewbox>
+                    <Canvas Width="168" Height="146" Background="Transparent">
+                <Canvas.Resources>
+                    <Storyboard x:Key="Pop">
+                        <DoubleAnimation Storyboard.TargetName="P1" Storyboard.TargetProperty="RenderTransform.ScaleX" From="0" To="1" BeginTime="0:0:0.00" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="P1" Storyboard.TargetProperty="RenderTransform.ScaleY" From="0" To="1" BeginTime="0:0:0.00" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="P2" Storyboard.TargetProperty="RenderTransform.ScaleX" From="0" To="1" BeginTime="0:0:0.07" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="P2" Storyboard.TargetProperty="RenderTransform.ScaleY" From="0" To="1" BeginTime="0:0:0.07" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="P4" Storyboard.TargetProperty="RenderTransform.ScaleX" From="0" To="1" BeginTime="0:0:0.14" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="P4" Storyboard.TargetProperty="RenderTransform.ScaleY" From="0" To="1" BeginTime="0:0:0.14" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="P3" Storyboard.TargetProperty="RenderTransform.ScaleX" From="0" To="1" BeginTime="0:0:0.21" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="P3" Storyboard.TargetProperty="RenderTransform.ScaleY" From="0" To="1" BeginTime="0:0:0.21" Duration="0:0:0.32"><DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.5" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                    </Storyboard>
+                </Canvas.Resources>
+                        <Canvas.Triggers>
+                            <EventTrigger RoutedEvent="Canvas.Loaded"><BeginStoryboard Storyboard="{StaticResource Pop}" /></EventTrigger>
+                            <EventTrigger RoutedEvent="Canvas.MouseEnter"><BeginStoryboard Storyboard="{StaticResource Pop}" /></EventTrigger>
+                        </Canvas.Triggers>
+                        <Rectangle Width="168" Height="116" RadiusX="16" RadiusY="16" Fill="White" />
+                        <Rectangle Canvas.Left="72" Canvas.Top="114" Width="24" Height="22" Fill="White" />
+                        <Rectangle Canvas.Left="40" Canvas.Top="130" Width="88" Height="16" RadiusX="8" RadiusY="8" Fill="White" />
+                        <Rectangle x:Name="P1" Canvas.Left="50" Canvas.Top="24" Width="31" Height="31" Fill="{Binding Background, RelativeSource={RelativeSource AncestorType=Button}}" RenderTransformOrigin="0.5,0.5"><Rectangle.RenderTransform><ScaleTransform /></Rectangle.RenderTransform></Rectangle>
+                        <Rectangle x:Name="P2" Canvas.Left="87" Canvas.Top="24" Width="31" Height="31" Fill="{Binding Background, RelativeSource={RelativeSource AncestorType=Button}}" RenderTransformOrigin="0.5,0.5"><Rectangle.RenderTransform><ScaleTransform /></Rectangle.RenderTransform></Rectangle>
+                        <Rectangle x:Name="P3" Canvas.Left="50" Canvas.Top="61" Width="31" Height="31" Fill="{Binding Background, RelativeSource={RelativeSource AncestorType=Button}}" RenderTransformOrigin="0.5,0.5"><Rectangle.RenderTransform><ScaleTransform /></Rectangle.RenderTransform></Rectangle>
+                        <Rectangle x:Name="P4" Canvas.Left="87" Canvas.Top="61" Width="31" Height="31" Fill="{Binding Background, RelativeSource={RelativeSource AncestorType=Button}}" RenderTransformOrigin="0.5,0.5"><Rectangle.RenderTransform><ScaleTransform /></Rectangle.RenderTransform></Rectangle>
+                    </Canvas>
+                </Viewbox>
+            </ControlTemplate>
+
+            <!-- Big round launch button -->
+            <Style x:Key="Orb" TargetType="Button" BasedOn="{StaticResource Tappable}">
+                <Setter Property="Width" Value="152" />
+                <Setter Property="Height" Value="152" />
+                <Setter Property="Background" Value="{StaticResource Accent}" />
+                <Setter Property="Foreground" Value="White" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="Body">
+                                <Ellipse x:Name="Disc" Fill="{TemplateBinding Background}" />
+                                <Ellipse x:Name="Shade" Fill="#18FFFFFF" Opacity="0" />
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource ShadeIn}" /></Trigger.EnterActions>
+                                    <Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource ShadeOut}" /></Trigger.ExitActions>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Disc" Property="Fill" Value="#C7C7CC" /></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <!-- Grows a little under the mouse; press/release comes from Tappable -->
+                    <EventTrigger RoutedEvent="MouseEnter">
+                        <BeginStoryboard><Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" To="1.04" Duration="0:0:0.35" EasingFunction="{StaticResource Soft}" />
+                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" To="1.04" Duration="0:0:0.35" EasingFunction="{StaticResource Soft}" />
+                        </Storyboard></BeginStoryboard>
+                    </EventTrigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Form in a group: one line per field, label on the left, thin rule between lines -->
+            <Style x:Key="FormLine" TargetType="DockPanel">
+                <Setter Property="MinHeight" Value="40" />
+                <Setter Property="LastChildFill" Value="True" />
+            </Style>
+            <!-- Plain text entry inside a form line: no box, the line itself is the field -->
+            <Style x:Key="FormField" TargetType="TextBox">
+                <Setter Property="FontSize" Value="15" />
+                <Setter Property="Foreground" Value="{StaticResource Ink}" />
+                <Setter Property="CaretBrush" Value="{StaticResource Accent}" />
+                <Setter Property="VerticalAlignment" Value="Stretch" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                            <Border Background="Transparent"><ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" /></Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="FormSecret" TargetType="PasswordBox">
+                <Setter Property="FontSize" Value="15" />
+                <Setter Property="Foreground" Value="{StaticResource Ink}" />
+                <Setter Property="CaretBrush" Value="{StaticResource Accent}" />
+                <Setter Property="VerticalAlignment" Value="Stretch" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="PasswordBox">
+                            <Border Background="Transparent"><ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" /></Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- Grey hint shown inside an empty field -->
+            <Style x:Key="FormHint" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="15" />
+                <Setter Property="Foreground" Value="#B4B4B9" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Margin" Value="2,0,0,0" />
+                <Setter Property="IsHitTestVisible" Value="False" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            </Style>
+            <Style x:Key="FormLabel" TargetType="TextBlock" BasedOn="{StaticResource RowText}">
+                <Setter Property="Width" Value="104" />
+                <Setter Property="DockPanel.Dock" Value="Left" />
+            </Style>
+            <Style x:Key="FormRule" TargetType="Border">
+                <Setter Property="Height" Value="1" />
+                <Setter Property="Background" Value="{StaticResource Line}" />
+            </Style>
+
+            <!-- Segmented choice inside a grey capsule (same look as the − / + steppers) -->
+            <Style x:Key="Seg" TargetType="RadioButton">
+                <Setter Property="GroupName" Value="ptype" />
+                <Setter Property="FontSize" Value="13.5" />
+                <Setter Property="Foreground" Value="{StaticResource Ink}" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Grid>
+                                <Border x:Name="Shade" Background="#0C000000" CornerRadius="8" Opacity="0" />
+                                <Border x:Name="Tile" Background="Transparent" CornerRadius="7" Padding="11,4">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource ShadeIn}" /></Trigger.EnterActions>
+                                    <Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource ShadeOut}" /></Trigger.ExitActions>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="Tile" Property="Background" Value="White" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                    <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- Round − / + stepper buttons -->
             <Style x:Key="Step" TargetType="Button" BasedOn="{StaticResource Tappable}">
-                <Setter Property="Width" Value="34" />
-                <Setter Property="Height" Value="34" />
+                <Setter Property="Width" Value="32" />
+                <Setter Property="Height" Value="32" />
                 <Setter Property="FontSize" Value="18" />
                 <Setter Property="Foreground" Value="{StaticResource Accent}" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Border x:Name="Body" Background="#EEF2F7" CornerRadius="17">
+                            <Grid x:Name="Body" Background="Transparent">
+                                <Border x:Name="Shade" Background="#1A3390EC" CornerRadius="9" Opacity="0" />
                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}" />
-                            </Border>
+                            </Grid>
                             <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Body" Property="Background" Value="#E2EAF4" /></Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource ShadeIn}" /></Trigger.EnterActions>
+                                    <Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource ShadeOut}" /></Trigger.ExitActions>
+                                </Trigger>
                                 <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.4" /></Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -180,7 +356,7 @@
                 <Setter Property="Foreground" Value="{StaticResource Ink}" />
                 <Setter Property="TextAlignment" Value="Center" />
                 <Setter Property="VerticalContentAlignment" Value="Center" />
-                <Setter Property="Width" Value="62" />
+                <Setter Property="Width" Value="52" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="TextBox">
@@ -202,8 +378,8 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="TextBox">
-                            <Border x:Name="Body" CornerRadius="12" Background="#F2F2F7" Padding="12,10" BorderThickness="1.5" BorderBrush="Transparent">
-                                <ScrollViewer x:Name="PART_ContentHost" />
+                            <Border x:Name="Body" CornerRadius="11" Background="#F2F2F7" Padding="12,5" BorderThickness="1.5" BorderBrush="Transparent">
+                                <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Body" Property="BorderBrush" Value="{StaticResource Accent}" /><Setter TargetName="Body" Property="Background" Value="White" /></Trigger>
@@ -217,8 +393,8 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="PasswordBox">
-                            <Border x:Name="Body" CornerRadius="12" Background="#F2F2F7" Padding="12,10" BorderThickness="1.5" BorderBrush="Transparent">
-                                <ScrollViewer x:Name="PART_ContentHost" />
+                            <Border x:Name="Body" CornerRadius="11" Background="#F2F2F7" Padding="12,5" BorderThickness="1.5" BorderBrush="Transparent">
+                                <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Body" Property="BorderBrush" Value="{StaticResource Accent}" /><Setter TargetName="Body" Property="Background" Value="White" /></Trigger>
