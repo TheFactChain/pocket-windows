@@ -493,7 +493,7 @@ def package_release(release, source, master):
         raise RuntimeError('Could not prepare the approved gateway package')
     instructions = ('Windows Claude Portable — ' + manifest['release_id'] + '\n\n'
                     'Распакуй ' + archive_name + ' Проводником в новую папку.\n'
-                    'Открой Windows-Claude\\Launcher.exe. Ярлык можно создать в разделе Справка.\n'
+                    'Открой Windows-Claude\\Launcher.exe. Ярлык на рабочий стол создаётся на главной странице.\n'
                     'Файл .sha256 служит для проверки целостности архива.\n'
                     'Личные подключения в этот комплект не входят.\n')
     (stage / 'НАЧАТЬ.txt').write_text(instructions, encoding='utf-8-sig')

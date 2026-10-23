@@ -141,7 +141,8 @@
                     <Grid>
 
                         <!-- Connections: just the list and one row to add; adding and editing open in the card -->
-                        <StackPanel x:Name="ConnectionsPane">
+                        <ScrollViewer x:Name="ConnectionsPane" VerticalScrollBarVisibility="Hidden" PanningMode="VerticalOnly">
+                          <StackPanel>
                             <Border x:Name="ProfilesGroup" Style="{StaticResource GroupBox}" Margin="0">
                                 <StackPanel>
                                     <StackPanel x:Name="ProfileList" />
@@ -155,7 +156,8 @@
                                 </StackPanel>
                             </Border>
                             <TextBlock x:Name="ProfileStateText" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,8,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-                        </StackPanel>
+                          </StackPanel>
+                        </ScrollViewer>
 
                         <!-- Windows settings, saved automatically -->
                 <ScrollViewer x:Name="SettingsPane" VerticalScrollBarVisibility="Hidden" PanningMode="VerticalOnly" Visibility="Collapsed">

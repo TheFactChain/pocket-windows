@@ -12,7 +12,7 @@ POWERSHELL = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/p
 
 class InstallGuestHelperTests(unittest.TestCase):
     def fixture(self, body):
-        with tempfile.TemporaryDirectory(prefix='guest-helper-', dir=SOURCE.parent.parent / 'tests') as temporary:
+        with tempfile.TemporaryDirectory(prefix='guest-helper-') as temporary:
             command = r'''
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'

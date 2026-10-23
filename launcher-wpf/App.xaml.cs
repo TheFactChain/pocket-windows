@@ -22,7 +22,7 @@ namespace WindowsClaude.Launcher
             {
                 if (args.Length > 0) { Console.Error.WriteLine(error.GetType().Name + ": " + error.Message); return 1; }
                 // Keep the cause for diagnostics; the message box below stays generic.
-                try { File.AppendAllText(Path.Combine(Bridge.Root, "logs", "launcher-error.log"), DateTime.Now.ToString("o") + " " + error + Environment.NewLine); } catch (Exception) { }
+                try { Directory.CreateDirectory(Path.Combine(Bridge.Root, "logs")); File.AppendAllText(Path.Combine(Bridge.Root, "logs", "launcher-error.log"), DateTime.Now.ToString("o") + " " + error + Environment.NewLine); } catch (Exception) { }
                 MessageBox.Show("Не удалось открыть панель. Проверь целостность комплекта и .NET Framework 4.8.", "Windows Claude");
                 return 1;
             }

@@ -11,7 +11,7 @@ class GuestEnvironmentTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows guest helper build')
     def test_both_helpers_recognize_branded_qemu_and_refuse_the_host(self):
         compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-        with tempfile.TemporaryDirectory(prefix='guest-environment-', dir=ROOT / 'state') as temporary:
+        with tempfile.TemporaryDirectory(prefix='guest-environment-') as temporary:
             for helper in ('files/GuestFiles.cs', 'settings/GuestSettings.cs'):
                 with self.subTest(helper=helper):
                     executable = Path(temporary) / (Path(helper).stem + '.exe')
