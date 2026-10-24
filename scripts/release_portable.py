@@ -13,7 +13,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pack_existing_runtime as pack
@@ -170,8 +172,19 @@ def verify_release(release):
     app = release / 'app'
     if read_json(pack.file_under(app, INFO), 4096) != info:
         raise ValueError('Application and release provenance differ')
-    if common_records(app) != validate_common_records(manifest.get('common_files')):
-        raise ValueError('Application payload differs from release inventory')
+    rows = validate_common_records(manifest.get('common_files'))
+    omitted = manifest.get('omitted')
+    if omitted is None:
+        if common_records(app) != rows:
+            raise ValueError('Application payload differs from release inventory')
+    else:
+        # A light package leaves out files the previous release already shipped unchanged.
+        if (type(omitted) is not list or len(set(omitted)) != len(omitted)
+                or not set(omitted) <= {row['path'] for row in rows}):
+            raise ValueError('Invalid list of omitted files')
+        for row in rows:
+            if row['path'] not in omitted and file_record(pack.file_under(app, row['path']), row['path']) != row:
+                raise ValueError('Application payload differs from release inventory: ' + row['path'])
     archive_name = 'Pocket-Windows-' + info['release_id'] + '.zip'
     artifacts = {'Setup.exe', 'Windows-Claude.zip', 'Windows-Claude.zip.sha256',
                  'Windows-Claude.zip.manifest.json', archive_name, archive_name + '.sha256',
@@ -311,8 +324,14 @@ def apply_update(release, target):
                     raise ValueError('Invalid legacy format declaration; retain it for inspection')
                 if not legacy_marker.exists():
                     atomic_json(legacy_marker, expected_legacy)
-            previous_bytes = 0
+            omitted = set(manifest.get('omitted') or ())
             for row in manifest['common_files']:
+                if row['path'] in omitted and (not (target / row['path']).exists()
+                        or file_record(pack.file_under(target, row['path']), row['path']) != row):
+                    raise RuntimeError('This copy is too old for the light update; install the full package: ' + row['path'])
+            rows = [row for row in manifest['common_files'] if row['path'] not in omitted]
+            previous_bytes = 0
+            for row in rows:
                 path = target / row['path']
                 directory(path.parent)
                 pins.enter_context(_pinned_directory(path.parent, create=False))
@@ -321,14 +340,14 @@ def apply_update(release, target):
                     with _exclusive_file(path, create=False):
                         pass
                     previous_bytes += path.stat().st_size
-            needed = sum(row['bytes'] for row in manifest['common_files']) + 2 * previous_bytes + 16 * 1024**2
+            needed = sum(row['bytes'] for row in rows) + 2 * previous_bytes + 16 * 1024**2
             if shutil.disk_usage(target).free < needed:
                 raise RuntimeError('Insufficient space for update staging, backups and rollback')
             transaction = directory(target / 'state' / ('app-update-' + uuid.uuid4().hex))
             pins.enter_context(_pinned_directory(transaction, create=False))
             journal = {'schema': 1, 'target': str(target), 'transaction': transaction.name,
                        'release_id': manifest['release_id'], 'phase': 'prepared', 'files': []}
-            for row in manifest['common_files']:
+            for row in rows:
                 path = target / row['path']
                 staged = transaction / 'new' / row['path']
                 copy_record(release / 'app' / row['path'], staged, row)
@@ -547,6 +566,58 @@ def publish_release(release, destination):
     return {'published': str(destination), 'previous': str(backup) if existed else None}
 
 
+def package_app(release, base=None):
+    """Light update package: the application files, minus those the base release shipped unchanged."""
+    release = absolute(release)
+    manifest = verify_release(release)
+    known = {row['path']: row for row in read_json(absolute(base))['common_files']} if base else {}
+    omitted = sorted(row['path'] for row in manifest['common_files'] if known.get(row['path']) == row)
+    light = dict(manifest, artifacts={}, omitted=omitted, manual_acceptance=None)
+    name = 'Pocket-Windows-' + manifest['release_id'] + '-app.zip'
+    archive = release / name
+    if archive.exists():
+        raise FileExistsError('Light package already exists')
+    with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+        bundle.writestr('RELEASE.json', json_bytes(light))
+        for row in manifest['common_files']:
+            if row['path'] not in omitted:
+                bundle.write(pack.file_under(release / 'app', row['path']), 'app/' + row['path'])
+    digest = _sha256_file(archive)
+    (release / (name + '.sha256')).write_text(digest + '  ' + name + '\n', encoding='ascii')
+    # An installed copy only accepts file names its own version knows: new ones need the full package.
+    added = sorted(row['path'] for row in manifest['common_files'] if known and row['path'] not in known and not row['path'].startswith(pack.RUNTIME_PREFIXES))
+    return {'package': str(archive), 'bytes': archive.stat().st_size, 'sha256': digest, 'omitted': len(omitted), 'new_application_files': added}
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for block in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def install_app(archive, sha256, target):
+    """Verify a downloaded light package, unpack it outside the target and apply it as a normal update."""
+    archive = absolute(archive)
+    if not re.fullmatch('[a-f0-9]{64}', sha256 or '') or _sha256_file(archive) != sha256:
+        raise ValueError('The downloaded update does not match its checksum')
+    stage = Path(tempfile.mkdtemp(prefix='pocket-windows-update-'))
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            for info in bundle.infolist():
+                name = info.filename
+                if name != 'RELEASE.json' and not (name.startswith('app/') and common_name(name[4:])):
+                    raise ValueError('Unexpected file in the update package: ' + name)
+                destination = stage / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(info) as source, open(destination, 'xb') as outgoing:
+                    shutil.copyfileobj(source, outgoing, 1 << 20)
+        return apply_update(stage, target)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -562,6 +633,13 @@ def main():
     update = commands.add_parser('update')
     update.add_argument('--release', type=Path, required=True)
     update.add_argument('--target', type=Path, required=True)
+    light = commands.add_parser('app-package')
+    light.add_argument('--release', type=Path, required=True)
+    light.add_argument('--base', type=Path, help='RELEASE.json of the previous release: files it shipped unchanged are left out')
+    install = commands.add_parser('install-app')
+    install.add_argument('--zip', type=Path, required=True)
+    install.add_argument('--sha256', required=True)
+    install.add_argument('--target', type=Path, required=True)
     rollback = commands.add_parser('rollback')
     rollback.add_argument('--target', type=Path, required=True)
     publish = commands.add_parser('publish')
@@ -575,6 +653,10 @@ def main():
         result = package_release(args.release, args.source, args.master)
     elif args.command == 'update':
         result = apply_update(args.release, args.target)
+    elif args.command == 'app-package':
+        result = package_app(args.release, args.base)
+    elif args.command == 'install-app':
+        result = install_app(args.zip, args.sha256, args.target)
     elif args.command == 'rollback':
         result = rollback_update(args.target)
     elif args.command == 'publish':

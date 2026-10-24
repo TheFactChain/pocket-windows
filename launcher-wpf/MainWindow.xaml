@@ -111,7 +111,19 @@
                             </StackPanel>
                         </Border>
                         <!-- Shop: both offers live in one group at the bottom, each opens a short sheet with what you get -->
-                        <Border Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center">
+                        <Border x:Name="UpdateGroup" Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center" Visibility="Collapsed">
+                            <Button x:Name="UpdateRow" Style="{StaticResource Row}" Padding="16,6" Click="OnUpdate">
+                                <DockPanel>
+                                    <Border x:Name="UpdatePill" DockPanel.Dock="Right" CornerRadius="12" Padding="11,4" Background="#E3F7E8" VerticalAlignment="Center"><TextBlock x:Name="UpdateAction" Text="Обновить" FontSize="12.5" FontWeight="SemiBold" Foreground="#1E7A36" /></Border>
+                                    <Border Width="30" Height="30" CornerRadius="9" Background="#34C759" Margin="0,0,14,0"><ui:SymbolIcon Symbol="ArrowDownload24" FontSize="17" Foreground="White" /></Border>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock x:Name="UpdateTitle" Style="{StaticResource RowText}" />
+                                        <TextBlock x:Name="UpdateCaption" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
+                        </Border>
+                        <Border x:Name="KeysGroup" Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center">
                             <Button Style="{StaticResource Row}" Padding="16,6" Click="OnHelp" ToolTip="F1">
                                 <DockPanel>
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>

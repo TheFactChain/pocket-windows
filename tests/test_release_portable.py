@@ -173,6 +173,46 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((Path(result['backup']) / 'old/Launcher.exe').read_bytes(), self.old_launcher)
         self.unchanged_private()
 
+    def next_release(self):
+        """A second release in which only one application file and the version differ."""
+        old_manifest = self.base / 'old-RELEASE.json'
+        old_manifest.write_bytes((self.bundle / 'RELEASE.json').read_bytes())
+        release.apply_update(self.bundle, self.target)
+        self.info = dict(self.info, release_id='2026.10.23.2')
+        self.write(self.app, 'release-info.json', json.dumps(self.info).encode())
+        self.write(self.app, release.pack.APP_FILES[0], b'newer code')
+        self.manifest.update(release_id=self.info['release_id'], common_files=release.common_records(self.app))
+        self.save_manifest()
+        return old_manifest
+
+    def test_light_package_ships_only_changed_files_and_installs(self):
+        result = release.package_app(self.bundle, self.next_release())
+        self.assertGreater(result['omitted'], 0)
+        with zipfile.ZipFile(result['package']) as archive:
+            names = set(archive.namelist())
+        self.assertIn('app/' + release.pack.APP_FILES[0], names)
+        self.assertIn('app/release-info.json', names)
+        self.assertNotIn('app/' + release.pack.APP_FILES[1], names)
+        installed = release.install_app(result['package'], result['sha256'], self.target)
+        self.assertEqual(installed['release_id'], '2026.10.23.2')
+        self.assertEqual((self.target / release.pack.APP_FILES[0]).read_bytes(), b'newer code')
+        self.assertEqual((self.target / release.pack.APP_FILES[1]).read_bytes(), (self.app / release.pack.APP_FILES[1]).read_bytes())
+        self.unchanged_private()
+
+    def test_light_package_with_wrong_checksum_is_rejected_before_changes(self):
+        result = release.package_app(self.bundle, self.next_release())
+        before = (self.target / release.pack.APP_FILES[0]).read_bytes()
+        with self.assertRaises(ValueError):
+            release.install_app(result['package'], '0' * 64, self.target)
+        self.assertEqual((self.target / release.pack.APP_FILES[0]).read_bytes(), before)
+
+    def test_light_package_refuses_a_copy_that_lacks_an_omitted_file(self):
+        result = release.package_app(self.bundle, self.next_release())
+        (self.target / release.pack.APP_FILES[1]).write_bytes(b'something else')
+        with self.assertRaises(RuntimeError):
+            release.install_app(result['package'], result['sha256'], self.target)
+        self.assertEqual((self.target / release.pack.APP_FILES[1]).read_bytes(), b'something else')
+
     def test_tampered_input_is_rejected_before_target_changes(self):
         (self.app / 'scripts/portable_app.py').write_bytes(b'tampered')
         with self.assertRaises(ValueError):

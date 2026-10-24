@@ -112,7 +112,7 @@ namespace WindowsClaude.Launcher
                 var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
                 if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
                 Rise(LaunchCard, 0); Rise(HomePage, 90);
-                StartLifecycle(); StartShopNudge(); await RunAction("diagnose", false);
+                StartLifecycle(); StartShopNudge(); StartUpdateCheck(); await RunAction("diagnose", false);
             };
             Closing += OnClosing;
         }
@@ -662,6 +662,53 @@ namespace WindowsClaude.Launcher
             };
             timer.Start();
         }
+        // ---------- Updates from GitHub Releases ----------
+        AppUpdate.Offer updateOffer;
+        bool updating;
+
+        async void StartUpdateCheck()
+        {
+            string report = AppUpdate.TakeReport(Bridge.Root);
+            if (report != null) SetOperation(report);
+            while (!closing)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(8));
+                if (!updating)
+                {
+                    updateOffer = await AppUpdate.CheckAsync(ReleaseInfo.Read(Bridge.Root).ReleaseId);
+                    ShowUpdateOffer();
+                }
+                await Task.Delay(TimeSpan.FromHours(6));
+            }
+        }
+
+        void ShowUpdateOffer()
+        {
+            bool offered = updateOffer != null;
+            Show(UpdateGroup, offered); Show(KeysGroup, !offered);
+            if (!offered) return;
+            UpdateTitle.Text = "Версия " + updateOffer.Id; UpdateCaption.Text = "Обновление приложения, Windows и данные не затрагиваются";
+        }
+
+        async void OnUpdate(object sender, RoutedEventArgs e)
+        {
+            if (updating || updateOffer == null) return;
+            if (runtimeActive || busy || outcomeUnknown) { SetOperation("Сначала выключи Windows, потом обновляй."); return; }
+            updating = true; UpdateAction.Text = "0%";
+            try
+            {
+                var package = await AppUpdate.DownloadAsync(updateOffer, percent => Dispatcher.Invoke(delegate { UpdateAction.Text = percent + "%"; }));
+                UpdateAction.Text = "Установка";
+                AppUpdate.Launch(Bridge.Root, package[0], package[1]);
+                Close();
+            }
+            catch (Exception error)
+            {
+                updating = false; UpdateAction.Text = "Обновить";
+                SetOperation("Не удалось скачать обновление: " + error.Message);
+            }
+        }
+
         static void OpenContact(string message)
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ContactUrl + "?text=" + Uri.EscapeDataString(message)) { UseShellExecute = true }); }
