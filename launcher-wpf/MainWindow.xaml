@@ -120,7 +120,7 @@
                                 </DockPanel>
                             </Button>
                         </Border>
-                        <Border Grid.Row="2" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom">
+                        <Border x:Name="ShopGroup" Grid.Row="2" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom" RenderTransformOrigin="0.5,0.5">
                             <StackPanel>
                                 <Button x:Name="ProxyRow" Style="{StaticResource Row}" Padding="16,6" Click="OnBuyProxy">
                                     <DockPanel>

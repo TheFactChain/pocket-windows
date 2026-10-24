@@ -112,7 +112,7 @@ namespace WindowsClaude.Launcher
                 var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
                 if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
                 Rise(LaunchCard, 0); Rise(HomePage, 90);
-                StartLifecycle(); await RunAction("diagnose", false);
+                StartLifecycle(); StartShopNudge(); await RunAction("diagnose", false);
             };
             Closing += OnClosing;
         }
@@ -645,6 +645,27 @@ namespace WindowsClaude.Launcher
         void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Proxy"); }
         void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Claude Pro"); }
         // t.me opens the chat with the message already typed in; a bot takes the same idea as ?start=<code>.
+        // Every 5 seconds the shop group lifts and swells for a moment, smooth but noticeable, to catch the eye.
+        void StartShopNudge()
+        {
+            var scale = new ScaleTransform(1, 1); var lift = new TranslateTransform();
+            var group = new TransformGroup(); group.Children.Add(scale); group.Children.Add(lift); ShopGroup.RenderTransform = group;
+            var ease = new SineEase { EasingMode = EasingMode.EaseInOut };
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            timer.Tick += delegate
+            {
+                if (!ShopGroup.IsVisible || ShopGroup.IsMouseOver || SheetHost.Visibility == Visibility.Visible) return;
+                var grow = new DoubleAnimationUsingKeyFrames();
+                grow.KeyFrames.Add(new EasingDoubleKeyFrame(1.035, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(450)), ease));
+                grow.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(950)), ease));
+                var up = new DoubleAnimationUsingKeyFrames();
+                up.KeyFrames.Add(new EasingDoubleKeyFrame(-5, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(450)), ease));
+                up.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(950)), ease));
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow); scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow.Clone());
+                lift.BeginAnimation(TranslateTransform.YProperty, up);
+            };
+            timer.Start();
+        }
         static void OpenContact(string message)
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ContactUrl + "?text=" + Uri.EscapeDataString(message)) { UseShellExecute = true }); }
