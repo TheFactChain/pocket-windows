@@ -516,7 +516,6 @@ namespace WindowsClaude.Launcher
                 var runtime = Child(result, "runtime");
                 workState = Text(runtime, "work", "unknown"); gatewayState = Text(runtime, "gateway", "unknown");
                 runtimeActive = ActiveVmState(workState) || ActiveVmState(gatewayState);
-                NoteRunning();
                 var connection = Child(result, "connection");
                 var selected = Child(connection, "selected_profile");
                 if (selected == null) { ConnectionValue.Text = "Добавить подключение"; ConnectionDetail.Text = "Вставь ссылку от своего Proxy или купи ниже"; ProxyPrice.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0.55, TimeSpan.FromSeconds(1.6)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } }); }
@@ -642,32 +641,14 @@ namespace WindowsClaude.Launcher
 
         // ---------- Offers: Proxy and Claude Pro are bought in the Telegram bot; until the bot exists the link leads to the seller ----------
         const string ContactUrl = "https://t.me/Daniil_Simples";
-        bool runningNoted, promoBalloonPending;
-
-        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Здравствуйте! Хочу купить Proxy за 900 ₽."); }
-        void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Здравствуйте! Хочу оформить Claude Pro за 2 000 ₽."); }
+        
+        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Proxy"); }
+        void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Claude Pro"); }
         // t.me opens the chat with the message already typed in; a bot takes the same idea as ?start=<code>.
         static void OpenContact(string message)
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ContactUrl + "?text=" + Uri.EscapeDataString(message)) { UseShellExecute = true }); }
             catch (Exception) { System.Windows.MessageBox.Show("Не удалось открыть Telegram. Ссылка на бота: " + ContactUrl, "Pocket Windows"); }
-        }
-        // Once a day, right after Windows has come up, a quiet reminder from the tray.
-        void NoteRunning()
-        {
-            if (workState != "running") { runningNoted = false; return; }
-            if (runningNoted) return;
-            runningNoted = true;
-            try
-            {
-                string path = System.IO.Path.Combine(Bridge.Root, "state", "offer-reminder.txt"), today = DateTime.Now.ToString("yyyy-MM-dd");
-                if (File.Exists(path) && File.ReadAllText(path).Trim() == today) return;
-                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)); File.WriteAllText(path, today);
-            }
-            catch (Exception) { return; }
-            if (trayIcon == null) return;
-            promoBalloonPending = true;
-            trayIcon.ShowBalloonTip(6000, "Pocket Windows", "Нужен Proxy или Claude Pro? Нажми здесь, откроется бот в Telegram.", Forms.ToolTipIcon.Info);
         }
 
         // ---------- Lifecycle, tray, polling ----------
@@ -675,8 +656,6 @@ namespace WindowsClaude.Launcher
         {
             trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Pocket Windows" };
             trayIcon.DoubleClick += delegate { ShowPanel(false, "tray double click"); };
-            trayIcon.BalloonTipClicked += delegate { if (promoBalloonPending) { promoBalloonPending = false; OpenContact("Здравствуйте! Хочу купить Proxy или Claude Pro."); } };
-            trayIcon.BalloonTipClosed += delegate { promoBalloonPending = false; };
             trayIcon.MouseUp += delegate (object sender, Forms.MouseEventArgs e) { if (e.Button == Forms.MouseButtons.Right) ShowTrayMenu(); };
             lifecycleTimer.Tick += async delegate { await RefreshRuntimeAsync(); };
             lifecycleTimer.Start(); UpdateTray();
