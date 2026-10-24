@@ -16,7 +16,7 @@ namespace WindowsClaude.Launcher
     // then a copy of the bundled Python installs it after the launcher has exited.
     internal static class AppUpdate
     {
-        const string GitHubApi = "https://api.github.com/repos/nekontritce11123-lab/windows-claude-portable/releases/latest";
+        const string GitHubApi = "https://api.github.com/repos/nekontritce11123-lab/pocket-windows/releases/latest";
 
         // Tests may point the check at a loopback server; any other override is ignored.
         static string Api

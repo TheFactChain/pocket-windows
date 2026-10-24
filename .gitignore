@@ -37,3 +37,10 @@ __pycache__/
 *.png
 *.jpg
 *.ppm
+!docs/assets/readme/launcher.png
+!docs/assets/readme/connection.png
+!docs/assets/readme/settings.png
+!docs/assets/readme/diagnostics.png
+!docs/assets/readme/desktop.png
+!docs/assets/readme/files.png
+!docs/assets/readme/social-preview.png

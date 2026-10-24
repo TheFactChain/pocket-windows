@@ -6,7 +6,9 @@ import sys
 from pathlib import Path
 
 SOURCE_DIRS = {'docs', 'gateway', 'guest', 'host', 'launcher-wpf', 'patches', 'scripts', 'tests', 'ui'}
-SOURCE_FILES = {'.gitattributes', '.gitignore', 'AGENTS.md', 'README.md', 'Start.cmd'}
+SOURCE_FILES = {'.gitattributes', '.gitignore', 'AGENTS.md', 'README.md', 'README.en.md', 'Start.cmd'}
+README_IMAGES = {'docs/assets/readme/' + name for name in (
+    'launcher.png', 'connection.png', 'settings.png', 'diagnostics.png', 'desktop.png', 'files.png', 'social-preview.png')}
 BANNED_SUFFIXES = {'.zip', '.7z', '.exe', '.dll', '.qcow2', '.qcow', '.vhd', '.vhdx', '.vmdk', '.iso', '.img',
                    '.raw', '.fd', '.log', '.pcap', '.pcapng', '.pem', '.key', '.png', '.jpg', '.ppm', '.pyc'}
 BANNED_NAMES = {'.env'}
@@ -26,7 +28,7 @@ def tracked_problems(source):
             problems.append('Unexpected file in the repository root: ' + name)
         elif len(path.parts) > 1 and path.parts[0] not in SOURCE_DIRS:
             problems.append('Unexpected folder in the repository: ' + path.parts[0])
-        if path.suffix.lower() in BANNED_SUFFIXES:
+        if path.suffix.lower() in BANNED_SUFFIXES and name not in README_IMAGES:
             problems.append('Binary, log or capture is tracked: ' + name)
         if path.name in BANNED_NAMES or path.name.startswith('.env'):
             problems.append('Secret file is tracked: ' + name)

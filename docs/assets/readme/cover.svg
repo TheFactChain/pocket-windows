@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
+  <title id="title">Pocket Windows</title>
+  <desc id="desc">Pocket Windows, a portable Windows 11 desktop. Blue window mark on a light background.</desc>
+  <rect x="1" y="1" width="1278" height="318" rx="28" fill="#f5f8fc" stroke="#dde7f2" stroke-width="2"/>
+  <rect x="64" y="80" width="160" height="160" rx="38" fill="#3390ec"/>
+  <g fill="#fff">
+    <rect x="102" y="118" width="37" height="37" rx="4"/>
+    <rect x="149" y="118" width="37" height="37" rx="4"/>
+    <rect x="102" y="165" width="37" height="37" rx="4"/>
+    <rect x="149" y="165" width="37" height="37" rx="4"/>
+  </g>
+  <text x="270" y="164" fill="#182b42" font-family="Segoe UI,Arial,sans-serif" font-size="72" font-weight="600" letter-spacing="-2">Pocket Windows</text>
+  <text x="274" y="211" fill="#49627e" font-family="Segoe UI,Arial,sans-serif" font-size="22" letter-spacing="3">WINDOWS 11 IN ONE FOLDER</text>
+  <path d="M1110 104h66v66h-66z M1110 181h66v35h-66z" fill="#e2edf9"/>
+</svg>
