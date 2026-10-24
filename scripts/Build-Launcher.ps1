@@ -17,7 +17,7 @@ try
 {
     & $msbuild $project -t:Restore -nologo -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Launcher package restore failed.' }
-    & $msbuild $project -t:Rebuild -p:Configuration=Release ('-p:OutDir=' + $staging + '\') -nologo -v:minimal
+    & $msbuild $project -t:Rebuild -p:Configuration=Release ('-p:OutDir=' + $staging + '/') -nologo -v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Desktop launcher compilation failed.' }
     Copy-Item -LiteralPath (Join-Path $staging 'Launcher.exe') -Destination $exe
 }
