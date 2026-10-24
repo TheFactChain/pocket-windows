@@ -66,6 +66,8 @@ def _manifest(raw):
     required_apps = set(pack.APP_FILES)
     if 'scripts/package_integrity.py' not in payload:
         required_apps -= {'scripts/package_integrity.py', 'scripts/pack_existing_runtime.py'}
+    if 'scripts/release_portable.py' not in payload:  # packages from before the light updater
+        required_apps -= {'scripts/release_portable.py', 'scripts/prepare_runtime_bundle.py'}
     required = {*pack.DATA_FILES, *pack.PUBLIC_FILES, *required_apps,
                 *pack.COMPONENT_FILES, *RUNTIME_FILES, 'gateway/packages/current.json'}
     if (not required <= payload or value['encrypted_profiles_included'] is not (pack.PROFILE_FILE in payload)
