@@ -17,7 +17,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launch_runtime as runtime
-from file_snapshot import locked_read, QEMU_IMG_SHA256, remove_owned_file
+from file_snapshot import locked_read, QEMU_IMG_SHA256, remove_owned_file, qemu_path
 from gateway_profile import validate_session
 from profile_store import ProfileStore, _exclusive_file, _pinned_directory, _plain
 from runtime_config import load_settings
@@ -111,7 +111,7 @@ def arguments(root, directory, media, settings):
             '-drive', 'if=none,id=wcroot,format=qcow2,file=' + relative + '/gateway.qcow2',
             '-device', 'virtio-blk-pci,drive=wcroot,serial=WCROOT,bootindex=1',
             '-blockdev', json.dumps({'driver': 'raw', 'node-name': 'wcsession', 'read-only': True,
-                'file': {'driver': 'file', 'filename': str(media['path'])}}, ensure_ascii=True),
+                'file': {'driver': 'file', 'filename': qemu_path(media['path'])}}, ensure_ascii=True),
             '-device', 'virtio-blk-pci,drive=wcsession,serial=WCSESSION',
             '-device', 'pcie-root-port,id=wcportwan,chassis=1,slot=1',
             '-device', 'pcie-root-port,id=wcportlan,chassis=2,slot=2',

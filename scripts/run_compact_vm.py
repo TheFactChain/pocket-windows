@@ -1,6 +1,5 @@
 """Headless, offline maintenance-copy runner. Control permits ACPI shutdown only."""
 import argparse
-import ctypes
 from collections import deque
 import hashlib
 import json
@@ -20,22 +19,9 @@ from profile_store import _pinned_directory, _plain
 from reference_vm import read_qmp_stream
 from runtime_logs import CappedWriter, start_capped_drain
 from runtime_config import load_settings
+from file_snapshot import qemu_path
 import windows_hardware
 import windows_guest_settings as windows_settings
-
-
-def qemu_path(path):
-    value = str(path)
-    if not value.isascii():
-        # This QEMU build opens file arguments through the Windows ANSI API.
-        existing = path if path.exists() else path.parent
-        buffer = ctypes.create_unicode_buffer(32768)
-        if not ctypes.windll.kernel32.GetShortPathNameW(str(existing), buffer, len(buffer)):
-            raise OSError('Cannot obtain an ASCII path for the maintenance copy')
-        value = buffer.value if path.exists() else str(Path(buffer.value) / path.name)
-        if not value.isascii():
-            raise ValueError('Maintenance requires an ASCII Windows short path')
-    return value.replace('\\', '/')
 
 
 def arguments(project, operation, phase):

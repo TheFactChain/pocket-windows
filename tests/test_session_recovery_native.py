@@ -70,7 +70,7 @@ class NativeGatewayRecovery(unittest.TestCase):
         self.assertIsNone(self.child.poll())
 
     def test_reset_of_a_real_disposable_qemu_without_a_windows_disk(self):
-        root=self.root/'real disposable gateway'
+        root=self.root/'проверка шлюза'
         engine_dir=root/'runtime/qemu-11.1.0'
         shutil.copytree(ROOT/'runtime/qemu-11.1.0',engine_dir)
         (root/'state').mkdir()
@@ -84,7 +84,7 @@ class NativeGatewayRecovery(unittest.TestCase):
         argv=arguments(root,folder,{'path':carrier,'serial':'WCSESSION','readonly':True},
                        validate_settings({'gateway_memory_mib':256,'vcpus':1}))
         child=subprocess.Popen([str(engine_dir/'qemu-system-x86_64.exe'),*argv],cwd=root,
-            stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW)
         def finish():
             try:
@@ -94,9 +94,11 @@ class NativeGatewayRecovery(unittest.TestCase):
                 child.wait(timeout=10)
             finally:
                 child.stdin.close()
+                child.stderr.close()
         self.addCleanup(finish)
         time.sleep(.5)
-        self.assertIsNone(child.poll(),'Disposable QEMU must be alive before reset')
+        if child.poll() is not None:
+            self.fail('Disposable QEMU exited before reset: ' + child.stderr.read().decode('utf-8',errors='replace'))
         identity=runtime.process_identity(child.pid)
         state=dict(self.state,pid=child.pid,process=identity,nonce='e'*32,
                    disk=disk.relative_to(root).as_posix(),arguments=argv,carrier=str(carrier),

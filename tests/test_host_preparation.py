@@ -50,10 +50,13 @@ $result=Invoke-HostPreparation -Root 'ROOT'
         return json.loads(result.stdout.decode('utf-8-sig'))
 
     def test_elevated_command_runs_marked_script_without_inherited_policy(self):
+        self.script = self.root / 'подготовка ПК/scripts/Prepare-Host.ps1'
+        self.script.parent.mkdir(parents=True)
         original = str(SOURCE).replace("'", "''")
-        root = str(self.root).replace("'", "''")
+        root = str(self.script.parents[1]).replace("'", "''")
         command = """
 $ProgressPreference='SilentlyContinue'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $tokens=$null;$errors=$null
 $tree=[Management.Automation.Language.Parser]::ParseFile('SOURCE',[ref]$tokens,[ref]$errors)
 $node=$tree.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$arguments'},$true)

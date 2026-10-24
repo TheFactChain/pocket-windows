@@ -3,8 +3,25 @@ from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 import os
+from pathlib import Path
 
 QEMU_IMG_SHA256 = '9d930582d0d574bb106d89982c547688e10b8f356192d302cc3d0ae4e8674534'
+
+
+def qemu_path(path):
+    path = Path(path)
+    value = str(path)
+    if not value.isascii():
+        # This QEMU build opens file arguments through the Windows ANSI API.
+        existing = path if path.exists() else path.parent
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = ctypes.windll.kernel32.GetShortPathNameW(str(existing), buffer, len(buffer))
+        if not 0 < size < len(buffer):
+            raise OSError('Cannot obtain an ASCII path for QEMU')
+        value = buffer.value if path.exists() else str(Path(buffer.value) / path.name)
+        if not value.isascii():
+            raise ValueError('QEMU requires an ASCII Windows short path for this file')
+    return value.replace('\\', '/')
 
 
 def remove_owned_file(path, identity):
