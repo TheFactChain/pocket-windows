@@ -91,7 +91,7 @@
                                     <DockPanel>
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#5856D6" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Desktop24" FontSize="17" Foreground="White" /></Border>
                                         <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Text="Windows" Style="{StaticResource RowText}" />
+                                            <TextBlock Text="Характеристики" Style="{StaticResource RowText}" />
                                             <TextBlock x:Name="WindowsSummary" Text="Память, процессоры, экран, файлы" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                         </StackPanel>
                                     </DockPanel>
@@ -111,6 +111,10 @@
                                 </Button>
                             </StackPanel>
                         </Border>
+                        <StackPanel Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Center" Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button Style="{StaticResource TextAction}" Content="Клавиши" Click="OnHelp" ToolTip="F1" />
+                            <Button Style="{StaticResource TextAction}" Content="Ярлык на рабочий стол" Click="OnShortcut" Margin="14,0,0,0" />
+                        </StackPanel>
                         <!-- Shop: both offers live in one group at the bottom, each opens a short sheet with what you get -->
                         <Border Grid.Row="2" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom">
                             <StackPanel>
@@ -184,7 +188,7 @@
                     <StackPanel>
                         <Border x:Name="SettingsGroup" Style="{StaticResource GroupBox}" Margin="0,0,0,6">
                             <StackPanel x:Name="SettingsBody" IsEnabled="False">
-                                <DockPanel Margin="16,5">
+                                <DockPanel Margin="16,5" MinHeight="40">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#34C759" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Ram20" FontSize="17" Foreground="White" /></Border>
                                     <Border DockPanel.Dock="Right" Background="{StaticResource Page}" CornerRadius="10" Padding="2" VerticalAlignment="Center">
                                         <StackPanel Orientation="Horizontal">
@@ -196,7 +200,7 @@
                                     <TextBlock Text="Память, ГиБ" Style="{StaticResource RowText}" />
                                 </DockPanel>
                                 <Border Style="{StaticResource Separator}" />
-                                <DockPanel Margin="16,5">
+                                <DockPanel Margin="16,5" MinHeight="40">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#FF9500" Margin="0,0,14,0"><ui:SymbolIcon Symbol="DeveloperBoard20" FontSize="17" Foreground="White" /></Border>
                                     <Border DockPanel.Dock="Right" Background="{StaticResource Page}" CornerRadius="10" Padding="2" VerticalAlignment="Center">
                                         <StackPanel Orientation="Horizontal">
@@ -208,7 +212,7 @@
                                     <TextBlock Text="Процессоры" Style="{StaticResource RowText}" />
                                 </DockPanel>
                                 <Border Style="{StaticResource Separator}" />
-                                <DockPanel Margin="16,5">
+                                <DockPanel Margin="16,5" MinHeight="40">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#5856D6" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Desktop24" FontSize="17" Foreground="White" /></Border>
                                     <ComboBox x:Name="ResolutionBox" Visibility="Collapsed" SelectionChanged="OnSettingChanged" />
                                     <Border DockPanel.Dock="Right" Background="{StaticResource Page}" CornerRadius="10" Padding="2" VerticalAlignment="Center">
@@ -221,22 +225,21 @@
                                     <TextBlock Text="Разрешение" Style="{StaticResource RowText}" />
                                 </DockPanel>
                                 <Border Style="{StaticResource Separator}" />
-                                <DockPanel Margin="16,5">
+                                <DockPanel Margin="16,5" MinHeight="40">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#AF52DE" Margin="0,0,14,0"><ui:SymbolIcon Symbol="FullScreenMaximize24" FontSize="17" Foreground="White" /></Border>
                                     <ui:ToggleSwitch x:Name="FullscreenSwitch" DockPanel.Dock="Right" Click="OnSettingChanged" />
                                     <TextBlock Text="Открывать на весь экран" Style="{StaticResource RowText}" />
                                 </DockPanel>
                                 <Border Style="{StaticResource Separator}" />
-                                <DockPanel Margin="16,5">
+                                <DockPanel Margin="16,5" MinHeight="40">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#34C759" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Clipboard24" FontSize="17" Foreground="White" /></Border>
                                     <ui:ToggleSwitch x:Name="ClipboardSwitch" DockPanel.Dock="Right" Click="OnSettingChanged" />
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock Text="Общий буфер обмена" Style="{StaticResource RowText}" />
-                                        <TextBlock Text="Текст копируется между ПК и Windows" Style="{StaticResource Caption}" />
                                     </StackPanel>
                                 </DockPanel>
                                 <Border Style="{StaticResource Separator}" />
-                                <DockPanel Margin="16,5">
+                                <DockPanel Margin="16,5" MinHeight="40">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#FFCC00" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Folder24" FontSize="17" Foreground="White" /></Border>
                                     <ui:ToggleSwitch x:Name="FilesSwitch" DockPanel.Dock="Right" Click="OnFilesSwitch" />
                                     <StackPanel VerticalAlignment="Center">
@@ -255,23 +258,6 @@
                             </StackPanel>
                         </Border>
                         <TextBlock x:Name="SettingsNote" Style="{StaticResource Caption}" Margin="4,0" Text="Сохраняется само, применится при следующем запуске." />
-                        <Border Style="{StaticResource GroupBox}" Margin="0,10,0,6">
-                            <StackPanel>
-                            <Button Style="{StaticResource Row}" Padding="16,12" Click="OnShortcut">
-                                <DockPanel>
-                                    <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Link24" FontSize="17" Foreground="White" /></Border>
-                                    <TextBlock Text="Ярлык на рабочий стол" Style="{StaticResource RowText}" />
-                                </DockPanel>
-                            </Button>
-                                <Border Style="{StaticResource Separator}" />
-                                <Button Style="{StaticResource Row}" Padding="16,12" Click="OnHelp" ToolTip="F1">
-                                    <DockPanel>
-                                        <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>
-                                        <TextBlock Text="Клавиши" Style="{StaticResource RowText}" />
-                                    </DockPanel>
-                                </Button>
-                            </StackPanel>
-                        </Border>
                     </StackPanel>
                 </ScrollViewer>
 
