@@ -24,7 +24,7 @@ import host_file_sharing
 import gateway_package
 import launch_runtime as runtime
 
-PREFIX = 'Windows-Claude/'
+PREFIX = 'Pocket-Windows/'
 DATA_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 PUBLIC_FILES = ('Launcher.exe', 'config/runtime.json')
 DOCUMENT_FILES = ('НАЧАТЬ.txt', 'third-party.md')
@@ -33,7 +33,7 @@ APP_FILES = tuple('scripts/' + name for name in (
     'runtime_network_plan.py', 'runtime_config.py', 'windows_hardware.py', 'connection_profile.py',
     'profile_store.py', 'gateway_controller.py', 'gateway_package.py',
     'gateway_profile.py', 'session_carrier.py', 'file_snapshot.py', 'runtime_logs.py', 'windows_guest_settings.py',
-    'host_file_sharing.py', 'file_share_carrier.py', 'clipboard_bridge.py',
+    'host_file_sharing.py', 'file_share_carrier.py', 'clipboard_bridge.py', 'window_branding.py',
     'Start-Runtime.ps1', 'Stop-Runtime.ps1', 'Prepare-Dependencies.ps1', 'Prepare-Host.ps1'))
 COMPONENT_FILES = ('runtime/components-manifest.json', 'runtime/components-recovery.zip')
 GATEWAY_RECOVERY = ('runtime/gateway-recovery.json', 'runtime/gateway-recovery.zip')

@@ -89,7 +89,7 @@ class ReleaseTests(unittest.TestCase):
                 extracted = fixture.root / 'unpacked'
                 with zipfile.ZipFile(archive) as payload:
                     payload.extractall(extracted)
-                target = extracted / 'Windows-Claude'
+                target = extracted / 'Pocket-Windows'
                 if legacy:
                     new = {'scripts/package_integrity.py', 'scripts/pack_existing_runtime.py'}
                     manifest['files'] = [row for row in manifest['files'] if row['path'] not in new]
@@ -154,7 +154,7 @@ class ReleaseTests(unittest.TestCase):
         self.unchanged_private()
 
     def test_versioned_zip_is_verified_and_tampering_is_rejected(self):
-        name = 'Windows-Claude-' + self.info['release_id'] + '.zip'
+        name = 'Pocket-Windows-' + self.info['release_id'] + '.zip'
         data = b'archive fixture'
         self.write(self.bundle, name, data)
         self.manifest['artifacts'] = {name: record(name, data)}
@@ -346,7 +346,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse((self.base / 'Installer').exists())
 
     def test_publication_exposes_only_the_versioned_zip_and_checksum(self):
-        name = 'Windows-Claude-' + self.info['release_id'] + '.zip'
+        name = 'Pocket-Windows-' + self.info['release_id'] + '.zip'
         self.manifest['artifacts'] = {}
         for artifact in (name, name + '.sha256', name + '.manifest.json', 'НАЧАТЬ.txt', 'third-party.md'):
             content = artifact.encode('utf-8')

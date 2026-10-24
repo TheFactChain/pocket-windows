@@ -1,0 +1,72 @@
+[CmdletBinding()]
+param([string]$ModulePath, [string]$PreviewPath)
+$ErrorActionPreference = 'Stop'
+if (-not $ModulePath) { $ModulePath = Join-Path (Split-Path -Parent $PSCommandPath) 'window_branding.py' }
+Add-Type -AssemblyName System.Drawing
+# Icon of the Windows window itself: four panes tucked into a pocket on a violet tile.
+# The panel's own icon (ui/AppIcon.ico) is a blue tile with a monitor, so the two never look alike in the taskbar.
+
+function RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $d = 2 * $r
+    $path.AddArc($x, $y, $d, $d, 180, 90); $path.AddArc($x + $w - $d, $y, $d, $d, 270, 90)
+    $path.AddArc($x + $w - $d, $y + $h - $d, $d, $d, 0, 90); $path.AddArc($x, $y + $h - $d, $d, $d, 90, 90)
+    $path.CloseFigure(); $path
+}
+
+function Star($g, [float]$cx, [float]$cy, [float]$r, $brush) {
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $pts = @()
+    foreach ($i in 0..7) { $a = [Math]::PI / 4 * $i; $rr = if ($i % 2 -eq 0) { $r } else { $r * 0.28 }; $pts += New-Object System.Drawing.PointF ($cx + $rr * [Math]::Sin($a)), ($cy - $rr * [Math]::Cos($a)) }
+    $path.AddPolygon($pts); $g.FillPath($brush, $path)
+}
+
+function Frame([int]$size) {
+    $bmp = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'; $g.Clear([System.Drawing.Color]::Transparent)
+    $s = $size / 256.0
+    # Night tile with a warm glow behind the window.
+    $tile = RoundRect (8 * $s) (8 * $s) (240 * $s) (240 * $s) (58 * $s)
+    $g.FillPath((New-Object System.Drawing.Drawing2D.LinearGradientBrush (New-Object System.Drawing.PointF 0, 0), (New-Object System.Drawing.PointF 0, $size), ([System.Drawing.Color]::FromArgb(38, 24, 112)), ([System.Drawing.Color]::FromArgb(14, 10, 52))), $tile)
+    $glowPath = New-Object System.Drawing.Drawing2D.GraphicsPath; $glowPath.AddEllipse(30 * $s, 20 * $s, 196 * $s, 170 * $s)
+    $glow = New-Object System.Drawing.Drawing2D.PathGradientBrush $glowPath
+    $glow.CenterColor = [System.Drawing.Color]::FromArgb(150, 255, 90, 170); $glow.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 90, 170))
+    $g.SetClip($tile); $g.FillPath($glow, $glowPath); $g.ResetClip()
+    # Four panes in their own colours, the whole window tilted a little.
+    $state = $g.Save()
+    $g.TranslateTransform(128 * $s, 100 * $s); $g.RotateTransform(-9); $g.TranslateTransform(-128 * $s, -100 * $s)
+    $pw = 58 * $s; $ph = 52 * $s; $gap = 8 * $s; $x0 = 128 * $s - $pw - $gap / 2; $y0 = 40 * $s
+    $colors = @(@(@(70, 232, 255), @(30, 144, 255)), @(@(190, 245, 70), @(50, 214, 100)), @(@(255, 205, 70), @(255, 128, 30)), @(@(255, 110, 170), @(190, 70, 255)))
+    $index = 0
+    foreach ($row in 0, 1) { foreach ($col in 0, 1) {
+        $rect = New-Object System.Drawing.RectangleF ($x0 + $col * ($pw + $gap)), ($y0 + $row * ($ph + $gap)), $pw, $ph
+        $c = $colors[$index]; $index++
+        $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush $rect, ([System.Drawing.Color]::FromArgb($c[0][0], $c[0][1], $c[0][2])), ([System.Drawing.Color]::FromArgb($c[1][0], $c[1][1], $c[1][2])), 55
+        $g.FillPath($brush, (RoundRect $rect.X $rect.Y $rect.Width $rect.Height (9 * $s)))
+    } }
+    $g.Restore($state)
+    # The pocket: a frosted lip over the lower part of the window, stitched along its edge.
+    $pocket = RoundRect (30 * $s) (150 * $s) (196 * $s) (88 * $s) (32 * $s)
+    $g.FillPath((New-Object System.Drawing.Drawing2D.LinearGradientBrush (New-Object System.Drawing.PointF 0, (150 * $s)), (New-Object System.Drawing.PointF 0, (238 * $s)), ([System.Drawing.Color]::FromArgb(250, 244, 240, 255)), ([System.Drawing.Color]::FromArgb(250, 196, 176, 255))), $pocket)
+    if ($size -ge 48) {
+        $stitch = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(230, 110, 70, 220)), (3.5 * $s)
+        $stitch.DashStyle = 'Dash'; $stitch.DashPattern = @(2.4, 2.0)
+        $g.DrawPath($stitch, (RoundRect (42 * $s) (162 * $s) (172 * $s) (64 * $s) (22 * $s)))
+        Star $g (206 * $s) (46 * $s) (17 * $s) (New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 255, 255, 255)))
+        Star $g (48 * $s) (74 * $s) (9 * $s) (New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(220, 255, 255, 255)))
+    }
+    $g.Dispose(); $bmp
+}
+$encoded = [ordered]@{}
+foreach ($size in 16, 32, 64, 256) {
+    $stream = New-Object System.IO.MemoryStream
+    (Frame $size).Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+    $encoded["$size"] = [Convert]::ToBase64String($stream.ToArray())  # string key: an int would index the ordered dictionary
+    if ($PreviewPath -and $size -eq 256) { [IO.File]::WriteAllBytes($PreviewPath, $stream.ToArray()) }
+}
+$lines = @('"""Generated by scripts/New-VmIcon.ps1: icon of the Windows window (PNG frames, base64). Do not edit by hand."""', 'FRAMES = {')
+foreach ($size in $encoded.Keys) { $lines += ('    {0}: ("{1}"),' -f $size, $encoded[$size]) }
+$lines += '}'
+[IO.File]::WriteAllText($ModulePath, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+"Wrote {0} ({1} bytes)" -f $ModulePath, (Get-Item $ModulePath).Length

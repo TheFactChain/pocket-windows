@@ -16,7 +16,7 @@ internal static class PortableEntry
         root=Path.GetFullPath(root);desktop=Path.GetFullPath(desktop);
         string launcher=Path.Combine(root,"Launcher.exe");
         if(!File.Exists(launcher))throw new FileNotFoundException("Не найден Launcher.exe этой копии.",launcher);
-        string target=Path.Combine(desktop,"Windows Claude Portable.lnk");
+        string target=Path.Combine(desktop,"Pocket Windows.lnk");
         string temporary=Path.Combine(desktop,Guid.NewGuid().ToString("N")+".lnk");
         object shell=null,link=null;
         var pins=new List<SafeFileHandle>();
@@ -30,7 +30,7 @@ internal static class PortableEntry
                 pins.Add(handle);
                 if((File.GetAttributes(parent.FullName)&FileAttributes.ReparsePoint)!=0)throw new IOException("Папка рабочего стола изменилась. Повтори действие.");
             }
-            if(File.Exists(target)||Directory.Exists(target))throw new IOException("Ярлык Windows Claude Portable уже существует. Переименуй или удали его самостоятельно, чтобы создать ярлык этой копии.");
+            if(File.Exists(target)||Directory.Exists(target))throw new IOException("Ярлык Pocket Windows уже существует. Переименуй или удали его самостоятельно, чтобы создать ярлык этой копии.");
             shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
             link=shell.GetType().InvokeMember("CreateShortcut",BindingFlags.InvokeMethod,null,shell,new object[]{temporary});
             link.GetType().InvokeMember("TargetPath",BindingFlags.SetProperty,null,link,new object[]{launcher});

@@ -110,7 +110,7 @@ class DisplayControllerTests(unittest.TestCase):
                              ['VGA.xres=2560', 'VGA.yres=1440', 'VGA.vgamem_mb=16'])
 
     def test_controller_never_retitles_the_qemu_window(self):
-        # The branded engine sets a fixed caption itself; a second writer would make it flicker.
+        # The size observer stays read-only; the caption and icon are set only by brand_work_window, with timeouts.
         function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef) and node.name == 'observe_work_window')
         text = (ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8')
         self.assertNotIn('0x000C', ast.get_source_segment(text, function))

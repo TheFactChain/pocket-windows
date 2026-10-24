@@ -210,7 +210,7 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual(json.loads(archive.read(pack.PREFIX + 'config/runtime.json'))['lan_port'], 42345)
             self.assertIn(pack.PREFIX + 'gateway/packages/releases/v1/gateway.qcow2', archive.namelist())
             archive.extractall(self.root / 'unpacked')
-        unpacked = self.root / 'unpacked/Windows-Claude'
+        unpacked = self.root / 'unpacked/Pocket-Windows'
         repeated = pack.collect(unpacked)
         self.assertEqual(set(repeated), {row['path'] for row in manifest['files']})
         self.assertFalse((unpacked / '.git').exists())
@@ -232,7 +232,7 @@ class PackagingTests(unittest.TestCase):
         destination, _ = self.archive()
         with zipfile.ZipFile(destination) as archive:
             archive.extractall(self.root / 'repair')
-        extracted = self.root / 'repair/Windows-Claude'
+        extracted = self.root / 'repair/Pocket-Windows'
         name = 'runtime/python-3.12.14/python.exe'
         original = (extracted / name).read_bytes()
         (extracted / name).unlink()

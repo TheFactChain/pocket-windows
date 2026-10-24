@@ -36,7 +36,7 @@ RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'scripts/windows_guest_settings.py',
                  'scripts/windows_hardware.py',
                  'scripts/host_file_sharing.py', 'scripts/file_share_carrier.py', 'scripts/clipboard_bridge.py',
-                 'runtime/qemu-11.1.0/qemu-img.exe')
+                 'scripts/window_branding.py', 'runtime/qemu-11.1.0/qemu-img.exe')
 GUEST_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 CHECK_INFO = {
     'windows_x64': ('Версия Windows', 'Нужна 64-разрядная Windows', 'retry', 'Проверить снова'),

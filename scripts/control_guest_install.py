@@ -128,11 +128,14 @@ if args.gateway_stage:
 elif not work:
     arguments[arguments.index('-serial')+1]='file:'+(output/'runtime-serial.log').relative_to(root).as_posix()
 env=runtime.qemu_environment(root)
+# A fullscreen guest must not minimise itself when the pointer goes to another monitor.
+env['SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS']='0'
 work_reboot_session = args.guest == 'work-boot' and args.network == 'isolated-lan'
 normal_runtime = work_reboot_session and not args.work_test_media
 session_nonce=uuid.uuid4().hex if work_reboot_session else None
 files_session = None
 clipboard = clipboard_port = None
+pointer_thread = threading.Thread()  # replaced once Windows runs; not started yet
 display_settings = None
 if normal_runtime:
     viewer_settings = load_viewer_settings(root)
@@ -369,6 +372,86 @@ def place_work_window(work_area):
     return bool(moved)
 
 
+WINDOW_TITLE = 'Pocket Windows'
+branding_icons = {}
+
+
+def brand_work_window():
+    """Give QEMU's window the product icon and name from outside, without touching the engine. Every message goes through
+    SendMessageTimeout, so a busy SDL thread costs at most a short wait; SDL may restore its own caption, so this repeats."""
+    import base64
+    import window_branding
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPVOID,
+                                         wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    user.CreateIconFromResourceEx.argtypes = [ctypes.c_char_p, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+                                              ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user.CreateIconFromResourceEx.restype = wintypes.HANDLE
+    if not branding_icons:
+        for role, metric in (('small', 49), ('big', 11)):  # SM_CXSMICON, SM_CXICON
+            wanted = user.GetSystemMetrics(metric)
+            size = min(window_branding.FRAMES, key=lambda frame: (abs(frame - wanted), frame))
+            data = base64.b64decode(window_branding.FRAMES[size])
+            branding_icons[role] = user.CreateIconFromResourceEx(data, len(data), True, 0x00030000, size, size, 0)
+    found = []
+    def visit(window, unused):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+        if pid.value == process.pid and user.IsWindowVisible(window):
+            found.append(window)
+        return True
+    user.EnumWindows(callback_type(visit), 0)
+    result = ctypes.c_size_t()
+    for window in found:
+        if not report.get('window_icon_set'):
+            for kind, role in ((0, 'small'), (1, 'big')):
+                if branding_icons.get(role):
+                    user.SendMessageTimeoutW(window, 0x0080, kind, branding_icons[role], 0x0002, 200, ctypes.byref(result))  # WM_SETICON
+            report['window_icon_set'] = True
+        title = ctypes.create_unicode_buffer(256)
+        user.GetWindowTextW(window, title, 256)
+        if title.value != WINDOW_TITLE:
+            user.SendMessageTimeoutW(window, 0x000C, 0, ctypes.cast(ctypes.c_wchar_p(WINDOW_TITLE), wintypes.LPVOID), 0x0002, 200, ctypes.byref(result))  # WM_SETTEXT
+    return bool(found)
+
+
+def release_pointer_in_fullscreen():
+    """SDL confines the pointer to its window when the guest goes fullscreen. Let it leave, so the second monitor stays
+    reachable and the desktop behaves like this very PC. Only a borderless window of the guest is affected."""
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    user.GetForegroundWindow.restype = wintypes.HWND
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user.GetClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+    user.ClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    while 'process' in globals() and process.poll() is None:
+        try:
+            window = user.GetForegroundWindow()
+            pid = wintypes.DWORD()
+            if window:
+                user.GetWindowThreadProcessId(window, ctypes.byref(pid))
+            if window and pid.value == process.pid and user.GetWindowLongPtrW(window, -16) & 0x00C00000 != 0x00C00000:
+                clip = wintypes.RECT()
+                left, top = user.GetSystemMetrics(76), user.GetSystemMetrics(77)  # virtual desktop origin
+                width, height = user.GetSystemMetrics(78), user.GetSystemMetrics(79)
+                if (user.GetClipCursor(ctypes.byref(clip)) and (clip.left > left or clip.top > top
+                        or clip.right < left + width or clip.bottom < top + height)):
+                    user.ClipCursor(None)
+        except OSError:
+            pass
+        time.sleep(0.05)
+
+
 def show_work_window(command_code):
     """ShowWindowAsync never waits for QEMU's UI thread. 7 = minimized without focus, 9 = restore."""
     from ctypes import wintypes
@@ -567,6 +650,9 @@ try:
                 # with the UI thread. A minimized window never has the cursor, so keep it parked until then.
                 report['window_parked']=show_work_window(7)
             command('cont');report['status']='running';save()
+            if normal_runtime and not pointer_thread.is_alive():
+                pointer_thread = threading.Thread(target=release_pointer_in_fullscreen, name='pointer-release', daemon=True)
+                pointer_thread.start()
             # Capture only on explicit request, so a user's local password entry is never polled.
             targets=iter([]);target=next(targets,None)
             display_buffer = ''
@@ -597,6 +683,7 @@ try:
                         read_file_receipt()
                     try:
                         window_ready = observe_work_window()
+                        brand_work_window()
                     except OSError:
                         window_ready = False
                     # SDL sizes the window; the controller only centres it once.

@@ -29,8 +29,8 @@ REQUIRED_RUNTIME = ('runtime/python-3.12.14/python.exe',
                     'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
                     'runtime/qemu-11.1.0/qemu-img.exe',
                     'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd')
-MASTER_HASHES = {'work_sha256': '0187e93fce19856d6cd3a72d19b4fae787ce84a28e377ac5daf7f15a520a0143',
-                 'vars_sha256': 'eb38666b9ce80badf83fdb773d67d8ce5e8bc662925e71ac9477be51860bf36b'}
+MASTER_HASHES = {'work_sha256': 'fc5f18a8342ed7575dd028c36208c06a803ea0100fe44ee37e5bbdd4393f65b5',
+                 'vars_sha256': '73696892959e012e0a9b74073bdafa6a1cfbe4dc1d871195447cca6d6ce11214'}
 validate_release_info = pack.validate_release_info
 
 
@@ -172,7 +172,7 @@ def verify_release(release):
         raise ValueError('Application and release provenance differ')
     if common_records(app) != validate_common_records(manifest.get('common_files')):
         raise ValueError('Application payload differs from release inventory')
-    archive_name = 'Windows-Claude-' + info['release_id'] + '.zip'
+    archive_name = 'Pocket-Windows-' + info['release_id'] + '.zip'
     artifacts = {'Setup.exe', 'Windows-Claude.zip', 'Windows-Claude.zip.sha256',
                  'Windows-Claude.zip.manifest.json', archive_name, archive_name + '.sha256',
                  archive_name + '.manifest.json', 'НАЧАТЬ.txt', 'third-party.md'}
@@ -471,7 +471,7 @@ def package_release(release, source, master):
     if source_commit(source) != manifest['source_commit']:
         raise ValueError('Package sources must match the release commit')
     stage = release / 'public'
-    archive_name = 'Windows-Claude-' + manifest['release_id'] + '.zip'
+    archive_name = 'Pocket-Windows-' + manifest['release_id'] + '.zip'
     if stage.exists() or (release / archive_name).exists():
         raise FileExistsError('Public staging or archive already exists')
     needed = (absolute(master) / 'candidate.qcow2').stat().st_size * 3 + 4 * 1024**3
@@ -491,9 +491,9 @@ def package_release(release, source, master):
     from portable_app import repair_gateway
     if not repair_gateway(stage)['ok']:
         raise RuntimeError('Could not prepare the approved gateway package')
-    instructions = ('Windows Claude Portable — ' + manifest['release_id'] + '\n\n'
+    instructions = ('Pocket Windows — ' + manifest['release_id'] + '\n\n'
                     'Распакуй ' + archive_name + ' Проводником в новую папку.\n'
-                    'Открой Windows-Claude\\Launcher.exe. Ярлык на рабочий стол создаётся на главной странице.\n'
+                    'Открой Pocket-Windows\\Launcher.exe. Ярлык на рабочий стол создаётся на главной странице.\n'
                     'Файл .sha256 служит для проверки целостности архива.\n'
                     'Личные подключения в этот комплект не входят.\n')
     (stage / 'НАЧАТЬ.txt').write_text(instructions, encoding='utf-8-sig')
@@ -521,7 +521,7 @@ def publish_release(release, destination):
             or acceptance.get('release_id') != manifest['release_id']
             or acceptance.get('launcher') is not True or acceptance.get('vm') is not True):
         raise RuntimeError('Owner acceptance of Launcher and VM is required before publication')
-    archive_name = 'Windows-Claude-' + manifest['release_id'] + '.zip'
+    archive_name = 'Pocket-Windows-' + manifest['release_id'] + '.zip'
     required = {archive_name, archive_name + '.sha256', archive_name + '.manifest.json',
                 'НАЧАТЬ.txt', 'third-party.md'}
     if set(manifest['artifacts']) != required:

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -631,7 +631,7 @@ namespace WindowsClaude.Launcher
         // ---------- Lifecycle, tray, polling ----------
         void StartLifecycle()
         {
-            trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Windows Claude" };
+            trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Pocket Windows" };
             trayIcon.DoubleClick += delegate { ShowPanel(false, "tray double click"); };
             trayIcon.MouseUp += delegate (object sender, Forms.MouseEventArgs e) { if (e.Button == Forms.MouseButtons.Right) ShowTrayMenu(); };
             lifecycleTimer.Tick += async delegate { await RefreshRuntimeAsync(); };
@@ -690,7 +690,7 @@ namespace WindowsClaude.Launcher
             if (trayIcon != null && !trayNoticeShown)
             {
                 trayNoticeShown = true;
-                trayIcon.ShowBalloonTip(4000, "Windows Claude", "Панель свёрнута в трей, значок у часов. Двойной щелчок открывает её, меню выключает Windows.", Forms.ToolTipIcon.Info);
+                trayIcon.ShowBalloonTip(4000, "Pocket Windows", "Панель свёрнута в трей, значок у часов. Двойной щелчок открывает её, меню выключает Windows.", Forms.ToolTipIcon.Info);
             }
         }
 
@@ -702,7 +702,7 @@ namespace WindowsClaude.Launcher
             if (trayIcon != null && !attentionNoticeShown)
             {
                 attentionNoticeShown = true;
-                trayIcon.ShowBalloonTip(5000, "Windows Claude", "Windows требует внимания. Открой панель двойным щелчком по значку.", Forms.ToolTipIcon.Warning);
+                trayIcon.ShowBalloonTip(5000, "Pocket Windows", "Windows требует внимания. Открой панель двойным щелчком по значку.", Forms.ToolTipIcon.Warning);
             }
         }
         void ShowPanel(bool home, string why)
@@ -765,7 +765,7 @@ namespace WindowsClaude.Launcher
                 if (panelHiddenForSession && (display == "failed" || display == "unconfirmed") && !displayNoticeShown && trayIcon != null)
                 {
                     displayNoticeShown = true; UiLog("poll: Windows display " + display);
-                    trayIcon.ShowBalloonTip(5000, "Windows Claude", "Разрешение Windows не подтверждено. Открой панель, чтобы посмотреть подробности.", Forms.ToolTipIcon.Warning);
+                    trayIcon.ShowBalloonTip(5000, "Pocket Windows", "Разрешение Windows не подтверждено. Открой панель, чтобы посмотреть подробности.", Forms.ToolTipIcon.Warning);
                 }
                 UpdateTray();
             }
