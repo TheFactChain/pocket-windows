@@ -112,8 +112,7 @@
                             </StackPanel>
                         </Border>
                         <!-- Shop: both offers live in one group at the bottom, each opens a short sheet with what you get -->
-                        <StackPanel Grid.Row="2" VerticalAlignment="Bottom">
-                        <Border Style="{StaticResource GroupBox}" Margin="0,0,0,12">
+                        <Border Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center">
                             <Button Style="{StaticResource Row}" Padding="16,10" Click="OnHelp" ToolTip="F1">
                                 <DockPanel>
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>
@@ -121,7 +120,7 @@
                                 </DockPanel>
                             </Button>
                         </Border>
-                        <Border Style="{StaticResource GroupBox}" Margin="0">
+                        <Border Grid.Row="2" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom">
                             <StackPanel>
                                 <Button x:Name="ProxyRow" Style="{StaticResource Row}" Padding="16,10" Click="OnBuyProxy">
                                     <DockPanel>
@@ -146,7 +145,6 @@
                                 </Button>
                             </StackPanel>
                         </Border>
-                        </StackPanel>
                     </Grid>
                 </DockPanel>
 

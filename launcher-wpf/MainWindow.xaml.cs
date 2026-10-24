@@ -559,8 +559,8 @@ namespace WindowsClaude.Launcher
             suggestedAction = blocker == null ? "retry" : Text(blocker, "action", "retry");
             NextActionButton.Content = blocker == null ? "Проверить снова" : Text(blocker, "action_label", "Проверить снова");
             bool restore = blocker != null && (suggestedAction == "prepare" || suggestedAction == "repair_gateway" || suggestedAction == "recover_session");
-            if (restore) { NextStepText.Text = ""; NextActionButton.Content = "Восстановить"; }
-            Show(NextStepText, !restore);
+            // Restoring needs one short line; the full explanation stays on the Проверка page.
+            if (restore) { string detail = Text(blocker, "detail", ""); int stop = detail.IndexOf(". "); NextStepText.Text = stop > 0 ? detail.Substring(0, stop + 1) : detail; }
             NextActionButton.Style = (Style)FindResource(restore ? "Pill" : "SoftPill");
             Show(NextActionButton, !Bridge.Ok(result));
 
