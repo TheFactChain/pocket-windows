@@ -168,6 +168,28 @@
                     </Setter.Value>
                 </Setter>
             </Style>
+            <!-- The same row, lower: used by the tray menu -->
+            <Style x:Key="MenuRow" TargetType="Button" BasedOn="{StaticResource Tappable}">
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Padding" Value="12,4" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="Body" Background="Transparent" MinHeight="38">
+                                <Border x:Name="Shade" Background="#0B000000" CornerRadius="9" Margin="4,2" Opacity="0" />
+                                <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center" HorizontalAlignment="Stretch" />
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Trigger.EnterActions><BeginStoryboard Storyboard="{StaticResource ShadeIn}" /></Trigger.EnterActions>
+                                    <Trigger.ExitActions><BeginStoryboard Storyboard="{StaticResource ShadeOut}" /></Trigger.ExitActions>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Body" Property="Opacity" Value="0.45" /></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
             <Style x:Key="RowNoScale" TargetType="Button" BasedOn="{StaticResource Row}">
                 <Setter Property="RenderTransform"><Setter.Value><ScaleTransform /></Setter.Value></Setter>
             </Style>

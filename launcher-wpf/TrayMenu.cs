@@ -47,14 +47,14 @@ namespace WindowsClaude.Launcher
             var rows = new StackPanel();
             for (int index = 0; index < items.Length; index++)
             {
-                if (index > 0) rows.Children.Add(new Border { Style = (Style)Application.Current.FindResource("Separator") });
+                if (index > 0) rows.Children.Add(new Border { Height = 1, Margin = new Thickness(46, 0, 0, 0), Background = (Brush)Application.Current.FindResource("Line") });
                 rows.Children.Add(Row(items[index]));
             }
             var card = new Border
             {
-                Margin = new Thickness(14), MinWidth = 300, CornerRadius = new CornerRadius(16), ClipToBounds = true,
+                Margin = new Thickness(10), MinWidth = 210, CornerRadius = new CornerRadius(12), ClipToBounds = true,
                 Background = (Brush)Application.Current.FindResource("Group"), Child = rows,
-                Effect = new DropShadowEffect { BlurRadius = 18, ShadowDepth = 2, Opacity = 0.22, Color = Colors.Black },
+                Effect = new DropShadowEffect { BlurRadius = 14, ShadowDepth = 2, Opacity = 0.2, Color = Colors.Black },
                 RenderTransform = new TranslateTransform(0, 10)
             };
             Content = card;
@@ -79,28 +79,28 @@ namespace WindowsClaude.Launcher
         {
             var icon = new Border
             {
-                Width = 30, Height = 30, CornerRadius = new CornerRadius(9), Margin = new Thickness(0, 0, 14, 0), Background = item.Tint,
-                Child = new SymbolIcon { Symbol = item.Icon, FontSize = 16, Foreground = Brushes.White }
+                Width = 24, Height = 24, CornerRadius = new CornerRadius(7), Margin = new Thickness(0, 0, 10, 0), Background = item.Tint,
+                Child = new SymbolIcon { Symbol = item.Icon, FontSize = 13, Foreground = Brushes.White }
             };
             var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            text.Children.Add(new TextBlock { Text = item.Text, Style = (Style)Application.Current.FindResource("RowText") });
+            text.Children.Add(new TextBlock { Text = item.Text, Style = (Style)Application.Current.FindResource("RowText"), FontSize = 13.5 });
             if (!String.IsNullOrEmpty(item.Caption))
-                text.Children.Add(new TextBlock { Text = item.Caption, Style = (Style)Application.Current.FindResource("Caption"), TextWrapping = TextWrapping.NoWrap });
+                text.Children.Add(new TextBlock { Text = item.Caption, Style = (Style)Application.Current.FindResource("Caption"), FontSize = 11.5, TextWrapping = TextWrapping.NoWrap });
             var line = new DockPanel();
             DockPanel.SetDock(icon, Dock.Left);
             line.Children.Add(icon); line.Children.Add(text);
-            var button = new Button { Style = (Style)Application.Current.FindResource("Row"), Content = line, IsEnabled = item.Enabled };
+            var button = new Button { Style = (Style)Application.Current.FindResource("MenuRow"), Content = line, IsEnabled = item.Enabled };
             button.Click += delegate (object sender, RoutedEventArgs e) { Window owner = Window.GetWindow(button); if (owner != null) owner.Close(); if (item.Run != null) item.Run(); };
             return button;
         }
 
-        // Above the cursor, kept inside the work area of the screen the tray is on.
+        // Above and to the left of the cursor (its corner touches the pointer), kept inside the work area of the screen the tray is on.
         void Place()
         {
             var screen = System.Windows.Forms.Screen.FromPoint(cursor).WorkingArea;
             var source = PresentationSource.FromVisual(this);
             double sx = source == null ? 1 : source.CompositionTarget.TransformFromDevice.M11, sy = source == null ? 1 : source.CompositionTarget.TransformFromDevice.M22;
-            double x = cursor.X * sx - ActualWidth / 2, y = cursor.Y * sy - ActualHeight + 8;
+            double x = cursor.X * sx - ActualWidth + 10, y = cursor.Y * sy - ActualHeight + 4;
             Left = Math.Max(screen.Left * sx, Math.Min(x, screen.Right * sx - ActualWidth));
             Top = Math.Max(screen.Top * sy, Math.Min(y, screen.Bottom * sy - ActualHeight));
         }
