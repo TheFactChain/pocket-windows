@@ -642,8 +642,8 @@ namespace WindowsClaude.Launcher
         // ---------- Offers: Proxy and Claude Pro are bought in the Telegram bot; until the bot exists the link leads to the seller ----------
         const string ContactUrl = "https://t.me/Daniil_Simples";
         
-        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Proxy"); }
-        void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Claude Pro"); }
+        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Proxy за 900 ₽"); }
+        void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Claude Pro за 2 000 ₽"); }
         // t.me opens the chat with the message already typed in; a bot takes the same idea as ?start=<code>.
         // Every 5 seconds the shop group lifts and swells for a moment, smooth but noticeable, to catch the eye.
         void StartShopNudge()
