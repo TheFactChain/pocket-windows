@@ -83,6 +83,8 @@ class WorkRebootSequence(unittest.TestCase):
                 'display_settings':None, 'protect_work_window':mock.Mock(return_value=True),
                 'show_work_window':mock.Mock(return_value=False),'pointer_settled':mock.Mock(return_value=True),
                 'work_startup_info':mock.Mock(return_value=None),
+                'prepare_taskbar_icon':mock.Mock(return_value='test-icon.ico'),
+                'clear_work_taskbar':mock.Mock(),
                 'file_sharing':file_api,'files_session':None,'clipboard':None,'clipboard_port':None,
                 'pointer_thread':SimpleNamespace(is_alive=lambda:True),
                 'arguments':['-drive','file=images/workvm-empty.qcow2','-no-reboot'],

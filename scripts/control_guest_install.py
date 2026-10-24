@@ -250,6 +250,8 @@ def read_qmp():
                 event['data']={key: value[:512] if isinstance(value,str) else value for key,value in event['data'].items()}
                 qmp_events.append(event)
                 runtime.atomic_json(output/'qmp-events.json', list(qmp_events))
+                if normal_runtime and message['event'] == 'SHUTDOWN':
+                    clear_work_taskbar()
             else:
                 inbox.put(message)
         except ValueError:pass
@@ -386,6 +388,95 @@ WINDOW_TITLE = 'Pocket Windows'
 branding_icons = {}
 
 
+def prepare_taskbar_icon(directory):
+    import base64
+    import struct
+    import tempfile
+    import window_branding
+    from profile_store import _pinned_directory, _plain
+    frames = [(size, base64.b64decode(data)) for size, data in sorted(window_branding.FRAMES.items())]
+    offset = 6 + 16 * len(frames)
+    data = bytearray(struct.pack('<HHH', 0, 1, len(frames)))
+    for size, frame in frames:
+        data += struct.pack('<BBBBHHII', size % 256, size % 256, 0, 0, 1, 32, len(frame), offset)
+        offset += len(frame)
+    data += b''.join(frame for size, frame in frames)
+    path = directory / 'window-icon.ico'
+    with _pinned_directory(directory, create=False):
+        _plain(path)
+        if not path.exists() or path.read_bytes() != data:
+            with tempfile.TemporaryDirectory(prefix='window-icon-', dir=directory) as temporary:
+                prepared = Path(temporary) / 'window.ico'
+                prepared.write_bytes(data)
+                _plain(path)
+                os.replace(prepared, path)
+    return path
+
+
+def set_taskbar_identity(window, root, icon, *, clear=False):
+    """Give the Shell its own icon and relaunch target before the SDL window is shown."""
+    from ctypes import wintypes
+    class Key(ctypes.Structure):
+        _fields_ = [('format', ctypes.c_ubyte * 16), ('pid', wintypes.DWORD)]
+    class Variant(ctypes.Structure):
+        _fields_ = [('vt', wintypes.USHORT), ('reserved', wintypes.USHORT * 3),
+                    ('pointer', ctypes.c_void_p), ('tail', ctypes.c_void_p)]
+    def guid(value):
+        return (ctypes.c_ubyte * 16).from_buffer_copy(uuid.UUID(value).bytes_le)
+    def checked(result):
+        if result < 0:
+            raise OSError(f'Window taskbar properties: HRESULT 0x{result & 0xffffffff:08x}')
+    shell, ole = ctypes.WinDLL('shell32'), ctypes.WinDLL('ole32')
+    shell.SHGetPropertyStoreForWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    initialized = ole.CoInitializeEx(None, 2)
+    if initialized != -2147417850:  # RPC_E_CHANGED_MODE: the caller already initialized COM.
+        checked(initialized)
+    store = ctypes.c_void_p()
+    try:
+        checked(shell.SHGetPropertyStoreForWindow(window,
+            ctypes.byref(guid('886d8eeb-8cf2-4446-8d02-cdba1dbdcf99')), ctypes.byref(store)))
+        vtable = ctypes.cast(store, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        set_value = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(Key), ctypes.POINTER(Variant))(vtable[6])
+        release = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(vtable[2])
+        try:
+            app_id = 'PocketWindows.Desktop.' + hashlib.sha256(os.path.normcase(str(root)).encode('utf-8')).hexdigest()[:16]
+            fmt = guid('9f4c2855-9f79-4b39-a8d0-e1d42de1d5f3')
+            # The ID comes last so Explorer sees a complete group; each portable copy stays separate.
+            for number, text in ((2, f'"{root / "Launcher.exe"}"'), (3, str(icon) + ',0'),
+                                 (4, WINDOW_TITLE), (5, app_id)):
+                value = Variant()
+                if not clear:
+                    buffer = ctypes.create_unicode_buffer(text)
+                    value.vt = 31  # VT_LPWSTR; SetValue copies this borrowed string.
+                    value.pointer = ctypes.cast(buffer, ctypes.c_void_p).value
+                checked(set_value(store, ctypes.byref(Key(fmt, number)), ctypes.byref(value)))
+            return app_id
+        finally:
+            release(store)
+    finally:
+        if initialized >= 0:
+            ole.CoUninitialize()
+
+
+def clear_work_taskbar():
+    from ctypes import wintypes
+    window = report.get('window_taskbar_window')
+    if not window:
+        return
+    user = ctypes.WinDLL('user32')
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    owner = wintypes.DWORD()
+    user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+    if owner.value != process.pid:
+        report['window_taskbar_cleanup'] = 'window-already-closed'
+        return
+    try:
+        set_taskbar_identity(window, root, taskbar_icon, clear=True)
+        report['window_taskbar_cleanup'] = 'cleared'
+    except OSError as error:
+        report['window_taskbar_cleanup'] = str(error)
+
+
 def brand_work_window():
     """Give QEMU's window the product icon and name from outside, without touching the engine. Every message goes through
     SendMessageTimeout, so a busy SDL thread costs at most a short wait; SDL may restore its own caption, so this repeats."""
@@ -423,6 +514,11 @@ def brand_work_window():
     result = ctypes.c_size_t()
     for window in found:
         if not report.get('window_icon_set'):
+            try:
+                report['window_taskbar_id'] = set_taskbar_identity(window, root, taskbar_icon)
+                report['window_taskbar_window'] = int(window)
+            except OSError:
+                return False
             for kind, role in ((0, 'small'), (1, 'big')):
                 if not branding_icons.get(role) or not user.SendMessageTimeoutW(window, 0x0080, kind, branding_icons[role], 0x0002, 200, ctypes.byref(result)):  # WM_SETICON
                     return False
@@ -634,6 +730,7 @@ def handle_control(control):
 
 try:
     if normal_runtime:
+        taskbar_icon = prepare_taskbar_icon(root / 'state')
         files_session = file_sharing.Session(root, session_nonce)
         arguments += files_session.arguments
         if clipboard_port is not None:

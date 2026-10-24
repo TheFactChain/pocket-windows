@@ -2,13 +2,21 @@ import ast
 import base64
 import ctypes
 from ctypes import wintypes
+import hashlib
+import json
 import os
 from pathlib import Path
+import queue
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
+import uuid
+from collections import deque
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,10 +52,16 @@ class WindowBrandingTests(unittest.TestCase):
     def test_real_qemu_is_branded_before_its_first_visible_window(self):
         tree = ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                     and node.name in ('work_startup_info', 'brand_work_window', 'show_work_window')]
+                     and node.name in ('work_startup_info', 'prepare_taskbar_icon', 'set_taskbar_identity',
+                                       'brand_work_window', 'show_work_window', 'clear_work_taskbar')]
+        temporary = tempfile.TemporaryDirectory(prefix='Pocket taskbar Тест ')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
         controller = {'ctypes': ctypes, 'subprocess': subprocess, 'normal_runtime': True,
-                      'report': {}, 'branding_icons': {}, 'WINDOW_TITLE': 'Pocket Windows'}
+                      'report': {}, 'branding_icons': {}, 'WINDOW_TITLE': 'Pocket Windows',
+                      'os': os, 'uuid': uuid, 'hashlib': hashlib, 'Path': Path, 'root': root}
         exec(compile(ast.Module(body=functions, type_ignores=[]), 'window-branding-controller', 'exec'), controller)
+        controller['taskbar_icon'] = controller['prepare_taskbar_icon'](root)
         user = ctypes.WinDLL('user32', use_last_error=True)
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
@@ -116,6 +130,54 @@ class WindowBrandingTests(unittest.TestCase):
             time.sleep(.01)
         self.assertEqual(checked, {0, 1}, 'QEMU must respond with both product icons')
         self.assertTrue(user.IsWindowVisible(window), 'Branded window must be available in the taskbar')
+        self.assert_taskbar_properties(window, controller)
+        controller['clear_work_taskbar']()
+        self.assertEqual(controller['report'].get('window_taskbar_cleanup'), 'cleared')
+        self.assert_taskbar_properties(window, controller, cleared=True)
+
+    def assert_taskbar_properties(self, window, controller, cleared=False):
+        shell, ole = ctypes.WinDLL('shell32'), ctypes.WinDLL('ole32')
+        shell.SHGetPropertyStoreForWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        ole.PropVariantClear.argtypes = [ctypes.c_void_p]
+        self.assertGreaterEqual(ole.CoInitializeEx(None, 2), 0)
+        store = ctypes.c_void_p()
+        interface = ctypes.create_string_buffer(uuid.UUID('886d8eeb-8cf2-4446-8d02-cdba1dbdcf99').bytes_le)
+        try:
+            self.assertEqual(shell.SHGetPropertyStoreForWindow(window, interface, ctypes.byref(store)), 0)
+            vtable = ctypes.cast(store, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            get_value = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(vtable[5])
+            release = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(vtable[2])
+            try:
+                expected = {2: f'"{controller["root"] / "Launcher.exe"}"',
+                            3: str(controller['taskbar_icon']) + ',0', 4: 'Pocket Windows',
+                            5: controller['report']['window_taskbar_id']}
+                self.assertTrue(expected[5].startswith('PocketWindows.Desktop.'))
+                for number, text in expected.items():
+                    key = ctypes.create_string_buffer(uuid.UUID('9f4c2855-9f79-4b39-a8d0-e1d42de1d5f3').bytes_le + struct.pack('<I', number))
+                    value = ctypes.create_string_buffer(24)
+                    self.assertEqual(get_value(store, key, value), 0)
+                    try:
+                        self.assertEqual(struct.unpack_from('<H', value)[0], 0 if cleared else 31)
+                        if not cleared:
+                            self.assertEqual(ctypes.wstring_at(ctypes.c_void_p.from_buffer(value, 8).value), text)
+                    finally:
+                        ole.PropVariantClear(value)
+            finally:
+                release(store)
+        finally:
+            ole.CoUninitialize()
+
+    def test_taskbar_cleanup_waits_for_actual_shutdown(self):
+        tree = ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        reader = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'read_qmp')
+        cleanup = mock.Mock()
+        scope = {'process': SimpleNamespace(stdout=[json.dumps({'event': name}) for name in ('STOP', 'RESUME', 'SHUTDOWN')]),
+                 'json': json, 'datetime': datetime, 'timezone': timezone, 'work_reboot_session': True,
+                 'normal_runtime': True, 'report': {'generation': 1}, 'qmp_events': deque(),
+                 'runtime': mock.Mock(), 'output': Path('unused'), 'inbox': queue.Queue(), 'clear_work_taskbar': cleanup}
+        exec(compile(ast.Module(body=[reader], type_ignores=[]), 'taskbar-shutdown', 'exec'), scope)
+        scope['read_qmp']()
+        cleanup.assert_called_once_with()
 
     def test_late_window_is_still_shown_after_a_minute(self):
         tree = ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
