@@ -39,8 +39,8 @@
                                 <Border.Triggers>
                                     <EventTrigger RoutedEvent="Loaded">
                                         <BeginStoryboard><Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" From="0.95" To="1.02" Duration="0:0:2.2"><DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
-                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" From="0.95" To="1.02" Duration="0:0:2.2"><DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" From="0.96" To="1.04" Duration="0:0:3"><DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" From="0.96" To="1.04" Duration="0:0:3"><DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
                                         </Storyboard></BeginStoryboard>
                                     </EventTrigger>
                                 </Border.Triggers>
@@ -74,19 +74,20 @@
                 <!-- Home -->
                 <DockPanel x:Name="HomePage">
                     <Grid>
-                        <Border Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Top">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <Border Grid.Row="0" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Top">
                             <StackPanel>
-                                <Button x:Name="ConnectionRow" Style="{StaticResource Row}" Padding="16,17" Click="OnConnectionRow" ToolTip="Ctrl+2">
+                                <Button x:Name="ConnectionRow" Style="{StaticResource Row}" Padding="16,13" Click="OnConnectionRow" ToolTip="Ctrl+2">
                                     <DockPanel>
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#3390EC" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Globe24" FontSize="17" Foreground="White" /></Border>
                                         <StackPanel VerticalAlignment="Center">
                                             <TextBlock x:Name="ConnectionValue" Text="Добавить подключение" Style="{StaticResource RowText}" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock x:Name="ConnectionDetail" Text="Вставь ссылку от своего VPS" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                            <TextBlock x:Name="ConnectionDetail" Text="Вставь ссылку от своего Proxy" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                         </StackPanel>
                                     </DockPanel>
                                 </Button>
                                 <Border Style="{StaticResource Separator}" />
-                                <Button x:Name="SettingsRow" Style="{StaticResource Row}" Padding="16,17" Click="OnSettingsRow">
+                                <Button x:Name="SettingsRow" Style="{StaticResource Row}" Padding="16,13" Click="OnSettingsRow">
                                     <DockPanel>
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#5856D6" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Desktop24" FontSize="17" Foreground="White" /></Border>
                                         <StackPanel VerticalAlignment="Center">
@@ -96,7 +97,7 @@
                                     </DockPanel>
                                 </Button>
                                 <Border Style="{StaticResource Separator}" />
-                                <Button x:Name="ChecksRow" Style="{StaticResource Row}" Padding="16,17" Click="OnChecksRow" ToolTip="Открыть проверку">
+                                <Button x:Name="ChecksRow" Style="{StaticResource Row}" Padding="16,13" Click="OnChecksRow" ToolTip="Открыть проверку">
                                     <DockPanel>
                                         <Border x:Name="DiagnosticBadge" Width="30" Height="30" CornerRadius="9" Background="#30B0C7" Margin="0,0,14,0"><ui:SymbolIcon x:Name="DiagnosticGlyph" Symbol="Pulse24" FontSize="17" Foreground="White" /></Border>
                                         <Border x:Name="DiagnosticPill" DockPanel.Dock="Right" CornerRadius="10" Padding="10,4" Background="#EDEDF0" VerticalAlignment="Center">
@@ -110,22 +111,40 @@
                                 </Button>
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom">
+                        <Border Grid.Row="2" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom">
                             <StackPanel>
-                                <Button Style="{StaticResource Row}" Padding="16,15" Click="OnHelp" ToolTip="F1">
+                                <Button Style="{StaticResource Row}" Padding="16,12" Click="OnHelp" ToolTip="F1">
                                     <DockPanel>
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>
                                         <TextBlock Text="Клавиши" Style="{StaticResource RowText}" />
                                     </DockPanel>
                                 </Button>
                                 <Border Style="{StaticResource Separator}" />
-                                <Button Style="{StaticResource Row}" Padding="16,15" Click="OnShortcut">
+                                <Button Style="{StaticResource Row}" Padding="16,9" Click="OnClaude">
                                     <DockPanel>
-                                        <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Link24" FontSize="17" Foreground="White" /></Border>
-                                        <TextBlock Text="Ярлык на рабочий стол" Style="{StaticResource RowText}" />
+                                        <Border Width="30" Height="30" CornerRadius="9" Background="#D97757" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Sparkle24" FontSize="17" Foreground="White" /></Border>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="Claude Pro" Style="{StaticResource RowText}" />
+                                            <TextBlock Text="2 000 ₽, оформим подписку в Telegram" Style="{StaticResource Caption}" />
+                                        </StackPanel>
                                     </DockPanel>
                                 </Button>
                             </StackPanel>
+                        </Border>
+                        <!-- Promo: one card that alternates between the two offers; hidden while Windows starts -->
+                        <Border x:Name="PromoGroup" Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center">
+                            <Button x:Name="PromoCard" Style="{StaticResource Row}" Padding="14,10" Click="OnPromo">
+                                <DockPanel>
+                                    <Border x:Name="PromoPill" DockPanel.Dock="Right" CornerRadius="14" Padding="14,5" Background="{StaticResource Accent}" VerticalAlignment="Center" Margin="10,0,0,0">
+                                        <TextBlock x:Name="PromoAction" FontSize="13" FontWeight="SemiBold" Foreground="White" />
+                                    </Border>
+                                    <Border x:Name="PromoBadge" Width="30" Height="30" CornerRadius="9" Margin="0,0,12,0"><ui:SymbolIcon x:Name="PromoGlyph" FontSize="17" Foreground="White" /></Border>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock x:Name="PromoTitle" Style="{StaticResource RowText}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock x:Name="PromoCaption" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
                         </Border>
                     </Grid>
                 </DockPanel>
@@ -145,6 +164,16 @@
                           <StackPanel>
                             <Border x:Name="ProfilesGroup" Style="{StaticResource GroupBox}" Margin="0">
                                 <StackPanel>
+                                    <Button x:Name="BuyRow" Style="{StaticResource Row}" Click="OnBuyProxy">
+                                        <DockPanel>
+                                            <Border Width="30" Height="30" CornerRadius="9" Background="{StaticResource Accent}" Margin="0,0,14,0"><ui:SymbolIcon Symbol="ShoppingBag24" FontSize="17" Foreground="White" /></Border>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="Купить готовый Proxy" Style="{StaticResource RowText}" Foreground="{StaticResource Accent}" />
+                                                <TextBlock Text="900 ₽ в месяц, всё настроено, поддержка всегда на связи" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Button>
+                                    <Border Style="{StaticResource Separator}" />
                                     <StackPanel x:Name="ProfileList" />
                                     <Border x:Name="AddSeparator" Style="{StaticResource Separator}" />
                                     <Button x:Name="AddRow" Style="{StaticResource Row}" Click="OnAddRow">
@@ -234,6 +263,14 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                        <Border Style="{StaticResource GroupBox}" Margin="0,0,0,6">
+                            <Button Style="{StaticResource Row}" Padding="16,12" Click="OnShortcut">
+                                <DockPanel>
+                                    <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Link24" FontSize="17" Foreground="White" /></Border>
+                                    <TextBlock Text="Ярлык на рабочий стол" Style="{StaticResource RowText}" />
+                                </DockPanel>
+                            </Button>
+                        </Border>
                         <TextBlock x:Name="SettingsNote" Style="{StaticResource Caption}" Margin="4,0" Text="Сохраняется само, применится при следующем запуске." />
                     </StackPanel>
                 </ScrollViewer>
@@ -301,7 +338,7 @@
                                 <StackPanel>
                                     <TextBlock Text="Ссылка от сервера" Style="{StaticResource Caption}" Margin="2,0,0,5" />
                                     <TextBox x:Name="LinkInput" Style="{StaticResource Field}" KeyDown="OnLinkKey" />
-                                    <TextBlock Text="hysteria2://, socks5://, http:// или https://, как выдал VPS или панель" Style="{StaticResource Caption}" Margin="2,6,0,0" />
+                                    <TextBlock Text="hysteria2://, socks5://, http:// или https://, как выдал бот или панель" Style="{StaticResource Caption}" Margin="2,6,0,0" />
                                 </StackPanel>
                             </Border>
                             <TextBlock x:Name="ProfileError" Foreground="{StaticResource Danger}" TextWrapping="Wrap" Margin="4,0,4,10" Visibility="Collapsed" />
@@ -315,6 +352,22 @@
                         </StackPanel>
 
                         <!-- Manual editor: iOS form. Label on the left, plain text right after it, hints inside empty fields -->
+                        <!-- Claude Pro: three steps and one button to the seller -->
+                        <StackPanel x:Name="ProSheet" Visibility="Collapsed">
+                            <Border Style="{StaticResource GroupBox}" Padding="16,12" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,6">
+                                        <TextBlock DockPanel.Dock="Right" Text="2 000 ₽" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource Ink}" />
+                                        <TextBlock Text="Оформим подписку под ключ" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
+                                    </DockPanel>
+                                    <TextBlock Text="1. Открой бота в Telegram и выбери Claude Pro" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <TextBlock Text="2. Оплати в боте удобным способом" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <TextBlock Text="3. Получи данные и войди в Claude прямо в Windows" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <Button Style="{StaticResource Pill}" Height="40" FontSize="15" Content="Открыть бота в Telegram" Click="OnOpenContact" />
+                        </StackPanel>
+
                         <StackPanel x:Name="EditorSheet" Visibility="Collapsed">
                             <Border Style="{StaticResource GroupBox}" Padding="16,0" Margin="0,0,0,10">
                                 <StackPanel>
@@ -322,7 +375,7 @@
                                         <TextBlock Text="Название" Style="{StaticResource FormLabel}" />
                                         <Grid>
                                             <TextBox x:Name="ProfileName" Style="{StaticResource FormField}" TextChanged="OnHintText" />
-                                            <TextBlock x:Name="NameHint" Text="например, Мой VPS" Style="{StaticResource FormHint}" />
+                                            <TextBlock x:Name="NameHint" Text="например, Мой Proxy" Style="{StaticResource FormHint}" />
                                         </Grid>
                                     </DockPanel>
                                     <Border Style="{StaticResource FormRule}" />

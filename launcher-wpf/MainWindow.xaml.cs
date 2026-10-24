@@ -112,7 +112,7 @@ namespace WindowsClaude.Launcher
                 var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
                 if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
                 Rise(LaunchCard, 0); Rise(HomePage, 90);
-                StartLifecycle(); await RunAction("diagnose", false);
+                StartLifecycle(); StartPromo(); await RunAction("diagnose", false);
             };
             Closing += OnClosing;
         }
@@ -192,7 +192,7 @@ namespace WindowsClaude.Launcher
 
         void OpenSheet(string title, UIElement content)
         {
-            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet }) Show(part, part == content);
+            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet, ProSheet }) Show(part, part == content);
             SheetTitle.Text = title;
             if (SheetHost.Visibility == Visibility.Visible) { content.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))); return; }
             Show(SheetHost, true);
@@ -309,13 +309,20 @@ namespace WindowsClaude.Launcher
         void UpdatePulse()
         {
             bool active = (busy && (activeOperationAction == "start" || activeOperationAction == "stop")) || workState == "starting" || workState == "stopping" || workState == "restarting";
+            Show(PromoGroup, !active);
             if (active == pulsing) return;
             pulsing = active;
             var scale = (ScaleTransform)Pulse.RenderTransform;
             if (!active) { Pulse.BeginAnimation(OpacityProperty, null); scale.BeginAnimation(ScaleTransform.ScaleXProperty, null); scale.BeginAnimation(ScaleTransform.ScaleYProperty, null); Pulse.Opacity = 0; return; }
-            var grow = new DoubleAnimation(0.75, 1.15, TimeSpan.FromSeconds(1.4)) { RepeatBehavior = RepeatBehavior.Forever, EasingFunction = EaseOut };
+            // The ring fades in from nothing and back to nothing, so the loop restart never shows as a pop.
+            var period = TimeSpan.FromSeconds(2.2);
+            var grow = new DoubleAnimation(0.8, 1.2, period) { RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut } };
             scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow); scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
-            Pulse.BeginAnimation(OpacityProperty, new DoubleAnimation(0.35, 0, TimeSpan.FromSeconds(1.4)) { RepeatBehavior = RepeatBehavior.Forever });
+            var glow = new DoubleAnimationUsingKeyFrames { Duration = period, RepeatBehavior = RepeatBehavior.Forever };
+            glow.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(0)));
+            glow.KeyFrames.Add(new EasingDoubleKeyFrame(0.3, KeyTime.FromPercent(0.3), new SineEase { EasingMode = EasingMode.EaseInOut }));
+            glow.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromPercent(1), new SineEase { EasingMode = EasingMode.EaseInOut }));
+            Pulse.BeginAnimation(OpacityProperty, glow);
         }
 
         void TrackUnknownOutcome(Dictionary<string, object> result)
@@ -510,9 +517,10 @@ namespace WindowsClaude.Launcher
                 var runtime = Child(result, "runtime");
                 workState = Text(runtime, "work", "unknown"); gatewayState = Text(runtime, "gateway", "unknown");
                 runtimeActive = ActiveVmState(workState) || ActiveVmState(gatewayState);
+                NoteRunning();
                 var connection = Child(result, "connection");
                 var selected = Child(connection, "selected_profile");
-                if (selected == null) { ConnectionValue.Text = "Добавить подключение"; ConnectionDetail.Text = "Вставь ссылку от своего VPS"; }
+                if (selected == null) { ConnectionValue.Text = "Добавить подключение"; ConnectionDetail.Text = "Вставь ссылку от своего Proxy"; }
                 else
                 {
                     string protocol = Text(selected, "protocol", ""); protocol = protocol == "hysteria2" ? "Hysteria2" : protocol.ToUpperInvariant();
@@ -628,11 +636,49 @@ namespace WindowsClaude.Launcher
 
         static string FormatGiB(int mib) { return ((decimal)mib / 1024).ToString("0.######", CultureInfo.CurrentCulture); }
 
+        // ---------- Offers: Proxy and Claude Pro are bought in the Telegram bot; until the bot exists the link leads to the seller ----------
+        const string ContactUrl = "https://t.me/Daniil_Simples";
+        bool runningNoted, promoBalloonPending;
+
+        void StartPromo()
+        {
+            PromoTitle.Text = "Свой Proxy, 900 ₽ в месяц"; PromoCaption.Text = "Всё настроено, поддержка всегда на связи"; PromoAction.Text = "Купить";
+            PromoPill.Background = Blue; PromoBadge.Background = Blue; PromoGlyph.Symbol = SymbolRegular.ShieldLock24;
+        }
+        void OnPromo(object sender, RoutedEventArgs e) { OpenContact(); }
+        void OnClaude(object sender, RoutedEventArgs e) { OpenSheet("Claude Pro", ProSheet); }
+        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact(); }
+        void OnOpenContact(object sender, RoutedEventArgs e) { OpenContact(); }
+        static void OpenContact()
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ContactUrl) { UseShellExecute = true }); }
+            catch (Exception) { System.Windows.MessageBox.Show("Не удалось открыть Telegram. Ссылка на бота: " + ContactUrl, "Pocket Windows"); }
+        }
+        // Once a day, right after Windows has come up, a quiet reminder from the tray.
+        void NoteRunning()
+        {
+            if (workState != "running") { runningNoted = false; return; }
+            if (runningNoted) return;
+            runningNoted = true;
+            try
+            {
+                string path = System.IO.Path.Combine(Bridge.Root, "state", "offer-reminder.txt"), today = DateTime.Now.ToString("yyyy-MM-dd");
+                if (File.Exists(path) && File.ReadAllText(path).Trim() == today) return;
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)); File.WriteAllText(path, today);
+            }
+            catch (Exception) { return; }
+            if (trayIcon == null) return;
+            promoBalloonPending = true;
+            trayIcon.ShowBalloonTip(6000, "Pocket Windows", "Нужен Proxy или Claude Pro? Нажми здесь, откроется бот в Telegram.", Forms.ToolTipIcon.Info);
+        }
+
         // ---------- Lifecycle, tray, polling ----------
         void StartLifecycle()
         {
             trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Pocket Windows" };
             trayIcon.DoubleClick += delegate { ShowPanel(false, "tray double click"); };
+            trayIcon.BalloonTipClicked += delegate { if (promoBalloonPending) { promoBalloonPending = false; OpenContact(); } };
+            trayIcon.BalloonTipClosed += delegate { promoBalloonPending = false; };
             trayIcon.MouseUp += delegate (object sender, Forms.MouseEventArgs e) { if (e.Button == Forms.MouseButtons.Right) ShowTrayMenu(); };
             lifecycleTimer.Tick += async delegate { await RefreshRuntimeAsync(); };
             lifecycleTimer.Start(); UpdateTray();
