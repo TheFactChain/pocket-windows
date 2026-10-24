@@ -35,7 +35,8 @@ class DisplayControllerTests(unittest.TestCase):
                                and any((isinstance(target, ast.Name) and target.id == 'env')
                                        or (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
                                            and target.value.id == 'env') for target in node.targets)]
-                scope = dict(os=os, root=ROOT, engine=runtime.engine_path(ROOT), runtime=runtime)
+                scope = dict(os=os, root=ROOT, engine=runtime.engine_path(ROOT), runtime=runtime,
+                             REFRESH_INTERVAL_MS=config.REFRESH_INTERVAL_MS, viewer_settings=config.VIEWER_DEFAULTS)
                 exec(compile(ast.Module(body=assignments, type_ignores=[]), script, 'exec'), scope)
                 child = scope['env']
                 self.assertEqual(child.get('SDL_WINDOWS_DPI_AWARENESS'), 'permonitorv2')
@@ -53,7 +54,7 @@ class DisplayControllerTests(unittest.TestCase):
             arguments = ['-machine', 'q35', '-display', 'sdl,gl=off', '-serial', 'none']
             scope = dict(root=root, output=output, arguments=arguments, normal_runtime=True,
                          session_nonce='a' * 32, windows_settings=settings,
-                         load_viewer_settings=config.load_viewer_settings)
+                         load_viewer_settings=config.load_viewer_settings, REFRESH_INTERVAL_MS=config.REFRESH_INTERVAL_MS, env={})
             with mock.patch.object(settings, 'host_display', return_value=SCREEN):
                 exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
             medium = json.loads((output / 'display-settings/SETTINGS.JSN').read_bytes())
@@ -82,7 +83,7 @@ class DisplayControllerTests(unittest.TestCase):
             arguments = ['-machine', 'q35', '-display', 'sdl,gl=off', '-serial', 'none']
             scope = dict(root=root, output=output, arguments=arguments, normal_runtime=True,
                          session_nonce='a' * 32, windows_settings=settings,
-                         load_viewer_settings=lambda root: {'schema': 1, 'start_fullscreen': True, 'remember_window': True})
+                         load_viewer_settings=lambda root: {'schema': 1, 'start_fullscreen': True, 'remember_window': True, 'refresh_hz': 60}, REFRESH_INTERVAL_MS=config.REFRESH_INTERVAL_MS, env={})
             with mock.patch.object(settings, 'host_display', return_value=SCREEN):
                 exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
             self.assertEqual(arguments[arguments.index('-display') + 1],
@@ -90,6 +91,23 @@ class DisplayControllerTests(unittest.TestCase):
             # Full screen keeps Windows' own size too; SDL scales it to the monitor.
             self.assertIn('VGA.xres=1920', arguments)
             self.assertIn('VGA.yres=1080', arguments)
+
+    def test_refresh_rate_reaches_the_sdl_window_as_an_update_period(self):
+        block = next(node for node in self.tree().body if isinstance(node, ast.If)
+                     and ast.unparse(node.test) == 'normal_runtime')
+        for hz, period in ((30, '33'), (60, '16'), (120, '8'), (144, '7')):
+            with self.subTest(hz=hz), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / 'logs/session'
+                output.mkdir(parents=True)
+                env = {}
+                scope = dict(root=root, output=output, arguments=['-machine', 'q35', '-display', 'sdl,gl=off', '-serial', 'none'],
+                             normal_runtime=True, session_nonce='a' * 32, windows_settings=settings,
+                             load_viewer_settings=lambda root: dict(config.VIEWER_DEFAULTS, refresh_hz=hz),
+                             REFRESH_INTERVAL_MS=config.REFRESH_INTERVAL_MS, env=env)
+                with mock.patch.object(settings, 'host_display', return_value=SCREEN):
+                    exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
+                self.assertEqual(env['WCP_REFRESH_MS'], period)
 
     def test_normal_boot_uses_saved_guest_mode_for_vga(self):
         block = next(node for node in self.tree().body if isinstance(node, ast.If)
@@ -103,7 +121,7 @@ class DisplayControllerTests(unittest.TestCase):
             arguments = ['-machine', 'q35', '-display', 'sdl,gl=off', '-serial', 'none']
             scope = dict(root=root, output=output, arguments=arguments, normal_runtime=True,
                          session_nonce='a' * 32, windows_settings=settings,
-                         load_viewer_settings=config.load_viewer_settings)
+                         load_viewer_settings=config.load_viewer_settings, REFRESH_INTERVAL_MS=config.REFRESH_INTERVAL_MS, env={})
             with mock.patch.object(settings, 'host_display', return_value=SCREEN):
                 exec(compile(ast.Module(body=[block], type_ignores=[]), 'normal-boot', 'exec'), scope)
             self.assertEqual([arguments[i + 1] for i, name in enumerate(arguments) if name == '-global'],

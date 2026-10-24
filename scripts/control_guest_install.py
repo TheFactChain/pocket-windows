@@ -16,13 +16,13 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 from runtime_network_plan import arguments as network_arguments
 from collections import deque
 from runtime_logs import start_capped_drain, CappedWriter
-from runtime_config import load_settings, load_viewer_settings
+from runtime_config import load_settings, load_viewer_settings, REFRESH_INTERVAL_MS
 import launch_runtime as runtime
 import windows_guest_settings as windows_settings
 import windows_hardware
 import host_file_sharing as file_sharing
 
-ENGINE_SHA256 = '8a0feb6045e7493c16579ffefcc2d840074fe1e4af1c99193dee8c6fabf03a86'
+ENGINE_SHA256 = '808aceefc5fd8553cb03e3514e042f2a8a2854c8b1407dfc48895618ff2454e6'
 
 def sha(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
@@ -164,6 +164,7 @@ if normal_runtime:
         import clipboard_bridge
         clipboard_port = clipboard_bridge.reserve_port()
         arguments += clipboard_bridge.arguments(clipboard_port)
+    env['WCP_REFRESH_MS'] = str(REFRESH_INTERVAL_MS[viewer_settings['refresh_hz']])  # read by the patched SDL engine
     # SDL's close button otherwise cuts guest power without an ACPI shutdown.
     arguments[arguments.index('-display') + 1] = ('sdl,gl=off,window-close=off'
         + (',full-screen=on' if viewer_settings['start_fullscreen'] else ''))

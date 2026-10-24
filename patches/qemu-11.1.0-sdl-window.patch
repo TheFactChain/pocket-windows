@@ -1,6 +1,29 @@
 --- a/ui/sdl2.c
 +++ b/ui/sdl2.c
-@@ -91,8 +91,6 @@
+@@ -58,7 +58,21 @@
+ static SDL_Cursor *guest_sprite;
+ static Notifier mouse_mode_notifier;
+ 
+-#define SDL2_REFRESH_INTERVAL_BUSY 10
++/* Picture update period in ms: the launcher's frame rate setting arrives as WCP_REFRESH_MS. */
++static int wcp_refresh_ms(void)
++{
++    static int period;
++
++    if (!period) {
++        const char *text = getenv("WCP_REFRESH_MS");
++        int value = text ? atoi(text) : 0;
++
++        period = value >= 4 && value <= GUI_REFRESH_INTERVAL_DEFAULT ? value : GUI_REFRESH_INTERVAL_DEFAULT;
++    }
++    return period;
++}
++
++#define SDL2_REFRESH_INTERVAL_BUSY (wcp_refresh_ms() < 10 ? wcp_refresh_ms() : 10)
+ #define SDL2_MAX_IDLE_COUNT (2 * GUI_REFRESH_INTERVAL_DEFAULT \
+                              / SDL2_REFRESH_INTERVAL_BUSY + 1)
+ 
+@@ -91,8 +105,6 @@
  
      if (gui_fullscreen) {
          flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -9,7 +32,7 @@
      }
      if (scon->hidden) {
          flags |= SDL_WINDOW_HIDDEN;
-@@ -132,6 +130,8 @@
+@@ -132,6 +144,8 @@
      }
  
      sdl_update_caption(scon);
@@ -18,10 +41,14 @@
  }
  
  void sdl2_window_destroy(struct sdl2_console *scon)
-@@ -152,15 +152,77 @@
+@@ -152,15 +166,77 @@
      scon->real_window = NULL;
  }
  
+-void sdl2_window_resize(struct sdl2_console *scon)
+-{
+-    if (!scon->real_window) {
+-        return;
 +/* Small aspect units avoid borders; large units need ordinary pixel rounding. */
 +static void sdl2_window_client_size(int surface_w, int surface_h,
 +                                   int max_w, int max_h, int *width, int *height)
@@ -50,18 +77,14 @@
 +                                          (double)max_h / surface_h));
 +        *width = SDL_max(1, (int)(surface_w * scale));
 +        *height = SDL_max(1, (int)(surface_h * scale));
-+    }
+     }
 +}
-+
- void sdl2_window_resize(struct sdl2_console *scon)
- {
--    if (!scon->real_window) {
--        return;
--    }
--
+ 
 -    SDL_SetWindowSize(scon->real_window,
 -                      surface_width(scon->surface),
 -                      surface_height(scon->surface));
++void sdl2_window_resize(struct sdl2_console *scon)
++{
 +    SDL_Rect usable;
 +    int display, width, height, current_w, current_h;
 +    int top = 0, left = 0, bottom = 0, right = 0;
@@ -103,7 +126,7 @@
  }
  
  static void sdl2_redraw(struct sdl2_console *scon)
-@@ -176,41 +238,8 @@
+@@ -176,41 +252,8 @@
  
  static void sdl_update_caption(struct sdl2_console *scon)
  {
@@ -146,7 +169,7 @@
      }
  }
  
-@@ -273,7 +302,6 @@
+@@ -273,7 +316,6 @@
      }
      SDL_SetWindowGrab(scon->real_window, SDL_TRUE);
      gui_grab = 1;
@@ -154,7 +177,7 @@
  }
  
  static void sdl_grab_end(struct sdl2_console *scon)
-@@ -281,7 +309,6 @@
+@@ -281,7 +323,6 @@
      SDL_SetWindowGrab(scon->real_window, SDL_FALSE);
      gui_grab = 0;
      sdl_show_cursor(scon);
@@ -162,7 +185,7 @@
  }
  
  static void absolute_mouse_grab(struct sdl2_console *scon)
-@@ -362,6 +389,7 @@
+@@ -362,6 +403,7 @@
              sdl_grab_end(scon);
          }
          SDL_SetWindowFullscreen(scon->real_window, 0);
@@ -170,7 +193,7 @@
      }
      sdl2_redraw(scon);
  }
-@@ -495,37 +523,82 @@
+@@ -495,37 +537,82 @@
      }
  }
  
@@ -179,13 +202,6 @@
 +static bool sdl2_pointer_at_edge(struct sdl2_console *scon, int x, int y)
  {
      int max_x, max_y;
--    struct sdl2_console *scon = get_scon_from_window(ev->motion.windowID);
--    int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;
--
--    if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
--        return;
--    }
--
 +
 +    if (scon->opengl) {
 +        SDL_GetWindowSize(scon->real_window, &max_x, &max_y);
@@ -222,29 +238,12 @@
 +        }
 +        return;
 +    }
-     SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
--    if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
--        max_x = scr_w - 1;
--        max_y = scr_h - 1;
--        if (gui_grab && !gui_fullscreen
--            && (ev->motion.x == 0 || ev->motion.y == 0 ||
--                ev->motion.x == max_x || ev->motion.y == max_y)) {
--            sdl_grab_end(scon);
--        }
--        if (!gui_grab &&
--            (ev->motion.x > 0 && ev->motion.x < max_x &&
--             ev->motion.y > 0 && ev->motion.y < max_y)) {
--            sdl_grab_start(scon);
--        }
++    SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
 +    if (scr_w <= 0 || scr_h <= 0) {
 +        return;
-     }
-     surf_w = surface_width(scon->surface);
-     surf_h = surface_height(scon->surface);
--    x = (int64_t)ev->motion.x * surf_w / scr_w;
--    y = (int64_t)ev->motion.y * surf_h / scr_h;
--    dx = (int64_t)ev->motion.xrel * surf_w / scr_w;
--    dy = (int64_t)ev->motion.yrel * surf_h / scr_h;
++    }
++    surf_w = surface_width(scon->surface);
++    surf_h = surface_height(scon->surface);
 +    *x = (int64_t)*x * surf_w / scr_w;
 +    *y = (int64_t)*y * surf_h / scr_h;
 +    *dx = (int64_t)*dx * surf_w / scr_w;
@@ -253,23 +252,39 @@
 +
 +static void handle_mousemotion(SDL_Event *ev)
 +{
-+    struct sdl2_console *scon = get_scon_from_window(ev->motion.windowID);
+     struct sdl2_console *scon = get_scon_from_window(ev->motion.windowID);
+-    int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;
 +    int x, y, dx, dy;
-+
-+    if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
-+        return;
-+    }
-+
-+    if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
+ 
+     if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
+         return;
+     }
+ 
+-    SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
+     if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
+-        max_x = scr_w - 1;
+-        max_y = scr_h - 1;
+-        if (gui_grab && !gui_fullscreen
+-            && (ev->motion.x == 0 || ev->motion.y == 0 ||
+-                ev->motion.x == max_x || ev->motion.y == max_y)) {
 +        bool at_edge = sdl2_pointer_at_edge(scon, ev->motion.x, ev->motion.y);
 +
 +        if (gui_grab && !gui_fullscreen && at_edge) {
-+            sdl_grab_end(scon);
-+        }
+             sdl_grab_end(scon);
+         }
+-        if (!gui_grab &&
+-            (ev->motion.x > 0 && ev->motion.x < max_x &&
+-             ev->motion.y > 0 && ev->motion.y < max_y)) {
 +        if (!gui_grab && !at_edge) {
-+            sdl_grab_start(scon);
-+        }
-+    }
+             sdl_grab_start(scon);
+         }
+     }
+-    surf_w = surface_width(scon->surface);
+-    surf_h = surface_height(scon->surface);
+-    x = (int64_t)ev->motion.x * surf_w / scr_w;
+-    y = (int64_t)ev->motion.y * surf_h / scr_h;
+-    dx = (int64_t)ev->motion.xrel * surf_w / scr_w;
+-    dy = (int64_t)ev->motion.yrel * surf_h / scr_h;
 +    x = ev->motion.x;
 +    y = ev->motion.y;
 +    dx = ev->motion.xrel;
@@ -278,7 +293,7 @@
      if (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
          sdl_send_mouse_event(scon, dx, dy, x, y, ev->motion.state);
      }
-@@ -536,16 +609,16 @@
+@@ -536,16 +623,16 @@
      int buttonstate = SDL_GetMouseState(NULL, NULL);
      SDL_MouseButtonEvent *bev;
      struct sdl2_console *scon = get_scon_from_window(ev->button.windowID);
@@ -299,7 +314,7 @@
  
      if (!gui_grab && !qemu_input_is_absolute(scon->dcl.con)) {
          if (ev->type == SDL_MOUSEBUTTONUP && bev->button == SDL_BUTTON_LEFT) {
-@@ -603,14 +676,21 @@
+@@ -603,14 +690,21 @@
      case SDL_WINDOWEVENT_RESIZED:
          {
              QemuUIInfo info = {
@@ -323,14 +338,25 @@
          sdl2_redraw(scon);
          break;
      case SDL_WINDOWEVENT_FOCUS_GAINED:
-@@ -634,6 +714,7 @@
+@@ -634,7 +728,8 @@
          }
          break;
      case SDL_WINDOWEVENT_RESTORED:
+-        qemu_console_listener_set_refresh(&scon->dcl, GUI_REFRESH_INTERVAL_DEFAULT);
 +        sdl2_window_resize(scon);
-         qemu_console_listener_set_refresh(&scon->dcl, GUI_REFRESH_INTERVAL_DEFAULT);
++        qemu_console_listener_set_refresh(&scon->dcl, wcp_refresh_ms());
          break;
      case SDL_WINDOWEVENT_MINIMIZED:
+         qemu_console_listener_set_refresh(&scon->dcl, 500);
+@@ -721,7 +816,7 @@
+         if (scon->idle_counter < SDL2_MAX_IDLE_COUNT) {
+             scon->idle_counter++;
+             if (scon->idle_counter >= SDL2_MAX_IDLE_COUNT) {
+-                scon->dcl.update_interval = GUI_REFRESH_INTERVAL_DEFAULT;
++                scon->dcl.update_interval = wcp_refresh_ms();
+             }
+         }
+     } else {
 --- a/include/ui/sdl2.h
 +++ b/include/ui/sdl2.h
 @@ -42,6 +42,8 @@

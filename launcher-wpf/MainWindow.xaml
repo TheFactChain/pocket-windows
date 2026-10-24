@@ -208,6 +208,22 @@
                                 </DockPanel>
                                 <Border Style="{StaticResource Separator}" />
                                 <DockPanel Margin="16,5">
+                                    <Border Width="30" Height="30" CornerRadius="9" Background="#FF2D55" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Flash24" FontSize="17" Foreground="White" /></Border>
+                                    <ComboBox x:Name="RefreshBox" Visibility="Collapsed" SelectionChanged="OnSettingChanged" />
+                                    <Border DockPanel.Dock="Right" Background="{StaticResource Page}" CornerRadius="10" Padding="2" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Style="{StaticResource Step}" Click="OnRefreshDown" ToolTip="Меньше" AutomationProperties.Name="Частота меньше"><ui:SymbolIcon Symbol="Subtract16" FontSize="14" Foreground="#3390EC" /></Button>
+                                            <TextBlock Text="{Binding SelectedItem, ElementName=RefreshBox}" Width="96" TextAlignment="Center" VerticalAlignment="Center" FontSize="14.5" FontWeight="SemiBold" Foreground="{StaticResource Ink}" />
+                                            <Button Style="{StaticResource Step}" Click="OnRefreshUp" ToolTip="Больше" AutomationProperties.Name="Частота больше"><ui:SymbolIcon Symbol="Add16" FontSize="14" Foreground="#3390EC" /></Button>
+                                        </StackPanel>
+                                    </Border>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Частота кадров" Style="{StaticResource RowText}" />
+                                        <TextBlock Text="Сама Windows рисует до 60 кадров" Style="{StaticResource Caption}" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Separator}" />
+                                <DockPanel Margin="16,5">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#AF52DE" Margin="0,0,14,0"><ui:SymbolIcon Symbol="FullScreenMaximize24" FontSize="17" Foreground="White" /></Border>
                                     <ui:ToggleSwitch x:Name="FullscreenSwitch" DockPanel.Dock="Right" Click="OnSettingChanged" />
                                     <TextBlock Text="Открывать на весь экран" Style="{StaticResource RowText}" />

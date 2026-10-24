@@ -5,7 +5,8 @@ DEFAULTS = {'schema': 1, 'work_memory_mib': 4096, 'gateway_memory_mib': 1024,
             'vcpus': 2, 'lan_port': 31861}
 RANGES = {'work_memory_mib': (1024, 32768), 'gateway_memory_mib': (256, 4096),
           'vcpus': (1, 32), 'lan_port': (1024, 65535)}
-VIEWER_DEFAULTS = {'schema': 1, 'start_fullscreen': False, 'remember_window': True, 'share_clipboard': True}
+VIEWER_DEFAULTS = {'schema': 1, 'start_fullscreen': False, 'remember_window': True, 'share_clipboard': True, 'refresh_hz': 60}
+REFRESH_INTERVAL_MS = {30: 33, 60: 16, 120: 8, 144: 7}  # display update period in the SDL window for each choice
 
 
 def validate_viewer_settings(value):
@@ -16,6 +17,8 @@ def validate_viewer_settings(value):
         raise ValueError('Unsupported viewer settings schema')
     if any(type(result[key]) is not bool for key in ('start_fullscreen', 'remember_window', 'share_clipboard')):
         raise ValueError('Boolean viewer settings required')
+    if type(result['refresh_hz']) is not int or result['refresh_hz'] not in REFRESH_INTERVAL_MS:
+        raise ValueError('Unsupported refresh rate')
     return result
 
 

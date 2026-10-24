@@ -33,6 +33,8 @@ namespace WindowsClaude.Launcher
         static readonly int[,] Modes = { { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1366, 768 }, { 1440, 900 },
             { 1600, 900 }, { 1680, 1050 }, { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 } };
         const int DefaultMode = 8;
+        static readonly int[] RefreshRates = { 30, 60, 120, 144 };
+        const int DefaultRefresh = 1;
         static readonly string[] Protocols = { "hysteria2", "socks5", "http", "https" };
 
         readonly DispatcherTimer lifecycleTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -46,7 +48,7 @@ namespace WindowsClaude.Launcher
         Dictionary<string, object> readinessReport, operationResult, settingsHost, originalSettings, originalWindows, originalViewer, originalFiles;
         Task<Dictionary<string, object>> pendingOutcome;
         string pendingStartReceipt, activeOperationAction, workState = "unknown", gatewayState = "unknown", suggestedAction = "retry", reportText = "", displayedChecks;
-        bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing, reallyClose,
+        bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing,
             panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, checksOpen, pulsing;
         int operationRevision, attentionPolls; string shownStatus, lastAttention;
         bool trayNoticeShown, displayNoticeShown, attentionNoticeShown, trayPromotionStarted;
@@ -91,6 +93,7 @@ namespace WindowsClaude.Launcher
             }
             BuildHelp();
             for (int index = 0; index < Modes.GetLength(0); index++) ResolutionBox.Items.Add(Modes[index, 0] + " × " + Modes[index, 1]);
+            foreach (int rate in RefreshRates) RefreshBox.Items.Add(rate + " Гц");
             VersionText.Text = ReleaseInfo.Read(Bridge.Root).DisplayText;
 
             InputBindings.Add(new KeyBinding(new Command(() => Navigate(AppPage.Connection)), Key.D2, ModifierKeys.Control));
@@ -651,8 +654,7 @@ namespace WindowsClaude.Launcher
             {
                 new TrayMenu.Item { Text = "Открыть панель", Icon = SymbolRegular.Open20, Tint = Blue, Run = delegate { ShowPanel(false, "tray menu"); } },
                 new TrayMenu.Item { Text = "Выключить Windows", Icon = SymbolRegular.Power20, Tint = Red, Enabled = stopAvailable && !busy && !outcomeUnknown,
-                    Run = async delegate { ShowPanel(false, "tray: stop Windows"); if (stopAvailable) await RunAction("stop", false); } },
-                new TrayMenu.Item { Text = "Закрыть панель", Caption = "Windows продолжит работать", Icon = SymbolRegular.Dismiss20, Tint = Grey, Run = delegate { reallyClose = true; Close(); } }
+                    Run = async delegate { ShowPanel(false, "tray: stop Windows"); if (stopAvailable) await RunAction("stop", false); } }
             });
         }
 
@@ -731,7 +733,8 @@ namespace WindowsClaude.Launcher
 
         void OnClosing(object sender, CancelEventArgs e)
         {
-            if (!reallyClose && (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start")))
+            // While Windows runs the tray icon is its only handle, so the panel can hide but never quit.
+            if (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start"))
             { e.Cancel = true; panelDismissedByUser = true; HidePanelForSession("closed by the user while Windows runs"); return; }
             closing = true; lifecycleTimer.Stop(); saveTimer.Stop();
             if (trayIcon != null) { trayIcon.Visible = false; trayIcon.Dispose(); trayIcon = null; }
@@ -800,6 +803,9 @@ namespace WindowsClaude.Launcher
                     for (int index = 0; index < Modes.GetLength(0); index++)
                         if (Text(originalWindows, "width", "") == Modes[index, 0].ToString() && Text(originalWindows, "height", "") == Modes[index, 1].ToString()) selected = index;
                 ResolutionBox.SelectedIndex = selected;
+                int rate; Int32.TryParse(Text(originalViewer, "refresh_hz", "60"), NumberStyles.None, CultureInfo.InvariantCulture, out rate);
+                int rateIndex = Array.IndexOf(RefreshRates, rate);
+                RefreshBox.SelectedIndex = rateIndex < 0 ? DefaultRefresh : rateIndex;
                 FullscreenSwitch.IsChecked = Flag(originalViewer, "start_fullscreen");
                 RememberWindowSwitch.IsChecked = originalViewer == null || !originalViewer.ContainsKey("remember_window") || Flag(originalViewer, "remember_window");
                 ClipboardSwitch.IsChecked = originalViewer == null || !originalViewer.ContainsKey("share_clipboard") || Flag(originalViewer, "share_clipboard");
@@ -881,6 +887,13 @@ namespace WindowsClaude.Launcher
         }
         void OnResolutionDown(object sender, RoutedEventArgs e) { StepResolution(-1); }
         void OnResolutionUp(object sender, RoutedEventArgs e) { StepResolution(1); }
+        void StepRefresh(int delta)
+        {
+            int next = Math.Min(RefreshBox.Items.Count - 1, Math.Max(0, RefreshBox.SelectedIndex + delta));
+            if (next != RefreshBox.SelectedIndex) RefreshBox.SelectedIndex = next;
+        }
+        void OnRefreshDown(object sender, RoutedEventArgs e) { StepRefresh(-1); }
+        void OnRefreshUp(object sender, RoutedEventArgs e) { StepRefresh(1); }
         void OnCpuDown(object sender, RoutedEventArgs e) { StepCpu(-1); }
         void OnCpuUp(object sender, RoutedEventArgs e) { StepCpu(1); }
 
@@ -900,7 +913,8 @@ namespace WindowsClaude.Launcher
             value = new Dictionary<string, object>(originalSettings);
             value["schema"] = 1; value["work_memory_mib"] = mib; value["vcpus"] = cpus;
             value["windows"] = new Dictionary<string, object> { { "schema", 1 }, { "width", Modes[resolution, 0] }, { "height", Modes[resolution, 1] }, { "fit", false } };
-            value["viewer"] = new Dictionary<string, object> { { "schema", 1 }, { "start_fullscreen", FullscreenSwitch.IsChecked == true }, { "remember_window", RememberWindowSwitch.IsChecked == true }, { "share_clipboard", ClipboardSwitch.IsChecked == true } };
+            value["viewer"] = new Dictionary<string, object> { { "schema", 1 }, { "start_fullscreen", FullscreenSwitch.IsChecked == true }, { "remember_window", RememberWindowSwitch.IsChecked == true }, { "share_clipboard", ClipboardSwitch.IsChecked == true },
+                { "refresh_hz", RefreshRates[Math.Max(0, RefreshBox.SelectedIndex)] } };
             value["files"] = new Dictionary<string, object> { { "schema", 1 }, { "mode", mode }, { "folders", folders.ToArray() } };
             return true;
         }

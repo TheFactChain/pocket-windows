@@ -15,8 +15,8 @@ class ViewerSettingsTests(unittest.TestCase):
         self.assertTrue(callable(load), 'Viewer settings must be stored independently from VM resources')
         with tempfile.TemporaryDirectory() as temporary:
             self.assertEqual(load(Path(temporary)),
-                             {'schema': 1, 'start_fullscreen': False, 'remember_window': True, 'share_clipboard': True})
-        for value in ({'start_fullscreen': 1}, {'remember_window': 'yes'}, {'share_clipboard': 'yes'}, {'schema': True},
+                             {'schema': 1, 'start_fullscreen': False, 'remember_window': True, 'share_clipboard': True, 'refresh_hz': 60})
+        for value in ({'refresh_hz': 75}, {'refresh_hz': True}, {'refresh_hz': '60'}, {'start_fullscreen': 1}, {'remember_window': 'yes'}, {'share_clipboard': 'yes'}, {'schema': True},
                       {'schema': 2}, {'password': 'private'}, []):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 config.validate_viewer_settings(value)
@@ -24,7 +24,7 @@ class ViewerSettingsTests(unittest.TestCase):
     def test_save_viewer_settings_without_changing_hidden_resources(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            viewer = {'schema': 1, 'start_fullscreen': True, 'remember_window': False, 'share_clipboard': False}
+            viewer = {'schema': 1, 'start_fullscreen': True, 'remember_window': False, 'share_clipboard': False, 'refresh_hz': 144}
             value = dict(config.DEFAULTS, gateway_memory_mib=768, lan_port=32861, viewer=viewer)
             saved = app.save_settings(root, value)
             self.assertEqual(saved['gateway_memory_mib'], 768)
