@@ -77,7 +77,7 @@
                         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                         <Border Grid.Row="0" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Top">
                             <StackPanel>
-                                <Button x:Name="ConnectionRow" Style="{StaticResource Row}" Padding="16,13" Click="OnConnectionRow" ToolTip="Ctrl+2">
+                                <Button x:Name="ConnectionRow" Style="{StaticResource Row}" Padding="16,12" Click="OnConnectionRow" ToolTip="Ctrl+2">
                                     <DockPanel>
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#3390EC" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Globe24" FontSize="17" Foreground="White" /></Border>
                                         <StackPanel VerticalAlignment="Center">
@@ -87,7 +87,7 @@
                                     </DockPanel>
                                 </Button>
                                 <Border Style="{StaticResource Separator}" />
-                                <Button x:Name="SettingsRow" Style="{StaticResource Row}" Padding="16,13" Click="OnSettingsRow">
+                                <Button x:Name="SettingsRow" Style="{StaticResource Row}" Padding="16,12" Click="OnSettingsRow">
                                     <DockPanel>
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#5856D6" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Desktop24" FontSize="17" Foreground="White" /></Border>
                                         <StackPanel VerticalAlignment="Center">
@@ -97,7 +97,7 @@
                                     </DockPanel>
                                 </Button>
                                 <Border Style="{StaticResource Separator}" />
-                                <Button x:Name="ChecksRow" Style="{StaticResource Row}" Padding="16,13" Click="OnChecksRow" ToolTip="Открыть проверку">
+                                <Button x:Name="ChecksRow" Style="{StaticResource Row}" Padding="16,12" Click="OnChecksRow" ToolTip="Открыть проверку">
                                     <DockPanel>
                                         <Border x:Name="DiagnosticBadge" Width="30" Height="30" CornerRadius="9" Background="#30B0C7" Margin="0,0,14,0"><ui:SymbolIcon x:Name="DiagnosticGlyph" Symbol="Pulse24" FontSize="17" Foreground="White" /></Border>
                                         <Border x:Name="DiagnosticPill" DockPanel.Dock="Right" CornerRadius="10" Padding="10,4" Background="#EDEDF0" VerticalAlignment="Center">
@@ -111,12 +111,17 @@
                                 </Button>
                             </StackPanel>
                         </Border>
-                        <StackPanel Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Center" Orientation="Horizontal" Margin="0,0,0,10">
-                            <Button Style="{StaticResource TextAction}" Content="Клавиши" Click="OnHelp" ToolTip="F1" />
-                            <Button Style="{StaticResource TextAction}" Content="Ярлык на рабочий стол" Click="OnShortcut" Margin="14,0,0,0" />
-                        </StackPanel>
                         <!-- Shop: both offers live in one group at the bottom, each opens a short sheet with what you get -->
-                        <Border Grid.Row="2" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom">
+                        <StackPanel Grid.Row="2" VerticalAlignment="Bottom">
+                        <Border Style="{StaticResource GroupBox}" Margin="0,0,0,12">
+                            <Button Style="{StaticResource Row}" Padding="16,10" Click="OnHelp" ToolTip="F1">
+                                <DockPanel>
+                                    <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>
+                                    <TextBlock Text="Клавиши" Style="{StaticResource RowText}" VerticalAlignment="Center" />
+                                </DockPanel>
+                            </Button>
+                        </Border>
+                        <Border Style="{StaticResource GroupBox}" Margin="0">
                             <StackPanel>
                                 <Button x:Name="ProxyRow" Style="{StaticResource Row}" Padding="16,10" Click="OnBuyProxy">
                                     <DockPanel>
@@ -141,6 +146,7 @@
                                 </Button>
                             </StackPanel>
                         </Border>
+                        </StackPanel>
                     </Grid>
                 </DockPanel>
 
@@ -258,6 +264,7 @@
                             </StackPanel>
                         </Border>
                         <TextBlock x:Name="SettingsNote" Style="{StaticResource Caption}" Margin="4,0" Text="Сохраняется само, применится при следующем запуске." />
+                        <Button Style="{StaticResource TextAction}" Content="Ярлык на рабочий стол" Click="OnShortcut" HorizontalAlignment="Left" Margin="-4,2,0,0" />
                     </StackPanel>
                 </ScrollViewer>
 

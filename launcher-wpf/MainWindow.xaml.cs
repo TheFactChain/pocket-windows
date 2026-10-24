@@ -558,6 +558,10 @@ namespace WindowsClaude.Launcher
             if (isReadiness && Bridge.Ok(result) && runtimeActive) NextStepText.Text = "Windows: " + VmState(workState) + ". Шлюз: " + VmState(gatewayState, true) + ".";
             suggestedAction = blocker == null ? "retry" : Text(blocker, "action", "retry");
             NextActionButton.Content = blocker == null ? "Проверить снова" : Text(blocker, "action_label", "Проверить снова");
+            bool restore = blocker != null && (suggestedAction == "prepare" || suggestedAction == "repair_gateway" || suggestedAction == "recover_session");
+            if (restore) { NextStepText.Text = ""; NextActionButton.Content = "Восстановить"; }
+            Show(NextStepText, !restore);
+            NextActionButton.Style = (Style)FindResource(restore ? "Pill" : "SoftPill");
             Show(NextActionButton, !Bridge.Ok(result));
 
             string displayState = DisplayState(report);
