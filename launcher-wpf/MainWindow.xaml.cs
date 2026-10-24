@@ -112,7 +112,7 @@ namespace WindowsClaude.Launcher
                 var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
                 if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
                 Rise(LaunchCard, 0); Rise(HomePage, 90);
-                StartLifecycle(); StartPromo(); await RunAction("diagnose", false);
+                StartLifecycle(); await RunAction("diagnose", false);
             };
             Closing += OnClosing;
         }
@@ -192,7 +192,7 @@ namespace WindowsClaude.Launcher
 
         void OpenSheet(string title, UIElement content)
         {
-            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet, ProSheet }) Show(part, part == content);
+            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet, OfferSheet }) Show(part, part == content);
             SheetTitle.Text = title;
             if (SheetHost.Visibility == Visibility.Visible) { content.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))); return; }
             Show(SheetHost, true);
@@ -309,7 +309,6 @@ namespace WindowsClaude.Launcher
         void UpdatePulse()
         {
             bool active = (busy && (activeOperationAction == "start" || activeOperationAction == "stop")) || workState == "starting" || workState == "stopping" || workState == "restarting";
-            Show(PromoGroup, !active);
             if (active == pulsing) return;
             pulsing = active;
             var scale = (ScaleTransform)Pulse.RenderTransform;
@@ -520,12 +519,13 @@ namespace WindowsClaude.Launcher
                 NoteRunning();
                 var connection = Child(result, "connection");
                 var selected = Child(connection, "selected_profile");
-                if (selected == null) { ConnectionValue.Text = "Добавить подключение"; ConnectionDetail.Text = "Вставь ссылку от своего Proxy"; }
+                if (selected == null) { ConnectionValue.Text = "Добавить подключение"; ConnectionDetail.Text = "Вставь ссылку от своего Proxy или купи ниже"; ProxyPrice.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0.55, TimeSpan.FromSeconds(1.6)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } }); }
                 else
                 {
                     string protocol = Text(selected, "protocol", ""); protocol = protocol == "hysteria2" ? "Hysteria2" : protocol.ToUpperInvariant();
                     ConnectionValue.Text = Text(selected, "name", "Профиль");
                     ConnectionDetail.Text = protocol + ", " + (Flag(selected, "needs_credentials") ? "нужно ввести пароль заново" : Flag(connection, "verified") ? "подключено и проверено" : "проверится при запуске");
+                    ProxyPrice.BeginAnimation(OpacityProperty, null); ProxyPrice.Opacity = 1;
                 }
             }
             else
@@ -640,14 +640,20 @@ namespace WindowsClaude.Launcher
         const string ContactUrl = "https://t.me/Daniil_Simples";
         bool runningNoted, promoBalloonPending;
 
-        void StartPromo()
+        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenOffer(0); }
+        void OnClaude(object sender, RoutedEventArgs e) { OpenOffer(1); }
+        static readonly string[][] Offers =
         {
-            PromoTitle.Text = "Свой Proxy, 900 ₽ в месяц"; PromoCaption.Text = "Всё настроено, поддержка всегда на связи"; PromoAction.Text = "Купить";
-            PromoPill.Background = Blue; PromoBadge.Background = Blue; PromoGlyph.Symbol = SymbolRegular.ShieldLock24;
+            new[] { "Proxy", "Личный Proxy под ключ", "900 ₽ в месяц", "Твой личный Proxy, не общий", "Всё настроено, остаётся вставить ссылку", "Поддержка на связи постоянно", "Купить в Telegram" },
+            new[] { "Claude Pro", "Оформим подписку под ключ", "2 000 ₽", "1. Открой бота в Telegram и выбери Claude Pro", "2. Оплати в боте удобным способом", "3. Получи данные и войди в Claude прямо в Windows", "Открыть бота в Telegram" }
+        };
+        void OpenOffer(int index)
+        {
+            var offer = Offers[index];
+            OfferHeadline.Text = offer[1]; OfferPrice.Text = offer[2];
+            OfferLine1.Text = offer[3]; OfferLine2.Text = offer[4]; OfferLine3.Text = offer[5]; OfferButton.Content = offer[6];
+            OpenSheet(offer[0], OfferSheet);
         }
-        void OnPromo(object sender, RoutedEventArgs e) { OpenContact(); }
-        void OnClaude(object sender, RoutedEventArgs e) { OpenSheet("Claude Pro", ProSheet); }
-        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact(); }
         void OnOpenContact(object sender, RoutedEventArgs e) { OpenContact(); }
         static void OpenContact()
         {

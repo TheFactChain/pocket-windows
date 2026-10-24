@@ -82,7 +82,7 @@
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#3390EC" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Globe24" FontSize="17" Foreground="White" /></Border>
                                         <StackPanel VerticalAlignment="Center">
                                             <TextBlock x:Name="ConnectionValue" Text="Добавить подключение" Style="{StaticResource RowText}" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock x:Name="ConnectionDetail" Text="Вставь ссылку от своего Proxy" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                            <TextBlock x:Name="ConnectionDetail" Text="Вставь ссылку от своего Proxy или купи ниже" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                         </StackPanel>
                                     </DockPanel>
                                 </Button>
@@ -111,40 +111,31 @@
                                 </Button>
                             </StackPanel>
                         </Border>
+                        <!-- Shop: both offers live in one group at the bottom, each opens a short sheet with what you get -->
                         <Border Grid.Row="2" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Bottom">
                             <StackPanel>
-                                <Button Style="{StaticResource Row}" Padding="16,12" Click="OnHelp" ToolTip="F1">
+                                <Button x:Name="ProxyRow" Style="{StaticResource Row}" Padding="16,10" Click="OnBuyProxy">
                                     <DockPanel>
-                                        <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>
-                                        <TextBlock Text="Клавиши" Style="{StaticResource RowText}" />
+                                        <Border x:Name="ProxyPrice" DockPanel.Dock="Right" CornerRadius="12" Padding="11,4" Background="#E9F2FD" VerticalAlignment="Center"><TextBlock Text="900 ₽ в месяц" FontSize="12.5" FontWeight="SemiBold" Foreground="#1C5A9A" /></Border>
+                                        <Border Width="30" Height="30" CornerRadius="9" Background="#3390EC" Margin="0,0,14,0"><ui:SymbolIcon Symbol="ShieldLock24" FontSize="17" Foreground="White" /></Border>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="Proxy" Style="{StaticResource RowText}" />
+                                            <TextBlock Text="Личный, настроен, с поддержкой" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        </StackPanel>
                                     </DockPanel>
                                 </Button>
                                 <Border Style="{StaticResource Separator}" />
-                                <Button Style="{StaticResource Row}" Padding="16,9" Click="OnClaude">
+                                <Button x:Name="ClaudeRow" Style="{StaticResource Row}" Padding="16,10" Click="OnClaude">
                                     <DockPanel>
+                                        <Border DockPanel.Dock="Right" CornerRadius="12" Padding="11,4" Background="#FBE9E1" VerticalAlignment="Center"><TextBlock Text="2 000 ₽" FontSize="12.5" FontWeight="SemiBold" Foreground="#A8472B" /></Border>
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#D97757" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Sparkle24" FontSize="17" Foreground="White" /></Border>
                                         <StackPanel VerticalAlignment="Center">
                                             <TextBlock Text="Claude Pro" Style="{StaticResource RowText}" />
-                                            <TextBlock Text="2 000 ₽, оформим подписку в Telegram" Style="{StaticResource Caption}" />
+                                            <TextBlock Text="Оформим подписку за тебя" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                         </StackPanel>
                                     </DockPanel>
                                 </Button>
                             </StackPanel>
-                        </Border>
-                        <!-- Promo: one card that alternates between the two offers; hidden while Windows starts -->
-                        <Border x:Name="PromoGroup" Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center">
-                            <Button x:Name="PromoCard" Style="{StaticResource Row}" Padding="14,10" Click="OnPromo">
-                                <DockPanel>
-                                    <Border x:Name="PromoPill" DockPanel.Dock="Right" CornerRadius="14" Padding="14,5" Background="{StaticResource Accent}" VerticalAlignment="Center" Margin="10,0,0,0">
-                                        <TextBlock x:Name="PromoAction" FontSize="13" FontWeight="SemiBold" Foreground="White" />
-                                    </Border>
-                                    <Border x:Name="PromoBadge" Width="30" Height="30" CornerRadius="9" Margin="0,0,12,0"><ui:SymbolIcon x:Name="PromoGlyph" FontSize="17" Foreground="White" /></Border>
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="PromoTitle" Style="{StaticResource RowText}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock x:Name="PromoCaption" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-                                    </StackPanel>
-                                </DockPanel>
-                            </Button>
                         </Border>
                     </Grid>
                 </DockPanel>
@@ -263,15 +254,24 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource GroupBox}" Margin="0,0,0,6">
+                        <TextBlock x:Name="SettingsNote" Style="{StaticResource Caption}" Margin="4,0" Text="Сохраняется само, применится при следующем запуске." />
+                        <Border Style="{StaticResource GroupBox}" Margin="0,10,0,6">
+                            <StackPanel>
                             <Button Style="{StaticResource Row}" Padding="16,12" Click="OnShortcut">
                                 <DockPanel>
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Link24" FontSize="17" Foreground="White" /></Border>
                                     <TextBlock Text="Ярлык на рабочий стол" Style="{StaticResource RowText}" />
                                 </DockPanel>
                             </Button>
+                                <Border Style="{StaticResource Separator}" />
+                                <Button Style="{StaticResource Row}" Padding="16,12" Click="OnHelp" ToolTip="F1">
+                                    <DockPanel>
+                                        <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>
+                                        <TextBlock Text="Клавиши" Style="{StaticResource RowText}" />
+                                    </DockPanel>
+                                </Button>
+                            </StackPanel>
                         </Border>
-                        <TextBlock x:Name="SettingsNote" Style="{StaticResource Caption}" Margin="4,0" Text="Сохраняется само, применится при следующем запуске." />
                     </StackPanel>
                 </ScrollViewer>
 
@@ -352,20 +352,20 @@
                         </StackPanel>
 
                         <!-- Manual editor: iOS form. Label on the left, plain text right after it, hints inside empty fields -->
-                        <!-- Claude Pro: three steps and one button to the seller -->
-                        <StackPanel x:Name="ProSheet" Visibility="Collapsed">
+                        <!-- Offer: what you get, the price and one button to the Telegram bot; filled by OpenOffer -->
+                        <StackPanel x:Name="OfferSheet" Visibility="Collapsed">
                             <Border Style="{StaticResource GroupBox}" Padding="16,12" Margin="0,0,0,12">
                                 <StackPanel>
                                     <DockPanel Margin="0,0,0,6">
-                                        <TextBlock DockPanel.Dock="Right" Text="2 000 ₽" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource Ink}" />
-                                        <TextBlock Text="Оформим подписку под ключ" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="OfferPrice" DockPanel.Dock="Right" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource Ink}" />
+                                        <TextBlock x:Name="OfferHeadline" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource Ink}" VerticalAlignment="Center" />
                                     </DockPanel>
-                                    <TextBlock Text="1. Открой бота в Telegram и выбери Claude Pro" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                                    <TextBlock Text="2. Оплати в боте удобным способом" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                                    <TextBlock Text="3. Получи данные и войди в Claude прямо в Windows" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <TextBlock x:Name="OfferLine1" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <TextBlock x:Name="OfferLine2" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                    <TextBlock x:Name="OfferLine3" Style="{StaticResource RowText}" TextWrapping="Wrap" Margin="0,4,0,0" />
                                 </StackPanel>
                             </Border>
-                            <Button Style="{StaticResource Pill}" Height="40" FontSize="15" Content="Открыть бота в Telegram" Click="OnOpenContact" />
+                            <Button x:Name="OfferButton" Style="{StaticResource Pill}" Height="40" FontSize="15" Click="OnOpenContact" />
                         </StackPanel>
 
                         <StackPanel x:Name="EditorSheet" Visibility="Collapsed">
