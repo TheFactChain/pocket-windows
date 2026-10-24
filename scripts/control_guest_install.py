@@ -189,6 +189,15 @@ if args.guest == 'work-boot' and args.network == 'isolated-lan':
     assert runtime.gateway_ready(root, gateway), 'Gateway stopped or changed before Windows startup'
 
 
+def work_startup_info():
+    if not normal_runtime:
+        return None
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 0  # Keep the first SDL window hidden until its product icon is assigned.
+    return startup
+
+
 def spawn_generation():
     global process, report, stderr_drain, inbox, qmp_events, qmp_reader, sequence
     if work_reboot_session:
@@ -197,7 +206,7 @@ def spawn_generation():
                 if work_stop_requested(output,session_nonce,controller_identity):
                     return False
                 if runtime.gateway_ready(root,gateway):
-                    process=subprocess.Popen([str(engine),*arguments],cwd=root,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW)
+                    process=subprocess.Popen([str(engine),*arguments],cwd=root,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW,startupinfo=work_startup_info())
                     break
                 if generation == 1:
                     raise RuntimeError('The original gateway is not verified for Windows startup')
@@ -205,7 +214,7 @@ def spawn_generation():
                 raise RuntimeError('The original gateway controller was lost; Windows was not restarted')
             time.sleep(.5)
     else:
-        process=subprocess.Popen([str(engine),*arguments],cwd=root,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW)
+        process=subprocess.Popen([str(engine),*arguments],cwd=root,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW,startupinfo=work_startup_info())
     stderr_drain=start_capped_drain(process.stderr.buffer,stderr_writer) if work_reboot_session else None
     report={'normal_runtime':normal_runtime,'schema':1,'process':runtime.process_identity(process.pid),
         'controller':controller_identity,'started_utc':datetime.now(timezone.utc).isoformat(),
@@ -388,6 +397,7 @@ def brand_work_window():
     user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
     user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPVOID,
                                          wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
     user.CreateIconFromResourceEx.argtypes = [ctypes.c_char_p, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
@@ -403,16 +413,19 @@ def brand_work_window():
     def visit(window, unused):
         pid = wintypes.DWORD()
         user.GetWindowThreadProcessId(window, ctypes.byref(pid))
-        if pid.value == process.pid and user.IsWindowVisible(window):
-            found.append(window)
+        if pid.value == process.pid:
+            kind = ctypes.create_unicode_buffer(64)
+            user.GetClassNameW(window, kind, len(kind))
+            if kind.value == 'SDL_app':
+                found.append(window)
         return True
     user.EnumWindows(callback_type(visit), 0)
     result = ctypes.c_size_t()
     for window in found:
         if not report.get('window_icon_set'):
             for kind, role in ((0, 'small'), (1, 'big')):
-                if branding_icons.get(role):
-                    user.SendMessageTimeoutW(window, 0x0080, kind, branding_icons[role], 0x0002, 200, ctypes.byref(result))  # WM_SETICON
+                if not branding_icons.get(role) or not user.SendMessageTimeoutW(window, 0x0080, kind, branding_icons[role], 0x0002, 200, ctypes.byref(result)):  # WM_SETICON
+                    return False
             report['window_icon_set'] = True
         title = ctypes.create_unicode_buffer(256)
         user.GetWindowTextW(window, title, 256)
@@ -455,19 +468,24 @@ def release_pointer_in_fullscreen():
 
 def show_work_window(command_code):
     """ShowWindowAsync never waits for QEMU's UI thread. 7 = minimized without focus, 9 = restore."""
+    if not brand_work_window():
+        return False
     from ctypes import wintypes
     user = ctypes.WinDLL('user32', use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
     user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
     found = []
     def visit(window, unused):
         pid = wintypes.DWORD()
         user.GetWindowThreadProcessId(window, ctypes.byref(pid))
-        if pid.value == process.pid and user.IsWindowVisible(window):
-            user.ShowWindowAsync(window, command_code)
-            found.append(window)
+        if pid.value == process.pid:
+            kind = ctypes.create_unicode_buffer(64)
+            user.GetClassNameW(window, kind, len(kind))
+            if kind.value == 'SDL_app' and user.ShowWindowAsync(window, command_code):
+                found.append(window)
         return True
     user.EnumWindows(callback_type(visit), 0)
     return bool(found)
@@ -663,7 +681,7 @@ try:
             while process.poll() is None:
                 if normal_runtime and not protected_window:
                     protected_window = protect_work_window()
-                if normal_runtime and report.get('window_parked') is False and time.monotonic() - begin < 60:
+                if normal_runtime and report.get('window_parked') is False:
                     report['window_parked'] = show_work_window(7)  # The SDL window appeared after cont.
                 if report.get('window_parked') is True and time.monotonic() >= display_poll:
                     try:

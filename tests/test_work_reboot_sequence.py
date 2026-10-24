@@ -82,6 +82,7 @@ class WorkRebootSequence(unittest.TestCase):
             scope={'runtime':runtime,'normal_runtime':True,'work_reboot_session':True,'output':output,'root':root,'engine':engine,'env':{},
                 'display_settings':None, 'protect_work_window':mock.Mock(return_value=True),
                 'show_work_window':mock.Mock(return_value=False),'pointer_settled':mock.Mock(return_value=True),
+                'work_startup_info':mock.Mock(return_value=None),
                 'file_sharing':file_api,'files_session':None,'clipboard':None,'clipboard_port':None,
                 'pointer_thread':SimpleNamespace(is_alive=lambda:True),
                 'arguments':['-drive','file=images/workvm-empty.qcow2','-no-reboot'],
