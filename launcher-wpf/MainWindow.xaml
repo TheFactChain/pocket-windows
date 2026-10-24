@@ -110,24 +110,15 @@
                                 </Button>
                             </StackPanel>
                         </Border>
-                        <!-- Shop: both offers live in one group at the bottom, each opens a short sheet with what you get -->
-                        <Border x:Name="UpdateGroup" Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center" Visibility="Collapsed">
-                            <Button x:Name="UpdateRow" Style="{StaticResource Row}" Padding="16,6" Click="OnUpdate">
+                        <Border x:Name="UpdateGroup" Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center">
+                            <Button x:Name="UpdateRow" Style="{StaticResource Row}" Padding="16,6" Click="OnUpdatesRow" AutomationProperties.Name="Обновления">
                                 <DockPanel>
-                                    <Border x:Name="UpdatePill" DockPanel.Dock="Right" CornerRadius="12" Padding="11,4" Background="#E3F7E8" VerticalAlignment="Center"><TextBlock x:Name="UpdateAction" Text="Обновить" FontSize="12.5" FontWeight="SemiBold" Foreground="#1E7A36" /></Border>
-                                    <Border Width="30" Height="30" CornerRadius="9" Background="#34C759" Margin="0,0,14,0"><ui:SymbolIcon Symbol="ArrowDownload24" FontSize="17" Foreground="White" /></Border>
+                                    <Border x:Name="UpdatePill" DockPanel.Dock="Right" CornerRadius="12" Padding="11,4" Background="#E3F7E8" VerticalAlignment="Center" Visibility="Collapsed"><TextBlock Text="Доступно" FontSize="12.5" FontWeight="SemiBold" Foreground="#1E7A36" /></Border>
+                                    <Border Width="30" Height="30" CornerRadius="9" Background="#3390EC" Margin="0,0,14,0"><ui:SymbolIcon Symbol="ArrowDownload24" FontSize="17" Foreground="White" /></Border>
                                     <StackPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="UpdateTitle" Style="{StaticResource RowText}" />
-                                        <TextBlock x:Name="UpdateCaption" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        <TextBlock Text="Обновления" Style="{StaticResource RowText}" />
+                                        <TextBlock x:Name="UpdateCaption" Text="Проверка версии и установка" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                     </StackPanel>
-                                </DockPanel>
-                            </Button>
-                        </Border>
-                        <Border x:Name="KeysGroup" Grid.Row="1" Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Center">
-                            <Button Style="{StaticResource Row}" Padding="16,6" Click="OnHelp" ToolTip="F1">
-                                <DockPanel>
-                                    <Border Width="30" Height="30" CornerRadius="9" Background="#8E8E93" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Keyboard24" FontSize="17" Foreground="White" /></Border>
-                                    <TextBlock Text="Клавиши" Style="{StaticResource RowText}" VerticalAlignment="Center" />
                                 </DockPanel>
                             </Button>
                         </Border>
@@ -200,7 +191,12 @@
                         </ScrollViewer>
 
                         <!-- Windows settings, saved automatically -->
-                <ScrollViewer x:Name="SettingsPane" VerticalScrollBarVisibility="Hidden" PanningMode="VerticalOnly" Visibility="Collapsed">
+                <DockPanel x:Name="SettingsPane" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button x:Name="KeysButton" Style="{StaticResource TextAction}" Content="Клавиши" Click="OnHelp" ToolTip="F1" />
+                        <Button Style="{StaticResource TextAction}" Content="Ярлык на рабочий стол" Click="OnShortcut" Margin="8,0,0,0" />
+                    </StackPanel>
+                  <ScrollViewer VerticalScrollBarVisibility="Hidden" PanningMode="VerticalOnly">
                     <StackPanel>
                         <Border x:Name="SettingsGroup" Style="{StaticResource GroupBox}" Margin="0,0,0,6">
                             <StackPanel x:Name="SettingsBody" IsEnabled="False">
@@ -274,9 +270,36 @@
                             </StackPanel>
                         </Border>
                         <TextBlock x:Name="SettingsNote" Style="{StaticResource Caption}" Margin="4,0" Text="Сохраняется само, применится при следующем запуске." />
-                        <Button Style="{StaticResource TextAction}" Content="Ярлык на рабочий стол" Click="OnShortcut" HorizontalAlignment="Left" Margin="-4,2,0,0" />
                     </StackPanel>
-                </ScrollViewer>
+                  </ScrollViewer>
+                </DockPanel>
+
+                        <ScrollViewer x:Name="UpdatesPane" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                          <StackPanel>
+                            <Border Style="{StaticResource GroupBox}" Padding="16,12" Margin="0,0,0,10">
+                                <DockPanel>
+                                    <Border Width="38" Height="38" CornerRadius="12" Background="#E9F2FD" Margin="0,0,12,0"><ui:SymbolIcon Symbol="ArrowDownload24" FontSize="21" Foreground="#3390EC" /></Border>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Pocket Windows" Style="{StaticResource RowText}" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="VersionText" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </DockPanel>
+                            </Border>
+                            <Border Style="{StaticResource GroupBox}" Padding="16,14" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock x:Name="UpdateStatusTitle" Text="Проверить новую версию" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource Ink}" />
+                                    <TextBlock x:Name="UpdateStatusText" Text="Проверка выполняется автоматически. Её также можно запустить вручную." Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,0" />
+                                    <TextBlock x:Name="UpdatePackageText" Style="{StaticResource Caption}" Margin="0,6,0,0" Visibility="Collapsed" />
+                                    <ProgressBar x:Name="UpdateProgress" Height="5" Margin="0,12,0,0" Minimum="0" Maximum="100" Foreground="#3390EC" Background="#E9F2FD" Visibility="Collapsed" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                        <Button x:Name="CheckUpdatesButton" Style="{StaticResource SoftPill}" Content="Проверить" Click="OnCheckUpdates" Height="36" FontSize="13.5" />
+                                        <Button x:Name="InstallUpdateButton" Style="{StaticResource Pill}" Content="Обновить" Click="OnUpdate" Height="36" FontSize="13.5" Margin="8,0,0,0" Visibility="Collapsed" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Style="{StaticResource Caption}" Margin="4,0" TextWrapping="Wrap" Text="Перед установкой выключи Windows. Программы и личные файлы внутри неё сохранятся." />
+                          </StackPanel>
+                        </ScrollViewer>
 
                         <!-- Diagnostics: a summary card, the checks, then repair actions in one line -->
                         <DockPanel x:Name="ChecksPanel" Visibility="Collapsed">
@@ -481,7 +504,6 @@
                         <!-- Keys -->
                         <StackPanel x:Name="HelpSheet" Visibility="Collapsed">
                             <Border Style="{StaticResource GroupBox}" Margin="0"><StackPanel x:Name="HelpRows" /></Border>
-                            <TextBlock x:Name="VersionText" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,8,0,0" />
                         </StackPanel>
                     </Grid>
                 </DockPanel>

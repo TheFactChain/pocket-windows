@@ -196,6 +196,11 @@ class InitialIntegrityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'incomplete'):
             integrity.verify_initial(self.root)
 
+    def test_new_app_modules_do_not_invalidate_the_original_package_receipt(self):
+        self.assertTrue(integrity.verify_initial(self.root)['ok'])
+        with mock.patch.object(pack, 'APP_FILES', (*pack.APP_FILES, 'scripts/future_module.py')):
+            self.assertEqual(integrity.verify_initial(self.root)['code'], 'cached')
+
     def test_hard_link_is_refused(self):
         os.link(self.root / pack.DATA_FILES[0], self.root / 'alias.qcow2')
         with self.assertRaises(ValueError):

@@ -16,6 +16,14 @@ MARKER = 'state/package-initial-check.json'
 RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
     'runtime/qemu-11.1.0/qemu-system-x86_64.exe', 'runtime/qemu-11.1.0/qemu-img.exe',
     'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd')
+# The schema-2 baseline is immutable; future APP_FILES additions belong to the update inventory.
+SCHEMA2_APPS = tuple('scripts/' + name for name in (
+    'portable_app.py', 'package_integrity.py', 'pack_existing_runtime.py', 'launch_runtime.py', 'control_guest_install.py',
+    'runtime_network_plan.py', 'runtime_config.py', 'windows_hardware.py', 'connection_profile.py',
+    'profile_store.py', 'gateway_controller.py', 'gateway_package.py', 'gateway_profile.py', 'session_carrier.py',
+    'file_snapshot.py', 'runtime_logs.py', 'windows_guest_settings.py', 'host_file_sharing.py', 'file_share_carrier.py',
+    'clipboard_bridge.py', 'window_branding.py', 'release_portable.py', 'prepare_runtime_bundle.py',
+    'Start-Runtime.ps1', 'Stop-Runtime.ps1', 'Prepare-Dependencies.ps1', 'Prepare-Host.ps1'))
 
 
 @contextmanager
@@ -63,13 +71,19 @@ def _manifest(raw):
             raise ValueError('Unsafe, duplicate or invalid package file')
         names.add(row['path'].casefold())
     payload = {row['path'] for row in value['files']}
-    required_apps = set(pack.APP_FILES)
+    # Schema 2 describes the original ZIP, including after application-only upgrades.
+    # New modules and runtime versions must not invalidate that immutable receipt.
+    required_apps = set(SCHEMA2_APPS)
     if 'scripts/package_integrity.py' not in payload:
         required_apps -= {'scripts/package_integrity.py', 'scripts/pack_existing_runtime.py'}
-    if 'scripts/release_portable.py' not in payload:  # packages from before the light updater
+    if 'scripts/release_portable.py' not in payload:
         required_apps -= {'scripts/release_portable.py', 'scripts/prepare_runtime_bundle.py'}
+    runtime_files = {row['path'] for row in value['files'] if pack.runtime_path(row['path'])}
+    if any(not any(name.endswith('/' + executable) for name in runtime_files)
+           for executable in ('python.exe', 'qemu-system-x86_64.exe', 'qemu-img.exe', 'share/edk2-x86_64-code.fd')):
+        raise ValueError('Package runtime manifest is incomplete')
     required = {*pack.DATA_FILES, *pack.PUBLIC_FILES, *required_apps,
-                *pack.COMPONENT_FILES, *RUNTIME_FILES, 'gateway/packages/current.json'}
+                *pack.COMPONENT_FILES, 'gateway/packages/current.json'}
     if (not required <= payload or value['encrypted_profiles_included'] is not (pack.PROFILE_FILE in payload)
             or any(name in payload for name in pack.GATEWAY_RECOVERY) != all(name in payload for name in pack.GATEWAY_RECOVERY)
             or value['gateway_recovery_included'] is not all(name in payload for name in pack.GATEWAY_RECOVERY)):

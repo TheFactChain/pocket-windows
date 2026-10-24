@@ -213,12 +213,180 @@ class ReleaseTests(unittest.TestCase):
             release.install_app(result['package'], result['sha256'], self.target)
         self.assertEqual((self.target / release.pack.APP_FILES[1]).read_bytes(), b'something else')
 
-    def test_light_package_skips_an_omitted_file_the_copy_never_had(self):
+    def test_light_package_rejects_a_missing_omitted_file_before_changes(self):
         result = release.package_app(self.bundle, self.next_release())
         (self.target / release.pack.APP_FILES[1]).unlink()
-        release.install_app(result['package'], result['sha256'], self.target)
+        before = (self.target / release.pack.APP_FILES[0]).read_bytes()
+        with self.assertRaises(RuntimeError):
+            release.install_app(result['package'], result['sha256'], self.target)
         self.assertFalse((self.target / release.pack.APP_FILES[1]).exists())
-        self.assertEqual((self.target / release.pack.APP_FILES[0]).read_bytes(), b'newer code')
+        self.assertEqual((self.target / release.pack.APP_FILES[0]).read_bytes(), before)
+
+    def test_full_app_package_repairs_missing_files_without_user_data(self):
+        self.next_release()
+        (self.target / release.pack.APP_FILES[1]).unlink()
+        result = release.package_app(self.bundle)
+        self.assertEqual(result['omitted'], 0)
+        release.install_app(result['package'], result['sha256'], self.target)
+        self.assertEqual((self.target / release.pack.APP_FILES[1]).read_bytes(), (self.app / release.pack.APP_FILES[1]).read_bytes())
+        self.unchanged_private()
+
+    def test_empty_omitted_list_cannot_hide_an_incomplete_full_payload(self):
+        self.manifest['omitted'] = []
+        self.manifest['common_files'] = [row for row in self.manifest['common_files'] if row['path'] != 'Launcher.exe']
+        self.save_manifest()
+        with self.assertRaises(ValueError):
+            release.apply_update(self.bundle, self.target)
+        self.assertEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
+
+    def add_optional_app_file(self, name, data=b'old managed file'):
+        self.write(self.app, name, data)
+        self.manifest['common_files'].append(record(name, data))
+        self.manifest['common_files'].sort(key=lambda row: row['path'])
+        self.save_manifest()
+
+    def test_update_removes_only_recorded_obsolete_files_and_rolls_them_back(self):
+        name = 'scripts/retired_module.py'
+        self.add_optional_app_file(name)
+        release.apply_update(self.bundle, self.target)
+        self.write(self.target, 'scripts/private_notes.py', b'keep unknown file')
+        (self.app / name).unlink()
+        self.manifest['common_files'] = [row for row in self.manifest['common_files'] if row['path'] != name]
+        self.save_manifest()
+        before = (self.target / release.INVENTORY).read_bytes()
+        original = os.replace
+        def fail_inventory(source, destination):
+            if Path(destination) == self.target / release.INVENTORY and 'new' in Path(source).parts:
+                raise PermissionError('Synthetic final metadata failure')
+            return original(source, destination)
+        with mock.patch.object(release.os, 'replace', side_effect=fail_inventory), self.assertRaises(OSError):
+            release.apply_update(self.bundle, self.target)
+        self.assertEqual((self.target / name).read_bytes(), b'old managed file')
+        self.assertEqual((self.target / release.INVENTORY).read_bytes(), before)
+        release.apply_update(self.bundle, self.target)
+        self.assertFalse((self.target / name).exists())
+        self.assertEqual((self.target / 'scripts/private_notes.py').read_bytes(), b'keep unknown file')
+        self.unchanged_private()
+
+    def test_obsolete_file_changed_by_owner_is_preserved(self):
+        name = 'scripts/retired_module.py'
+        self.add_optional_app_file(name)
+        release.apply_update(self.bundle, self.target)
+        self.write(self.target, name, b'owner changes')
+        (self.app / name).unlink()
+        self.manifest['common_files'] = [row for row in self.manifest['common_files'] if row['path'] != name]
+        self.save_manifest()
+        with self.assertRaisesRegex(RuntimeError, 'changed'):
+            release.apply_update(self.bundle, self.target)
+        self.assertEqual((self.target / name).read_bytes(), b'owner changes')
+
+    def test_gateway_is_switched_with_app_and_both_are_restored_on_failure(self):
+        from test_gateway_package import GatewayPackageTests
+        fixture = GatewayPackageTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.protected = tuple(name for name in self.protected if name != 'gateway/packages/current.json')
+        self.before.pop('gateway/packages/current.json')
+        (self.target / 'gateway/packages/current.json').unlink()
+        gateway = release.pack.gateway_package
+        gateway.install_package(self.target, *fixture.archive('v1'))
+        old_pointer = (self.target / 'gateway/packages/current.json').read_bytes()
+        old_journal = (self.target / 'gateway/packages/update.json').read_bytes()
+        archive, digest = fixture.archive('v2')
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[0], json.dumps({'schema': 1, 'file': 'gateway-recovery.zip', 'sha256': digest}).encode())
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[1], archive.read_bytes())
+        self.manifest['common_files'] = release.common_records(self.app)
+        self.save_manifest()
+        original = os.replace
+        def fail_inventory(source, destination):
+            if Path(destination) == self.target / release.INVENTORY and 'new' in Path(source).parts:
+                raise PermissionError('Synthetic failure after gateway switch')
+            return original(source, destination)
+        with mock.patch.object(release.os, 'replace', side_effect=fail_inventory), self.assertRaises(OSError):
+            release.apply_update(self.bundle, self.target)
+        self.assertEqual((self.target / 'gateway/packages/current.json').read_bytes(), old_pointer)
+        self.assertEqual((self.target / 'gateway/packages/update.json').read_bytes(), old_journal)
+        self.assertEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
+        self.assertFalse((self.target / 'gateway/packages/releases/v2/gateway.qcow2').exists())
+        release.apply_update(self.bundle, self.target)
+        with gateway.open_current(self.target) as current:
+            self.assertEqual(current['version'], 'v2')
+        self.assertTrue((self.target / 'gateway/packages/releases/v1/gateway.qcow2').exists())
+        self.unchanged_private()
+
+    def test_duplicate_and_extra_archive_members_are_rejected(self):
+        result = release.package_app(self.bundle)
+        path = Path(result['package'])
+        with zipfile.ZipFile(path, 'a') as archive:
+            archive.writestr('app/LAUNCHER.exe', b'extra')
+        with self.assertRaises(ValueError):
+            release.install_app(path, release._sha256_file(path), self.target)
+        self.assertEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
+
+    def test_check_app_rejects_wrong_release_and_delta_before_install(self):
+        result = release.package_app(self.bundle, self.next_release())
+        with self.assertRaises(ValueError):
+            release.check_app(result['package'], result['sha256'], '2026.10.23.1')
+        with self.assertRaisesRegex(ValueError, 'complete'):
+            release.check_app(result['package'], result['sha256'], '2026.10.23.2')
+
+    def test_runner_records_confirmed_success_and_waits_before_apply(self):
+        result = release.package_app(self.bundle)
+        events = []
+        with mock.patch.object(release, 'wait_for_launcher', side_effect=lambda *args: events.append('wait')), \
+                mock.patch.object(release.subprocess, 'Popen', side_effect=lambda *args, **kwargs: events.append('restart')):
+            outcome = release.run_app_update(self.target, 123, 456, result['package'], result['sha256'], self.info['release_id'])
+        self.assertEqual(outcome['status'], 'committed')
+        self.assertEqual(events, ['wait', 'restart'])
+        self.assertEqual(release.read_json(self.target / 'logs/update-result.json')['release_id'], self.info['release_id'])
+        self.unchanged_private()
+
+    def test_pid_reuse_never_updates_an_unrelated_process(self):
+        with mock.patch.object(release.runtime, 'process_identity', return_value={
+                'pid': 123, 'created_filetime': 999, 'image': str(self.target / 'Launcher.exe')}):
+            with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+                release.wait_for_launcher(self.target, 123, 456)
+
+    def test_launcher_opened_during_staging_blocks_all_replacements(self):
+        with mock.patch.object(release, 'project_processes', side_effect=[{}, {}, {123: {'pid': 123}}]):
+            with self.assertRaisesRegex(RuntimeError, 'while the update'):
+                release.apply_update(self.bundle, self.target)
+        self.assertEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
+        self.assertFalse((self.target / release.JOURNAL).exists())
+        self.unchanged_private()
+
+    def test_failed_preparation_removes_only_its_unpublished_transaction(self):
+        sentinel = self.target / 'state/app-update-keep'
+        sentinel.mkdir()
+        (sentinel / 'owner.txt').write_bytes(b'keep')
+        with mock.patch.object(release, 'stage_gateway', side_effect=ValueError('Bad recovery hash')):
+            with self.assertRaisesRegex(ValueError, 'Bad recovery'):
+                release.apply_update(self.bundle, self.target)
+        self.assertEqual(list((self.target / 'state').glob('app-update-*')), [sentinel])
+        self.assertEqual((sentinel / 'owner.txt').read_bytes(), b'keep')
+        self.assertEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
+        self.unchanged_private()
+
+    def test_runtime_version_directories_can_be_replaced_without_touching_data(self):
+        release.apply_update(self.bundle, self.target)
+        replacements = {'python-3.12.14': 'python-3.13.0', 'qemu-11.1.0': 'qemu-12.0.0'}
+        for old, new in replacements.items():
+            (self.app / 'runtime' / old).rename(self.app / 'runtime' / new)
+        records = release.read_json(self.app / release.pack.COMPONENT_FILES[0])['files']
+        for row in records:
+            for old, new in replacements.items():
+                row['path'] = row['path'].replace(old, new)
+        self.write(self.app, release.pack.COMPONENT_FILES[0], json.dumps({'schema': 1, 'files': records}).encode())
+        with zipfile.ZipFile(self.app / release.pack.COMPONENT_FILES[1], 'w') as archive:
+            for row in records:
+                archive.writestr(row['path'], (self.app / row['path']).read_bytes())
+        self.manifest['common_files'] = release.common_records(self.app)
+        self.save_manifest()
+        result = release.package_app(self.bundle)
+        release.install_app(result['package'], result['sha256'], self.target)
+        self.assertTrue((self.target / 'runtime/python-3.13.0/python.exe').exists())
+        self.assertFalse((self.target / 'runtime/python-3.12.14/python.exe').exists())
+        self.unchanged_private()
 
     def test_tampered_input_is_rejected_before_target_changes(self):
         (self.app / 'scripts/portable_app.py').write_bytes(b'tampered')

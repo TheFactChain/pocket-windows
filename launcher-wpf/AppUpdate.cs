@@ -5,47 +5,59 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
 namespace WindowsClaude.Launcher
 {
-    // Light application updates from GitHub Releases: the app package (no Windows disk) is downloaded,
-    // then a copy of the bundled Python installs it after the launcher has exited.
     internal static class AppUpdate
     {
         const string GitHubApi = "https://api.github.com/repos/nekontritce11123-lab/pocket-windows/releases/latest";
+        const string AssetPrefix = "https://github.com/nekontritce11123-lab/pocket-windows/releases/download/";
+        const long MaxPackage = 8L * 1024 * 1024 * 1024;
+        internal sealed class Offer { public string Id, ZipUrl, ShaUrl; public long Bytes; }
+        internal sealed class CheckResult { public Offer Offer; public string Title, Message; }
+        internal sealed class Package { public string Zip, Sha, Id, Work, Tools, Root; }
 
-        // Tests may point the check at a loopback server; any other override is ignored.
         static string Api
         {
             get
             {
-                string over = Environment.GetEnvironmentVariable("POCKET_WINDOWS_UPDATE_API");
-                return over != null && over.StartsWith("http://127.0.0.1:", StringComparison.Ordinal) ? over : GitHubApi;
+                string value = Environment.GetEnvironmentVariable("POCKET_WINDOWS_UPDATE_API");
+                Uri uri;
+                return Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.Scheme == "http" && uri.Host == "127.0.0.1" ? value : GitHubApi;
             }
         }
 
-        internal sealed class Offer { public string Id, ZipUrl, ShaUrl; public long Bytes; }
-
         static HttpWebRequest Open(string url)
         {
-            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; // TLS 1.2 on .NET Framework 4.8
+            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
             var request = (HttpWebRequest)WebRequest.Create(url);
-            request.UserAgent = "PocketWindows-Launcher"; request.Timeout = 15000; request.ReadWriteTimeout = 30000;
+            request.UserAgent = "PocketWindows-Launcher";
+            request.Timeout = 15000; request.ReadWriteTimeout = 30000;
             return request;
         }
 
-        // Release ids are dotted numbers such as 2026.10.24.12; a malformed one never counts as newer.
+        static bool AssetUrl(string url)
+        {
+            Uri uri, api;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri) || uri.UserInfo.Length != 0) return false;
+            if (Api != GitHubApi && Uri.TryCreate(Api, UriKind.Absolute, out api))
+                return uri.Scheme == "http" && uri.Host == "127.0.0.1" && uri.Port == api.Port;
+            return url.StartsWith(AssetPrefix, StringComparison.Ordinal) && uri.Scheme == "https" && uri.IsDefaultPort;
+        }
+
         internal static bool Newer(string candidate, string current)
         {
             var a = Parts(candidate); var b = Parts(current);
             if (a == null || b == null) return false;
-            for (int index = 0; index < Math.Max(a.Length, b.Length); index++)
+            for (int i = 0; i < Math.Max(a.Length, b.Length); i++)
             {
-                long x = index < a.Length ? a[index] : 0, y = index < b.Length ? b[index] : 0;
+                long x = i < a.Length ? a[i] : 0, y = i < b.Length ? b[i] : 0;
                 if (x != y) return x > y;
             }
             return false;
@@ -53,92 +65,238 @@ namespace WindowsClaude.Launcher
 
         static long[] Parts(string id)
         {
-            if (id == null || !Regex.IsMatch(id, @"\A\d+(\.\d+){1,5}\z")) return null;
-            return id.Split('.').Select(part => Int64.Parse(part)).ToArray();
+            if (id == null || id.Length > 80 || !Regex.IsMatch(id, @"\A[0-9]+(\.[0-9]+){1,5}\z")) return null;
+            var text = id.Split('.'); var parts = new long[text.Length];
+            for (int i = 0; i < text.Length; i++) if (!Int64.TryParse(text[i], out parts[i])) return null;
+            return parts;
         }
 
-        internal static async Task<Offer> CheckAsync(string currentId)
+        static async Task<string> ReadText(string url, int maximum, CancellationToken cancel)
         {
-            try
+            var request = Open(url);
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel))
             {
-                string text;
-                using (var response = await Open(Api).GetResponseAsync().ConfigureAwait(false))
-                using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) text = await reader.ReadToEndAsync().ConfigureAwait(false);
-                var release = new JavaScriptSerializer().DeserializeObject(text) as Dictionary<string, object>;
-                if (release == null || !release.ContainsKey("tag_name") || !release.ContainsKey("assets")) return null;
-                string id = Convert.ToString(release["tag_name"]).TrimStart('v');
-                if (!Newer(id, currentId)) return null;
-                var assets = ((IEnumerable)release["assets"]).Cast<object>().OfType<Dictionary<string, object>>().ToList();
-                var zip = assets.FirstOrDefault(item => Convert.ToString(item["name"]).EndsWith("-app.zip", StringComparison.Ordinal));
-                if (zip == null) return null;
-                var sha = assets.FirstOrDefault(item => Convert.ToString(item["name"]) == Convert.ToString(zip["name"]) + ".sha256");
-                if (sha == null) return null;
-                return new Offer { Id = id, ZipUrl = Convert.ToString(zip["browser_download_url"]), ShaUrl = Convert.ToString(sha["browser_download_url"]), Bytes = Convert.ToInt64(zip["size"]) };
-            }
-            catch (Exception) { return null; } // offline, rate limited or a private repository: just no offer
-        }
-
-        internal static async Task<string[]> DownloadAsync(Offer offer, Action<int> progress)
-        {
-            string sha;
-            using (var response = await Open(offer.ShaUrl).GetResponseAsync().ConfigureAwait(false))
-            using (var reader = new StreamReader(response.GetResponseStream(), Encoding.ASCII)) sha = (await reader.ReadToEndAsync().ConfigureAwait(false)).Trim().Split(' ')[0].ToLowerInvariant();
-            if (!Regex.IsMatch(sha, @"\A[a-f0-9]{64}\z")) throw new InvalidDataException("Контрольная сумма обновления повреждена.");
-            string folder = Path.Combine(Path.GetTempPath(), "pocket-windows-update"); Directory.CreateDirectory(folder);
-            string zip = Path.Combine(folder, "app-" + offer.Id + ".zip");
-            if (File.Exists(zip)) File.Delete(zip);
-            using (var response = await Open(offer.ZipUrl).GetResponseAsync().ConfigureAwait(false))
-            using (var input = response.GetResponseStream())
-            using (var output = File.Create(zip))
-            {
-                var buffer = new byte[1 << 16]; long done = 0; int last = -1, read;
-                while ((read = await input.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                deadline.CancelAfter(TimeSpan.FromSeconds(30));
+                using (deadline.Token.Register(request.Abort))
+                using (var response = await request.GetResponseAsync().ConfigureAwait(false))
+                using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
                 {
-                    await output.WriteAsync(buffer, 0, read).ConfigureAwait(false); done += read;
-                    int percent = offer.Bytes > 0 ? (int)(done * 100 / offer.Bytes) : 0;
-                    if (percent != last) { last = percent; progress(Math.Min(percent, 100)); }
+                    var text = new StringBuilder(); var buffer = new char[4096]; int read;
+                    while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                    {
+                        if (text.Length + read > maximum) throw new InvalidDataException("Ответ сервера слишком большой.");
+                        text.Append(buffer, 0, read);
+                    }
+                    return text.ToString();
                 }
             }
-            return new[] { zip, sha };
         }
 
-        // The installer runs from a copy of Python outside the application folder, so nothing it replaces is in use.
-        internal static void Launch(string root, string zip, string sha)
+        internal static async Task<CheckResult> CheckAsync(string currentId)
         {
-            root = root.TrimEnd('\\');
-            string work = Path.Combine(Path.GetTempPath(), "pocket-windows-updater-" + Guid.NewGuid().ToString("N"));
-            string python = Path.Combine(work, "py", "python.exe");
-            Copy(Path.Combine(root, "runtime", "python-3.12.14"), Path.Combine(work, "py"));
-            string logs = Path.Combine(root, "logs"); Directory.CreateDirectory(logs);
-            string script = "@echo off\r\nchcp 65001 >nul\r\nping -n 6 127.0.0.1 >nul\r\n"
-                + "\"" + python + "\" -X utf8 -I -B \"" + Path.Combine(root, "scripts", "release_portable.py") + "\" install-app --zip \"" + zip
-                + "\" --sha256 " + sha + " --target \"" + root + "\" > \"" + Path.Combine(logs, "update-last.txt") + "\" 2>&1\r\n"
-                + "start \"\" \"" + Path.Combine(root, "Launcher.exe") + "\"\r\n";
-            string file = Path.Combine(work, "update.cmd");
-            File.WriteAllText(file, script, new UTF8Encoding(false));
-            Process.Start(new ProcessStartInfo("cmd.exe", "/d /c \"" + file + "\"") { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = work });
+            if (Parts(currentId) == null) return new CheckResult { Title = "Версия не определена", Message = "У этой копии не указана версия выпуска. Обновление доступно в готовом комплекте." };
+            string text = await ReadText(Api, 1024 * 1024, CancellationToken.None).ConfigureAwait(false);
+            var release = new JavaScriptSerializer().DeserializeObject(text) as Dictionary<string, object>;
+            if (release == null || !release.ContainsKey("tag_name") || !release.ContainsKey("assets"))
+                throw new InvalidDataException("Сервер вернул непонятные сведения о выпуске.");
+            string id = Convert.ToString(release["tag_name"]).TrimStart('v');
+            if (Parts(id) == null) throw new InvalidDataException("Номер выпуска на сервере повреждён.");
+            if (!Newer(id, currentId)) return new CheckResult { Title = "Установлена последняя версия", Message = "Версия " + currentId + ". Новых обновлений пока нет." };
+            if ((release.ContainsKey("draft") && Object.Equals(release["draft"], true)) || (release.ContainsKey("prerelease") && Object.Equals(release["prerelease"], true)))
+                return new CheckResult { Title = "Выпуск готовится", Message = "Новый выпуск ещё проходит проверку." };
+            var assets = release["assets"] as IEnumerable;
+            if (assets == null) throw new InvalidDataException("Список файлов выпуска повреждён.");
+            var items = assets.Cast<object>().OfType<Dictionary<string, object>>().ToList();
+            string name = "Pocket-Windows-" + id + "-app.zip";
+            var zip = items.SingleOrDefault(item => item.ContainsKey("name") && Convert.ToString(item["name"]) == name);
+            var sha = items.SingleOrDefault(item => item.ContainsKey("name") && Convert.ToString(item["name"]) == name + ".sha256");
+            if (zip == null || sha == null) return new CheckResult { Title = "Пакет ещё не опубликован", Message = "Выпуск " + id + " уже есть, но пакет обновления ещё не опубликован." };
+            long bytes;
+            string zipUrl = zip.ContainsKey("browser_download_url") ? Convert.ToString(zip["browser_download_url"]) : "";
+            string shaUrl = sha.ContainsKey("browser_download_url") ? Convert.ToString(sha["browser_download_url"]) : "";
+            if (!zip.ContainsKey("size") || !Int64.TryParse(Convert.ToString(zip["size"]), out bytes) || bytes <= 0 || bytes > MaxPackage || !AssetUrl(zipUrl) || !AssetUrl(shaUrl))
+                throw new InvalidDataException("Ссылки или размер пакета обновления не прошли проверку.");
+            return new CheckResult { Offer = new Offer { Id = id, ZipUrl = zipUrl, ShaUrl = shaUrl, Bytes = bytes }, Title = "Доступно обновление", Message = "Можно установить новую версию. Личные данные сохранятся." };
         }
 
-        static void Copy(string source, string target)
+        internal static async Task<Package> DownloadAsync(Offer offer, Action<int> progress, CancellationToken cancel)
         {
-            Directory.CreateDirectory(target);
-            foreach (string file in Directory.GetFiles(source)) File.Copy(file, Path.Combine(target, Path.GetFileName(file)), true);
-            foreach (string folder in Directory.GetDirectories(source)) Copy(folder, Path.Combine(target, Path.GetFileName(folder)));
-        }
-
-        // What the installer wrote before the launcher came back: the new version, or the reason it failed.
-        internal static string TakeReport(string root)
-        {
-            string path = Path.Combine(root, "logs", "update-last.txt");
+            Package package = null;
             try
             {
-                if (!File.Exists(path)) return null;
-                string text = File.ReadAllText(path, Encoding.UTF8).Trim(); File.Delete(path);
-                var match = Regex.Match(text, "\"release_id\":\\s*\"([0-9.]+)\"");
-                if (match.Success) return "Обновлено до версии " + match.Groups[1].Value;
-                return text.Length == 0 ? null : "Обновление не удалось, прежняя версия работает.";
+                cancel.ThrowIfCancellationRequested();
+                if (!AssetUrl(offer.ZipUrl) || !AssetUrl(offer.ShaUrl) || offer.Bytes <= 0 || offer.Bytes > MaxPackage) throw new InvalidDataException("Пакет не прошёл проверку.");
+                string sha = (await ReadText(offer.ShaUrl, 4096, cancel).ConfigureAwait(false)).Trim().Split((char[])null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                if (sha == null || !Regex.IsMatch(sha, @"\A[a-fA-F0-9]{64}\z")) throw new InvalidDataException("Контрольная сумма обновления повреждена.");
+                string work = Path.Combine(Path.GetTempPath(), "pocket-windows-updater-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(work);
+                package = new Package { Work = work, Zip = Path.Combine(work, "app.zip"), Sha = sha.ToLowerInvariant(), Id = offer.Id };
+                var request = Open(offer.ZipUrl);
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel))
+                using (timeout.Token.Register(request.Abort))
+                using (var hash = SHA256.Create())
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(45));
+                    using (var response = await request.GetResponseAsync().ConfigureAwait(false))
+                    using (var input = response.GetResponseStream())
+                    using (var output = new FileStream(package.Zip, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        if (response.ContentLength >= 0 && response.ContentLength != offer.Bytes) throw new InvalidDataException("Размер загрузки не совпадает с выпуском.");
+                        byte[] buffer = new byte[1 << 16]; long done = 0; int read, last = -1;
+                        while ((read = await input.ReadAsync(buffer, 0, buffer.Length, timeout.Token).ConfigureAwait(false)) > 0)
+                        {
+                            done += read;
+                            if (done > offer.Bytes) throw new InvalidDataException("Сервер прислал больше данных, чем указано в выпуске.");
+                            await output.WriteAsync(buffer, 0, read, timeout.Token).ConfigureAwait(false);
+                            hash.TransformBlock(buffer, 0, read, null, 0);
+                            timeout.CancelAfter(TimeSpan.FromSeconds(45));
+                            int percent = (int)(done * 100 / offer.Bytes);
+                            if (percent != last) { last = percent; progress(percent); }
+                        }
+                        hash.TransformFinalBlock(new byte[0], 0, 0);
+                        if (done != offer.Bytes || BitConverter.ToString(hash.Hash).Replace("-", "").ToLowerInvariant() != package.Sha)
+                            throw new InvalidDataException("Загрузка повреждена. Повтори обновление.");
+                    }
+                }
+                cancel.ThrowIfCancellationRequested();
+                return package;
             }
-            catch (Exception) { return null; }
+            catch (Exception)
+            {
+                Discard(package);
+                cancel.ThrowIfCancellationRequested();
+                throw;
+            }
+        }
+
+        internal static async Task PrepareAsync(string root, Package package, CancellationToken cancel)
+        {
+            package.Root = Path.GetFullPath(root).TrimEnd('\\');
+            package.Tools = Path.Combine(package.Root, "state", "app-updater-" + Guid.NewGuid().ToString("N"));
+            await Task.Run(delegate
+            {
+                Copy(Path.Combine(root, "runtime", "python-3.12.14"), Path.Combine(package.Tools, "py"), cancel);
+                Copy(Path.Combine(root, "scripts"), Path.Combine(package.Tools, "scripts"), cancel);
+            }, cancel).ConfigureAwait(false);
+            var info = Command(package.Tools, "check-app", "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id);
+            info.RedirectStandardOutput = true; info.RedirectStandardError = true;
+            using (var process = Process.Start(info))
+            {
+                var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();
+                try
+                {
+                    while (!process.HasExited) { cancel.ThrowIfCancellationRequested(); await Task.Delay(100, cancel).ConfigureAwait(false); }
+                    await output.ConfigureAwait(false); string details = await error.ConfigureAwait(false);
+                    if (process.ExitCode != 0)
+                    {
+                        Directory.CreateDirectory(Path.Combine(root, "logs"));
+                        File.WriteAllText(Path.Combine(root, "logs", "update-details.txt"), details, Encoding.UTF8);
+                        throw new InvalidDataException("Пакет обновления не прошёл проверку. Программа не изменена. Подробности в logs/update-details.txt.");
+                    }
+                }
+                finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(); } }
+            }
+        }
+
+        static ProcessStartInfo Command(string work, params string[] arguments)
+        {
+            var args = new[] { "-X", "utf8", "-I", "-B", Path.Combine(work, "scripts", "release_portable.py") }.Concat(arguments);
+            return new ProcessStartInfo(Path.Combine(work, "py", "python.exe"), String.Join(" ", args.Select(Bridge.Quote)))
+                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = work };
+        }
+
+        internal static void Launch(string root, Package package)
+        {
+            string state = Path.Combine(root, "state"); Directory.CreateDirectory(state);
+            File.WriteAllText(Path.Combine(state, "update-recovery.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, string> { { "work", package.Tools } }), Encoding.UTF8);
+            RunInstaller(root, package.Tools, new[] { "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id });
+        }
+
+        internal static void Recover(string root)
+        {
+            string path = Path.Combine(root, "state", "update-recovery.json");
+            if (new FileInfo(path).Length > 4096) throw new InvalidDataException("Запись восстановления повреждена.");
+            var value = new JavaScriptSerializer().Deserialize<Dictionary<string, string>>(File.ReadAllText(path));
+            string work = Path.GetFullPath(value["work"]);
+            if (!IsTools(root, work) || !File.Exists(Path.Combine(work, "scripts", "release_portable.py")))
+                throw new InvalidDataException("Сохранённый обновлятор не найден. Сохрани папку state для восстановления.");
+            RunInstaller(root, work, new[] { "--recover" });
+        }
+
+        static void RunInstaller(string root, string work, string[] arguments)
+        {
+            using (var current = Process.GetCurrentProcess())
+            {
+                var args = new[] { "run-app-update", "--target", root, "--wait-pid", current.Id.ToString(), "--wait-created", current.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() }.Concat(arguments).ToArray();
+                using (Process.Start(Command(work, args))) { }
+            }
+        }
+
+        static void Copy(string source, string target, CancellationToken cancel)
+        {
+            cancel.ThrowIfCancellationRequested();
+            if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0) throw new IOException("Компонент программы оказался ссылкой.");
+            Directory.CreateDirectory(target);
+            foreach (string file in Directory.GetFiles(source))
+            {
+                cancel.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new IOException("Файл программы оказался ссылкой.");
+                File.Copy(file, Path.Combine(target, Path.GetFileName(file)), false);
+            }
+            foreach (string folder in Directory.GetDirectories(source)) Copy(folder, Path.Combine(target, Path.GetFileName(folder)), cancel);
+        }
+
+        static bool IsWork(string path)
+        {
+            return String.Equals(Path.GetDirectoryName(path), Path.GetTempPath().TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)
+                && Regex.IsMatch(Path.GetFileName(path), @"\Apocket-windows-updater-[a-f0-9]{32}\z")
+                && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
+        }
+
+        static bool IsTools(string root, string path)
+        {
+            return String.Equals(Path.GetDirectoryName(path), Path.Combine(Path.GetFullPath(root), "state"), StringComparison.OrdinalIgnoreCase)
+                && Regex.IsMatch(Path.GetFileName(path), @"\Aapp-updater-[a-f0-9]{32}\z")
+                && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
+        }
+
+        internal static void Discard(Package package)
+        {
+            if (package == null) return;
+            try { if (Directory.Exists(package.Work) && IsWork(package.Work)) Directory.Delete(package.Work, true); }
+            catch (IOException) { } catch (UnauthorizedAccessException) { }
+            try { if (package.Tools != null && Directory.Exists(package.Tools) && IsTools(package.Root, package.Tools)) Directory.Delete(package.Tools, true); }
+            catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+
+        internal static string TakeReport(string root)
+        {
+            string path = Path.Combine(root, "logs", "update-result.json");
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    path = Path.Combine(root, "logs", "update-last.txt");
+                    if (!File.Exists(path)) return null;
+                    if (new FileInfo(path).Length > 8192) return "Не удалось установить обновление. Подробности в logs/update-last.txt.";
+                    string legacy = File.ReadAllText(path);
+                    var old = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(legacy);
+                    var installed = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(Path.Combine(root, "release-info.json")));
+                    object version, actual;
+                    if (old.TryGetValue("release_id", out version) && installed.TryGetValue("release_id", out actual)
+                        && Object.Equals(version, actual) && !File.Exists(Path.Combine(root, "state", "app-update.json")))
+                    { File.Delete(path); return "Обновлено до версии " + Convert.ToString(version); }
+                    return "Результат обновления не подтверждён. Подробности в logs/update-last.txt.";
+                }
+                if (new FileInfo(path).Length > 8192) return "Результат обновления не удалось прочитать. Открой logs/update-details.txt.";
+                var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(path));
+                object message, status;
+                if (!result.TryGetValue("status", out status) || !new[] { "committed", "rolled_back", "failed", "recovery_required" }.Contains(Convert.ToString(status)) || !result.TryGetValue("message", out message))
+                    return "Результат обновления не подтверждён. Открой logs/update-details.txt.";
+                File.Delete(path);
+                return Convert.ToString(message);
+            }
+            catch (Exception) { return "Не удалось прочитать результат обновления. Открой logs/" + Path.GetFileName(path) + "."; }
         }
     }
 }

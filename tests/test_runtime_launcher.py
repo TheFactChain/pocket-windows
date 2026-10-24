@@ -626,6 +626,15 @@ class RuntimeTests(unittest.TestCase):
         with runtime.ProjectLock(self.root) as after_release:
             self.assertTrue(after_release)
 
+    def test_unfinished_app_update_blocks_vm_start_even_from_console(self):
+        (self.root / 'state').mkdir(exist_ok=True)
+        (self.root / 'state/app-update.json').write_text('{}')
+        receipt = self.root / 'logs/update-block/receipt.json'
+        with mock.patch.object(runtime, 'require_runtime'), mock.patch.object(runtime, 'start_pair') as start:
+            self.assertEqual(runtime.run_start(self.root, receipt), 1)
+        start.assert_not_called()
+        self.assertIn('application update', json.loads(receipt.read_text())['message'])
+
     def test_native_identity_for_this_test_process(self):
         identity = runtime.process_identity(os.getpid())
         self.assertEqual(identity['pid'], os.getpid())

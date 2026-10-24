@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
@@ -21,7 +22,7 @@ using Forms = System.Windows.Forms;
 
 namespace WindowsClaude.Launcher
 {
-    public enum AppPage { Home, Connection, Settings, Diagnostics, Help }
+    public enum AppPage { Home, Connection, Settings, Diagnostics, Updates, Help }
 
     // Same state rules as the WinForms launcher (ui/Launcher.cs): an unconfirmed operation blocks
     // everything except diagnostics, the panel hides to the tray while Windows runs, status polls every 3 s.
@@ -92,6 +93,7 @@ namespace WindowsClaude.Launcher
             BuildHelp();
             for (int index = 0; index < Modes.GetLength(0); index++) ResolutionBox.Items.Add(Modes[index, 0] + " × " + Modes[index, 1]);
             VersionText.Text = ReleaseInfo.Read(Bridge.Root).DisplayText;
+            UpdateCaption.Text = VersionText.Text;
 
             InputBindings.Add(new KeyBinding(new Command(() => Navigate(AppPage.Connection)), Key.D2, ModifierKeys.Control));
             InputBindings.Add(new KeyBinding(new Command(() => Navigate(AppPage.Help)), Key.F1, ModifierKeys.None));
@@ -112,7 +114,7 @@ namespace WindowsClaude.Launcher
                 var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
                 if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
                 Rise(LaunchCard, 0); Rise(HomePage, 90);
-                StartLifecycle(); StartShopNudge(); StartUpdateCheck(); await RunAction("diagnose", false);
+                StartLifecycle(); StartShopNudge(); await RunAction("diagnose", false); StartUpdateCheck();
             };
             Closing += OnClosing;
         }
@@ -165,8 +167,9 @@ namespace WindowsClaude.Launcher
             currentPage = page;
             if (page != AppPage.Home)
             {
-                PageTitle.Text = page == AppPage.Connection ? "Подключения" : page == AppPage.Settings ? "Характеристики" : "Проверка";
+                PageTitle.Text = page == AppPage.Connection ? "Подключения" : page == AppPage.Settings ? "Характеристики" : page == AppPage.Updates ? "Обновления" : "Проверка";
                 Show(ConnectionsPane, page == AppPage.Connection); Show(SettingsPane, page == AppPage.Settings); Show(ChecksPanel, page == AppPage.Diagnostics);
+                Show(UpdatesPane, page == AppPage.Updates);
                 Show(RefreshButton, page == AppPage.Diagnostics);
             }
             if (page != AppPage.Home && !forward) return; // page to page: content already swapped
@@ -254,7 +257,7 @@ namespace WindowsClaude.Launcher
         // ---------- Operations ----------
         bool BeginOperation(string action)
         {
-            if (closing || busy) return false;
+            if (closing || busy || updating) return false;
             if (outcomeUnknown && action != "diagnose" && action != "recover-session")
             {
                 SetOperation("Предыдущая операция ещё не подтверждена. Сначала нажми «Проверить снова».");
@@ -291,8 +294,9 @@ namespace WindowsClaude.Launcher
             PrepareHostButton.IsEnabled = !value && !runtimeActive;
             TestProfileButton.IsEnabled = !value && testAvailable && profiles.Any(item => Flag(item, "selected"));
             ExportButton.IsEnabled = !value && profiles.Count > 0;
-            SettingsBody.IsEnabled = settingsLoaded && !runtimeActive && !outcomeUnknown;
-            UpdateLaunchButtons(); UpdateTray(); UpdatePulse();
+            SettingsBody.IsEnabled = settingsLoaded && !runtimeActive && !outcomeUnknown && !updating;
+            ConnectionsPane.IsEnabled = !updating; EditorSheet.IsEnabled = !updating; AddSheet.IsEnabled = !updating;
+            UpdateLaunchButtons(); UpdateTray(); UpdatePulse(); ShowUpdateOffer();
         }
 
         void UpdateLaunchButtons()
@@ -664,48 +668,125 @@ namespace WindowsClaude.Launcher
         }
         // ---------- Updates from GitHub Releases ----------
         AppUpdate.Offer updateOffer;
-        bool updating;
+        bool updating, checkingUpdate, updateHandedOff, closeAfterUpdateCancel;
+        CancellationTokenSource updateCancel;
 
         async void StartUpdateCheck()
         {
             string report = AppUpdate.TakeReport(Bridge.Root);
-            if (report != null) SetOperation(report);
+            if (report != null)
+            {
+                UpdateStatusTitle.Text = "Результат обновления"; UpdateStatusText.Text = report;
+                Navigate(AppPage.Updates);
+                await Task.Delay(TimeSpan.FromHours(6));
+            }
             while (!closing)
             {
                 await Task.Delay(TimeSpan.FromSeconds(8));
-                if (!updating)
-                {
-                    updateOffer = await AppUpdate.CheckAsync(ReleaseInfo.Read(Bridge.Root).ReleaseId);
-                    ShowUpdateOffer();
-                }
+                if (!closing && !updating) await CheckUpdateAsync();
                 await Task.Delay(TimeSpan.FromHours(6));
             }
+        }
+
+        async void OnCheckUpdates(object sender, RoutedEventArgs e)
+        {
+            await CheckUpdateAsync();
+        }
+
+        async void OnUpdatesRow(object sender, RoutedEventArgs e)
+        {
+            Navigate(AppPage.Updates);
+            if (!updating) await CheckUpdateAsync();
+        }
+
+        async Task CheckUpdateAsync()
+        {
+            if (checkingUpdate || closing || updating) return;
+            checkingUpdate = true; ShowUpdateOffer();
+            UpdateStatusTitle.Text = "Проверяем обновления";
+            UpdateStatusText.Text = "Проверяем наличие новой версии…";
+            UpdateCaption.Text = "Проверяем наличие новой версии";
+            try
+            {
+                var result = await AppUpdate.CheckAsync(ReleaseInfo.Read(Bridge.Root).ReleaseId);
+                if (closing) return;
+                updateOffer = result.Offer; UpdateStatusText.Text = result.Message;
+                UpdateStatusTitle.Text = result.Title;
+                UpdateCaption.Text = updateOffer == null ? result.Title : "Доступна версия " + updateOffer.Id;
+            }
+            catch (Exception)
+            {
+                UpdateStatusTitle.Text = "Не удалось проверить";
+                UpdateStatusText.Text = "Не удалось проверить обновления. Проверь интернет и повтори попытку.";
+                UpdateCaption.Text = "Не удалось проверить обновления";
+            }
+            finally { checkingUpdate = false; ShowUpdateOffer(); }
         }
 
         void ShowUpdateOffer()
         {
             bool offered = updateOffer != null;
-            Show(UpdateGroup, offered); Show(KeysGroup, !offered);
-            if (!offered) return;
-            UpdateTitle.Text = "Версия " + updateOffer.Id; UpdateCaption.Text = "Обновление приложения, Windows и данные не затрагиваются";
+            Show(UpdatePill, offered && !updating);
+            Show(InstallUpdateButton, offered || updating);
+            Show(UpdatePackageText, offered);
+            Show(UpdateProgress, updating);
+            CheckUpdatesButton.IsEnabled = !checkingUpdate && !updating && !updateHandedOff;
+            InstallUpdateButton.Content = updating ? "Отменить" : "Обновить";
+            InstallUpdateButton.IsEnabled = !checkingUpdate && !updateHandedOff && (updating || (!busy && !runtimeActive && !outcomeUnknown));
+            if (offered) UpdatePackageText.Text = "Пакет " + updateOffer.Id + ", " + Math.Ceiling(updateOffer.Bytes / 1048576.0).ToString("0") + " МБ";
         }
 
         async void OnUpdate(object sender, RoutedEventArgs e)
         {
-            if (updating || updateOffer == null) return;
+            if (updating) { if (updateCancel != null) updateCancel.Cancel(); return; }
+            if (updateOffer == null || checkingUpdate) return;
             if (runtimeActive || busy || outcomeUnknown) { SetOperation("Сначала выключи Windows, потом обновляй."); return; }
-            updating = true; UpdateAction.Text = "0%";
+            Keyboard.ClearFocus();
+            if (saveTimer.IsEnabled) { saveTimer.Stop(); if (!await SaveSettingsAsync()) return; }
+            if (runtimeActive || busy || outcomeUnknown || closing) return;
+            updating = true; updateCancel = new CancellationTokenSource(); Busy(true);
+            StatusText.Text = "Обновляем Pocket Windows";
+            NextStepText.Text = "Сначала проверим файлы, затем панель откроется снова.";
+            UpdateStatusTitle.Text = "Загружаем обновление";
+            UpdateStatusText.Text = "Загрузку можно отменить. Программа пока не изменена.";
+            UpdateProgress.IsIndeterminate = false; UpdateProgress.Value = 0;
+            AppUpdate.Package package = null;
             try
             {
-                var package = await AppUpdate.DownloadAsync(updateOffer, percent => Dispatcher.Invoke(delegate { UpdateAction.Text = percent + "%"; }));
-                UpdateAction.Text = "Установка";
-                AppUpdate.Launch(Bridge.Root, package[0], package[1]);
+                package = await AppUpdate.DownloadAsync(updateOffer, percent => Dispatcher.Invoke(delegate
+                    { UpdateProgress.Value = percent; UpdateCaption.Text = "Загрузка: " + percent + "%"; UpdateStatusText.Text = "Загружено " + percent + "%. Можно отменить."; }), updateCancel.Token);
+                UpdateCaption.Text = "Проверяем файлы и готовим установку…";
+                UpdateStatusTitle.Text = "Проверяем файлы";
+                UpdateStatusText.Text = "После проверки панель закроется для установки и откроется снова.";
+                UpdateProgress.IsIndeterminate = true;
+                await AppUpdate.PrepareAsync(Bridge.Root, package, updateCancel.Token);
+                updateCancel.Token.ThrowIfCancellationRequested();
+                if (runtimeActive || outcomeUnknown) throw new InvalidOperationException("Сначала выключи Windows.");
+                AppUpdate.Launch(Bridge.Root, package);
+                updateHandedOff = true; UpdateStatusTitle.Text = "Устанавливаем обновление"; ShowUpdateOffer();
                 Close();
+            }
+            catch (OperationCanceledException)
+            {
+                UpdateStatusTitle.Text = "Обновление отменено"; UpdateCaption.Text = "Загрузка отменена";
+                UpdateStatusText.Text = "Программа не изменилась. Можно повторить загрузку.";
             }
             catch (Exception error)
             {
-                updating = false; UpdateAction.Text = "Обновить";
-                SetOperation("Не удалось скачать обновление: " + error.Message);
+                UpdateStatusTitle.Text = "Не удалось обновить"; UpdateCaption.Text = "Обновление не установлено";
+                UpdateStatusText.Text = error.Message;
+            }
+            finally
+            {
+                if (!updateHandedOff) AppUpdate.Discard(package);
+                updateCancel.Dispose(); updateCancel = null; updating = false;
+                if (!closing)
+                {
+                    Busy(false); UpdateProgress.IsIndeterminate = false;
+                    if (readinessReport != null) Display(readinessReport);
+                    ShowUpdateOffer();
+                    if (closeAfterUpdateCancel) Close();
+                }
             }
         }
 
@@ -817,6 +898,8 @@ namespace WindowsClaude.Launcher
 
         void OnClosing(object sender, CancelEventArgs e)
         {
+            if (updating && !updateHandedOff)
+            { e.Cancel = true; closeAfterUpdateCancel = true; if (updateCancel != null) updateCancel.Cancel(); return; }
             // While Windows runs the tray icon is its only handle, so the panel can hide but never quit.
             if (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start"))
             { e.Cancel = true; panelDismissedByUser = true; HidePanelForSession("closed by the user while Windows runs"); return; }
@@ -994,18 +1077,18 @@ namespace WindowsClaude.Launcher
             return true;
         }
 
-        async Task SaveSettingsAsync()
+        async Task<bool> SaveSettingsAsync()
         {
             Dictionary<string, object> value; string error;
-            if (!settingsLoaded || runtimeActive) return;
-            if (!TryGetSettings(out value, out error)) { SettingsNote.Text = error; SettingsNote.Foreground = Red; return; }
+            if (!settingsLoaded || runtimeActive) return false;
+            if (!TryGetSettings(out value, out error)) { SettingsNote.Text = error; SettingsNote.Foreground = Red; return false; }
             SettingsNote.Foreground = Grey;
-            if (!BeginOperation("save-settings")) { saveTimer.Start(); return; }
+            if (!BeginOperation("save-settings")) { saveTimer.Start(); return false; }
             Dictionary<string, object> completed = null;
             try
             {
                 completed = await Run("save-settings", value);
-                if (closing) return;
+                if (closing) return false;
                 if (Bridge.Ok(completed))
                 {
                     settingsLoaded = false; LoadSettings(completed);
@@ -1015,8 +1098,9 @@ namespace WindowsClaude.Launcher
                     SettingsNote.Text = "Сохранено. Применится при следующем запуске.";
                 }
                 else { SettingsNote.Text = Bridge.Message(completed); SettingsNote.Foreground = Red; SetOperation(Bridge.Message(completed)); if (Flag(completed, "outcome_unknown")) TrackUnknownOutcome(completed); }
+                return Bridge.Ok(completed);
             }
-            catch (Exception) { FailedAction("save-settings", completed); }
+            catch (Exception) { FailedAction("save-settings", completed); return false; }
             finally { if (!closing) Busy(false); }
         }
 

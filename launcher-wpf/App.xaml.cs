@@ -15,7 +15,18 @@ namespace WindowsClaude.Launcher
             try
             {
                 string blocked = ReleaseInfo.StartupBlockReason(Bridge.Root);
-                if (blocked != null) { MessageBox.Show(blocked, "Pocket Windows"); return 1; }
+                if (blocked != null)
+                {
+                    if (File.Exists(Path.Combine(Bridge.Root, "state", "app-update.json"))
+                        && MessageBox.Show("Обновление прервано. Восстановить предыдущую версию из сохранённой копии? Windows и личные данные сохранятся.",
+                            "Pocket Windows", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                    {
+                        try { AppUpdate.Recover(Bridge.Root); }
+                        catch (Exception error) { MessageBox.Show("Не удалось начать восстановление: " + error.Message, "Pocket Windows"); }
+                    }
+                    else if (!File.Exists(Path.Combine(Bridge.Root, "state", "app-update.json"))) MessageBox.Show(blocked, "Pocket Windows");
+                    return 1;
+                }
                 return RunApp();
             }
             catch (Exception error)

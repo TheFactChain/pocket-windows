@@ -883,6 +883,8 @@ def run_start(root, receipt, work_test_media=False):
         require_runtime(root)
         report['supervisor'] = process_identity(os.getpid())
         with ProjectLock(root) as acquired:
+            if (root / 'state/app-update.json').exists():
+                raise RuntimeError('Finish or recover the application update before starting Windows')
             if not acquired:
                 existing = join_existing(root)
                 report.update(phase='ready', existing_receipt=str(existing), message='Workspace is already running')

@@ -59,8 +59,19 @@ def allowed(name):
     return safe_name(name) and (name in (*DATA_FILES, *PUBLIC_FILES, *APP_FILES, *COMPONENT_FILES,
         *GATEWAY_RECOVERY, *FILE_COMPONENT_FILES, *DOCUMENT_FILES, PROFILE_FILE, 'gateway/packages/current.json',
         'config/windows.json', 'config/viewer.json', 'config/files.json', 'release-info.json')
-        or name.startswith(RUNTIME_PREFIXES)
+        or application_path(name)
         or re.fullmatch(r'gateway/packages/releases/[a-z0-9][a-z0-9._-]{0,63}/(manifest.json|gateway.qcow2)', name))
+
+
+def runtime_path(name):
+    return safe_name(name) and bool(re.fullmatch(r'runtime/(python|qemu)-[0-9]+(?:\.[0-9]+){1,3}/.+', name))
+
+
+def application_path(name):
+    # Stable update boundary: future code/runtime may change; personal directories never belong here.
+    return safe_name(name) and (name in ('Launcher.exe', 'release-info.json', *COMPONENT_FILES,
+        *GATEWAY_RECOVERY, *FILE_COMPONENT_FILES)
+        or bool(re.fullmatch(r'scripts/[A-Za-z0-9_-]+\.(py|ps1)', name)) or runtime_path(name))
 
 
 def file_under(root, relative):
@@ -166,7 +177,7 @@ def _validate_component_recovery(reader, records):
             for member in members:
                 name = member.filename
                 kind = stat.S_IFMT(member.external_attr >> 16)
-                if (not safe_name(name) or not name.startswith(RUNTIME_PREFIXES) or member.is_dir()
+                if (not runtime_path(name) or member.is_dir()
                         or kind not in (0, stat.S_IFREG) or member.external_attr & 0x400
                         or member.flag_bits & 1 or member.comment
                         or member.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
