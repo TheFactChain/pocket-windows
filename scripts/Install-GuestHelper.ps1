@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$WindowsRoot,
     [Parameter(Mandatory=$true)][string]$HelperPath,
@@ -108,7 +108,7 @@ function Install-OfflineProfiles([string]$Mount,[string]$Helper) {
             $link=$null
             try {
                 $link=$shell.CreateShortcut($temporary);$link.TargetPath=$plan.Target;$link.Arguments='--apply'
-                $link.Description='Windows Claude host files';$link.Save()
+                $link.Description='Pocket Windows host files';$link.Save()
                 $null=Assert-OwnedStartup $shell $plan.Startup ([IO.Path]::GetDirectoryName($plan.Target)) $Mount
                 if(Test-Path -LiteralPath $plan.Startup){[IO.File]::Replace($temporary,$plan.Startup,[Management.Automation.Language.NullString]::Value)}
                 else {[IO.File]::Move($temporary,$plan.Startup)}

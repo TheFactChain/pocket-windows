@@ -311,7 +311,22 @@ namespace WindowsClaude.GuestFiles
             var matches=new WindowsNic().Read().Where(item=>item.Mac=="525400770004").ToArray();
             if(matches.Length!=1)throw new InvalidOperationException("ISOLATED_NIC_NOT_UNIQUE");return matches[0].Id;
         }
-        static bool NicRemembered(){string path=NicMarker(DirectoryPath(),IsolatedNicId());NoReparse(path);return File.Exists(path);}
+        static bool NicRemembered(){string path=NicMarker(DirectoryPath(),IsolatedNicId());NoReparse(path);return File.Exists(path)||NicStored();}
+        // The image may ship with this adapter already set up: Windows keeps the static address even while the link is down.
+        public static bool StoredNicMatches(object dhcp,string[] address,string[] mask,string[] gateway,string dns)
+        {
+            return dhcp!=null&&Convert.ToInt32(dhcp)==0&&address!=null&&address.Length==1&&address[0]=="192.168.234.15"&&mask!=null&&mask.Length==1&&mask[0]=="255.255.255.0"
+                &&(gateway==null||gateway.All(item=>String.IsNullOrEmpty(item)))&&String.IsNullOrEmpty(dns);
+        }
+        static bool NicStored()
+        {
+            try
+            {
+                using(var key=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\"+IsolatedNicId(),false))
+                    return key!=null&&StoredNicMatches(key.GetValue("EnableDHCP"),key.GetValue("IPAddress") as string[],key.GetValue("SubnetMask") as string[],key.GetValue("DefaultGateway") as string[],key.GetValue("NameServer") as string);
+            }
+            catch(Exception){return false;}
+        }
         static void RememberNic()
         {
             string path=NicMarker(DirectoryPath(),IsolatedNicId());NoReparse(path);Directory.CreateDirectory(Path.GetDirectoryName(path));NoReparse(path);
@@ -349,7 +364,7 @@ namespace WindowsClaude.GuestFiles
         {
             NoReparse(path);if(File.Exists(path)){if(!OwnShortcut(path,target,arguments))throw new InvalidOperationException("SHORTCUT_NAME_CONFLICT");return;}
             string temporary=Path.Combine(Path.GetDirectoryName(path),Guid.NewGuid().ToString("N")+".lnk");dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));dynamic link=shell.CreateShortcut(temporary);
-            try{link.TargetPath=target;link.Arguments=arguments;link.Description="Windows Claude: диски и папки ПК";link.Save();File.Move(temporary,path);}
+            try{link.TargetPath=target;link.Arguments=arguments;link.Description="Pocket Windows: диски и папки ПК";link.Save();File.Move(temporary,path);}
             finally{Marshal.FinalReleaseComObject(link);Marshal.FinalReleaseComObject(shell);if(File.Exists(temporary))File.Delete(temporary);}
         }
         static void Install()
@@ -391,7 +406,7 @@ namespace WindowsClaude.GuestFiles
                     if(!StartupTargetMatches((string)link.TargetPath,(string)link.Arguments,directory))throw new InvalidOperationException("SHORTCUT_NAME_CONFLICT");
                     NoReparse((string)link.TargetPath);Marshal.FinalReleaseComObject(link);link=null;
                 }
-                link=shell.CreateShortcut(temporary);link.TargetPath=target;link.Arguments="--apply";link.Description="Windows Claude: диски и папки ПК";link.Save();
+                link=shell.CreateShortcut(temporary);link.TargetPath=target;link.Arguments="--apply";link.Description="Pocket Windows: диски и папки ПК";link.Save();
                 NoReparse(path);if(exists)File.Replace(temporary,path,null);else File.Move(temporary,path);
             }
             finally{if(link!=null)Marshal.FinalReleaseComObject(link);Marshal.FinalReleaseComObject(shell);if(File.Exists(temporary))File.Delete(temporary);}
