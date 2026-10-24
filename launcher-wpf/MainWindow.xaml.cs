@@ -192,7 +192,7 @@ namespace WindowsClaude.Launcher
 
         void OpenSheet(string title, UIElement content)
         {
-            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet, OfferSheet }) Show(part, part == content);
+            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet }) Show(part, part == content);
             SheetTitle.Text = title;
             if (SheetHost.Visibility == Visibility.Visible) { content.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))); return; }
             Show(SheetHost, true);
@@ -560,7 +560,7 @@ namespace WindowsClaude.Launcher
             NextActionButton.Content = blocker == null ? "Проверить снова" : Text(blocker, "action_label", "Проверить снова");
             bool restore = blocker != null && (suggestedAction == "prepare" || suggestedAction == "repair_gateway" || suggestedAction == "recover_session");
             // Restoring needs one short line; the full explanation stays on the Проверка page.
-            if (restore) { string detail = Text(blocker, "detail", ""); int stop = detail.IndexOf(". "); NextStepText.Text = stop > 0 ? detail.Substring(0, stop + 1) : detail; }
+            if (blocker != null) { string detail = Text(blocker, "detail", ""); int stop = detail.IndexOf(". "); NextStepText.Text = stop > 0 ? detail.Substring(0, stop + 1) : detail; }
             NextActionButton.Style = (Style)FindResource(restore ? "Pill" : "SoftPill");
             Show(NextActionButton, !Bridge.Ok(result));
 
@@ -623,8 +623,8 @@ namespace WindowsClaude.Launcher
         {
             bool running = workState == "running", starting = ActiveVmState(workState) && !running;
             bool attention = !ready && readinessReport != null && !runtimeActive;
-            StatusIcon.Background = running ? GreenSoft : attention ? Hex("#FFF1DE") : BlueSoft;
-            StatusGlyph.Foreground = running ? Green : attention ? Orange : Blue;
+            StatusIcon.Background = running ? GreenSoft : attention ? GreySoft : BlueSoft;
+            StatusGlyph.Foreground = running ? Green : attention ? Grey : Blue;
             Pulse.Fill = running ? Green : Blue;
             bool[] done = { gatewayState == "running", Flag(report, "network_verified"), running, filesState == "ready" };
             bool[] active = { ActiveVmState(gatewayState) && gatewayState != "running", gatewayState == "running" && !done[1], starting, running && filesState != "ready" && filesState != "off" && filesState.Length > 0 };
@@ -644,21 +644,8 @@ namespace WindowsClaude.Launcher
         const string ContactUrl = "https://t.me/Daniil_Simples";
         bool runningNoted, promoBalloonPending;
 
-        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenOffer(0); }
-        void OnClaude(object sender, RoutedEventArgs e) { OpenOffer(1); }
-        static readonly string[][] Offers =
-        {
-            new[] { "Proxy", "Личный Proxy под ключ", "900 ₽ в месяц", "Твой личный Proxy, не общий", "Всё настроено, остаётся вставить ссылку", "Поддержка на связи постоянно", "Купить в Telegram" },
-            new[] { "Claude Pro", "Оформим подписку под ключ", "2 000 ₽", "1. Открой бота в Telegram и выбери Claude Pro", "2. Оплати в боте удобным способом", "3. Получи данные и войди в Claude прямо в Windows", "Открыть бота в Telegram" }
-        };
-        void OpenOffer(int index)
-        {
-            var offer = Offers[index];
-            OfferHeadline.Text = offer[1]; OfferPrice.Text = offer[2];
-            OfferLine1.Text = offer[3]; OfferLine2.Text = offer[4]; OfferLine3.Text = offer[5]; OfferButton.Content = offer[6];
-            OpenSheet(offer[0], OfferSheet);
-        }
-        void OnOpenContact(object sender, RoutedEventArgs e) { OpenContact(); }
+        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact(); }
+        void OnClaude(object sender, RoutedEventArgs e) { OpenContact(); }
         static void OpenContact()
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ContactUrl) { UseShellExecute = true }); }

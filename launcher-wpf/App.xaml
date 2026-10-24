@@ -153,7 +153,7 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Grid x:Name="Body" Background="Transparent" MinHeight="56">
+                            <Grid x:Name="Body" Background="Transparent" MinHeight="52">
                                 <Border x:Name="Shade" Background="#0B000000" CornerRadius="11" Margin="6,3" Opacity="0" />
                                 <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center" HorizontalAlignment="Stretch" />
                             </Grid>
