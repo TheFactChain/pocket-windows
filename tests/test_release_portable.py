@@ -213,6 +213,13 @@ class ReleaseTests(unittest.TestCase):
             release.install_app(result['package'], result['sha256'], self.target)
         self.assertEqual((self.target / release.pack.APP_FILES[1]).read_bytes(), b'something else')
 
+    def test_light_package_skips_an_omitted_file_the_copy_never_had(self):
+        result = release.package_app(self.bundle, self.next_release())
+        (self.target / release.pack.APP_FILES[1]).unlink()
+        release.install_app(result['package'], result['sha256'], self.target)
+        self.assertFalse((self.target / release.pack.APP_FILES[1]).exists())
+        self.assertEqual((self.target / release.pack.APP_FILES[0]).read_bytes(), b'newer code')
+
     def test_tampered_input_is_rejected_before_target_changes(self):
         (self.app / 'scripts/portable_app.py').write_bytes(b'tampered')
         with self.assertRaises(ValueError):

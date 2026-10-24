@@ -326,8 +326,9 @@ def apply_update(release, target):
                     atomic_json(legacy_marker, expected_legacy)
             omitted = set(manifest.get('omitted') or ())
             for row in manifest['common_files']:
-                if row['path'] in omitted and (not (target / row['path']).exists()
-                        or file_record(pack.file_under(target, row['path']), row['path']) != row):
+                # A copy may lack optional components (the ZIP leaves some out); only a different version blocks.
+                if row['path'] in omitted and ((target / row['path']).exists()
+                        and file_record(pack.file_under(target, row['path']), row['path']) != row):
                     raise RuntimeError('This copy is too old for the light update; install the full package: ' + row['path'])
             rows = [row for row in manifest['common_files'] if row['path'] not in omitted]
             previous_bytes = 0
