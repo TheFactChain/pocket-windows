@@ -16,7 +16,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 from runtime_network_plan import arguments as network_arguments
 from collections import deque
 from runtime_logs import start_capped_drain, CappedWriter
-from runtime_config import load_settings, load_viewer_settings, REFRESH_INTERVAL_MS
+from runtime_config import load_settings, load_viewer_settings, DISPLAY_UPDATE_MS
 import launch_runtime as runtime
 import windows_guest_settings as windows_settings
 import windows_hardware
@@ -164,7 +164,7 @@ if normal_runtime:
         import clipboard_bridge
         clipboard_port = clipboard_bridge.reserve_port()
         arguments += clipboard_bridge.arguments(clipboard_port)
-    env['WCP_REFRESH_MS'] = str(REFRESH_INTERVAL_MS[viewer_settings['refresh_hz']])  # read by the patched SDL engine
+    env['WCP_REFRESH_MS'] = str(DISPLAY_UPDATE_MS)  # read by the patched SDL engine
     # SDL's close button otherwise cuts guest power without an ACPI shutdown.
     arguments[arguments.index('-display') + 1] = ('sdl,gl=off,window-close=off'
         + (',full-screen=on' if viewer_settings['start_fullscreen'] else ''))

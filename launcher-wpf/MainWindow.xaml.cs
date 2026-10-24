@@ -33,8 +33,6 @@ namespace WindowsClaude.Launcher
         static readonly int[,] Modes = { { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1366, 768 }, { 1440, 900 },
             { 1600, 900 }, { 1680, 1050 }, { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 } };
         const int DefaultMode = 8;
-        static readonly int[] RefreshRates = { 30, 60, 120, 144 };
-        const int DefaultRefresh = 1;
         static readonly string[] Protocols = { "hysteria2", "socks5", "http", "https" };
 
         readonly DispatcherTimer lifecycleTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -93,7 +91,6 @@ namespace WindowsClaude.Launcher
             }
             BuildHelp();
             for (int index = 0; index < Modes.GetLength(0); index++) ResolutionBox.Items.Add(Modes[index, 0] + " × " + Modes[index, 1]);
-            foreach (int rate in RefreshRates) RefreshBox.Items.Add(rate + " Гц");
             VersionText.Text = ReleaseInfo.Read(Bridge.Root).DisplayText;
 
             InputBindings.Add(new KeyBinding(new Command(() => Navigate(AppPage.Connection)), Key.D2, ModifierKeys.Control));
@@ -168,7 +165,7 @@ namespace WindowsClaude.Launcher
             currentPage = page;
             if (page != AppPage.Home)
             {
-                PageTitle.Text = page == AppPage.Connection ? "Подключения" : page == AppPage.Settings ? "Windows" : "Проверка";
+                PageTitle.Text = page == AppPage.Connection ? "Подключения" : page == AppPage.Settings ? "Характеристики" : "Проверка";
                 Show(ConnectionsPane, page == AppPage.Connection); Show(SettingsPane, page == AppPage.Settings); Show(ChecksPanel, page == AppPage.Diagnostics);
                 Show(RefreshButton, page == AppPage.Diagnostics);
             }
@@ -501,7 +498,7 @@ namespace WindowsClaude.Launcher
             {
                 readinessReport = result;
                 if (!settingsLoaded && result.ContainsKey("settings")) LoadSettings(result);
-                if (result.ContainsKey("host")) { settingsHost = Child(result, "host"); UpdateHostHints(); }
+                if (result.ContainsKey("host")) { settingsHost = Child(result, "host"); }
                 ready = Bridge.Ok(result);
                 if (pendingOutcome != null && pendingOutcome.IsCompleted) { outcomeUnknown = false; pendingOutcome = null; }
                 var startup = Child(result, "startup");
@@ -788,7 +785,7 @@ namespace WindowsClaude.Launcher
             originalViewer = Child(reply, "viewer_settings");
             originalFiles = Child(reply, "file_settings");
             if (reply.ContainsKey("host")) settingsHost = Child(reply, "host");
-            settingsLoaded = true; ResetSettings(); UpdateHostHints(); Busy(busy);
+            settingsLoaded = true; ResetSettings(); Busy(busy);
         }
 
         void ResetSettings()
@@ -802,12 +799,7 @@ namespace WindowsClaude.Launcher
                 if (originalWindows != null && !Flag(originalWindows, "fit"))
                     for (int index = 0; index < Modes.GetLength(0); index++)
                         if (Text(originalWindows, "width", "") == Modes[index, 0].ToString() && Text(originalWindows, "height", "") == Modes[index, 1].ToString()) selected = index;
-                ResolutionBox.SelectedIndex = selected;
-                int rate; Int32.TryParse(Text(originalViewer, "refresh_hz", "60"), NumberStyles.None, CultureInfo.InvariantCulture, out rate);
-                int rateIndex = Array.IndexOf(RefreshRates, rate);
-                RefreshBox.SelectedIndex = rateIndex < 0 ? DefaultRefresh : rateIndex;
-                FullscreenSwitch.IsChecked = Flag(originalViewer, "start_fullscreen");
-                RememberWindowSwitch.IsChecked = originalViewer == null || !originalViewer.ContainsKey("remember_window") || Flag(originalViewer, "remember_window");
+                ResolutionBox.SelectedIndex = selected;                FullscreenSwitch.IsChecked = Flag(originalViewer, "start_fullscreen");
                 ClipboardSwitch.IsChecked = originalViewer == null || !originalViewer.ContainsKey("share_clipboard") || Flag(originalViewer, "share_clipboard");
                 string mode = Text(originalFiles, "mode", "off");
                 folders.Clear();
@@ -819,12 +811,16 @@ namespace WindowsClaude.Launcher
             finally { applyingSettings = false; }
         }
 
-        void UpdateHostHints()
+        // Leaves room for the PC itself: a quarter of the memory (at least 4 GiB) and of the cores (at least 2).
+        int MemoryLimitGiB()
         {
-            int total; Int32.TryParse(Text(settingsHost, "ram_total_mib", "0"), out total);
-            MemoryHint.Text = total > 0 ? "В этом ПК " + ((decimal)total / 1024).ToString("0", CultureInfo.CurrentCulture) + " ГиБ" : "От 1 до 32";
-            string cpus = Text(settingsHost, "logical_processors", "");
-            CpuHint.Text = cpus.Length > 0 ? "В этом ПК " + cpus : "От 1 до 32";
+            int total; if (!Int32.TryParse(Text(settingsHost, "ram_total_mib", "0"), out total) || total <= 0) return 32;
+            return Math.Max(1, Math.Min(32, (total - Math.Max(4096, total / 4)) / 1024));
+        }
+        int CpuLimit()
+        {
+            int cores; if (!Int32.TryParse(Text(settingsHost, "logical_processors", "0"), out cores) || cores <= 0) return 32;
+            return Math.Max(1, Math.Min(32, cores - Math.Max(2, cores / 4)));
         }
 
         void UpdateFilesRows()
@@ -870,13 +866,13 @@ namespace WindowsClaude.Launcher
         void StepMemory(decimal delta)
         {
             decimal gib; if (!TryGiB(MemoryInput.Text, out gib)) gib = 4;
-            gib = Math.Min(32, Math.Max(1, Math.Round((gib + delta) * 2, MidpointRounding.AwayFromZero) / 2));
+            gib = Math.Min(MemoryLimitGiB(), Math.Max(1, Math.Round((gib + delta) * 2, MidpointRounding.AwayFromZero) / 2));
             MemoryInput.Text = gib.ToString("0.#", CultureInfo.CurrentCulture); ScheduleSave();
         }
         void StepCpu(int delta)
         {
             int cpus; if (!Int32.TryParse(CpuInput.Text.Trim(), out cpus)) cpus = 2;
-            CpuInput.Text = Math.Min(32, Math.Max(1, cpus + delta)).ToString(CultureInfo.InvariantCulture); ScheduleSave();
+            CpuInput.Text = Math.Min(CpuLimit(), Math.Max(1, cpus + delta)).ToString(CultureInfo.InvariantCulture); ScheduleSave();
         }
         void OnMemoryDown(object sender, RoutedEventArgs e) { StepMemory(-0.5m); }
         void OnMemoryUp(object sender, RoutedEventArgs e) { StepMemory(0.5m); }
@@ -886,26 +882,19 @@ namespace WindowsClaude.Launcher
             if (next != ResolutionBox.SelectedIndex) ResolutionBox.SelectedIndex = next; // SelectionChanged schedules the save
         }
         void OnResolutionDown(object sender, RoutedEventArgs e) { StepResolution(-1); }
-        void OnResolutionUp(object sender, RoutedEventArgs e) { StepResolution(1); }
-        void StepRefresh(int delta)
-        {
-            int next = Math.Min(RefreshBox.Items.Count - 1, Math.Max(0, RefreshBox.SelectedIndex + delta));
-            if (next != RefreshBox.SelectedIndex) RefreshBox.SelectedIndex = next;
-        }
-        void OnRefreshDown(object sender, RoutedEventArgs e) { StepRefresh(-1); }
-        void OnRefreshUp(object sender, RoutedEventArgs e) { StepRefresh(1); }
-        void OnCpuDown(object sender, RoutedEventArgs e) { StepCpu(-1); }
+        void OnResolutionUp(object sender, RoutedEventArgs e) { StepResolution(1); }        void OnCpuDown(object sender, RoutedEventArgs e) { StepCpu(-1); }
         void OnCpuUp(object sender, RoutedEventArgs e) { StepCpu(1); }
 
         bool TryGetSettings(out Dictionary<string, object> value, out string error)
         {
             value = null; error = null;
             decimal gib; int original; Int32.TryParse(Text(originalSettings, "work_memory_mib", "0"), out original);
-            if (!TryGiB(MemoryInput.Text, out gib) || gib < 1 || gib > 32) { error = "Память: число от 1 до 32 ГиБ, например 6 или 6,5."; return false; }
+            int memoryMax = Math.Max(MemoryLimitGiB(), (int)Math.Ceiling((decimal)original / 1024));
+            if (!TryGiB(MemoryInput.Text, out gib) || gib < 1 || gib > memoryMax) { error = "Память: число от 1 до " + memoryMax + " ГиБ, например 6 или 6,5."; return false; }
             // Unchanged text keeps an old exact MiB value such as 5000.
             int mib = MemoryInput.Text.Trim() == FormatGiB(original) ? original : (int)Math.Round(gib * 1024, MidpointRounding.AwayFromZero);
             int cpus;
-            if (!Int32.TryParse(CpuInput.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out cpus) || cpus < 1 || cpus > 32) { error = "Процессоры: целое число от 1 до 32."; return false; }
+            if (!Int32.TryParse(CpuInput.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out cpus) || cpus < 1 || cpus > Math.Max(CpuLimit(), Convert.ToInt32(Text(originalSettings, "vcpus", "1")))) { error = "Процессоры: целое число от 1 до " + CpuLimit() + "."; return false; }
             bool filesOn = FilesSwitch.IsChecked == true;
             string mode = !filesOn ? "off" : FilesSelected.IsChecked == true ? "selected" : "all";
             if (mode == "selected" && folders.Count == 0) { error = "Добавь хотя бы одну папку ПК."; return false; }
@@ -913,8 +902,7 @@ namespace WindowsClaude.Launcher
             value = new Dictionary<string, object>(originalSettings);
             value["schema"] = 1; value["work_memory_mib"] = mib; value["vcpus"] = cpus;
             value["windows"] = new Dictionary<string, object> { { "schema", 1 }, { "width", Modes[resolution, 0] }, { "height", Modes[resolution, 1] }, { "fit", false } };
-            value["viewer"] = new Dictionary<string, object> { { "schema", 1 }, { "start_fullscreen", FullscreenSwitch.IsChecked == true }, { "remember_window", RememberWindowSwitch.IsChecked == true }, { "share_clipboard", ClipboardSwitch.IsChecked == true },
-                { "refresh_hz", RefreshRates[Math.Max(0, RefreshBox.SelectedIndex)] } };
+            value["viewer"] = new Dictionary<string, object> { { "schema", 1 }, { "start_fullscreen", FullscreenSwitch.IsChecked == true }, { "remember_window", originalViewer == null || !originalViewer.ContainsKey("remember_window") || Flag(originalViewer, "remember_window") }, { "share_clipboard", ClipboardSwitch.IsChecked == true } };
             value["files"] = new Dictionary<string, object> { { "schema", 1 }, { "mode", mode }, { "folders", folders.ToArray() } };
             return true;
         }

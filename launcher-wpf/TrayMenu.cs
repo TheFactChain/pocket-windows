@@ -31,13 +31,17 @@ namespace WindowsClaude.Launcher
 
         internal static void ShowAt(System.Drawing.Point cursor, Item[] items)
         {
-            if (current != null) { current.Close(); current = null; }
+            if (current != null) { current.Dismiss(); current = null; }
             current = new TrayMenu(items, cursor);
             current.Show();
         }
 
         readonly System.Drawing.Point cursor;
         readonly DateTime shown = DateTime.UtcNow;
+        bool dismissed;
+
+        // Closing a window that is already closing throws, and Deactivated fires while the click path closes it.
+        void Dismiss() { if (dismissed) return; dismissed = true; Close(); }
 
         TrayMenu(Item[] items, System.Drawing.Point cursor)
         {
@@ -67,11 +71,11 @@ namespace WindowsClaude.Launcher
                 Activate(); SetForegroundWindow(new System.Windows.Interop.WindowInteropHelper(this).Handle);
                 // A tray click may not hand focus over; without activation Deactivated never fires, so poll once.
                 var guard = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-                guard.Tick += delegate { if (!IsActive && DateTime.UtcNow - shown > TimeSpan.FromMilliseconds(900)) { guard.Stop(); Close(); } };
+                guard.Tick += delegate { if (!IsActive && DateTime.UtcNow - shown > TimeSpan.FromMilliseconds(900)) { guard.Stop(); Dismiss(); } };
                 guard.Start();
             };
-            Deactivated += delegate { if (DateTime.UtcNow - shown > TimeSpan.FromMilliseconds(300)) Close(); };
-            KeyDown += delegate (object sender, KeyEventArgs e) { if (e.Key == Key.Escape) Close(); };
+            Deactivated += delegate { if (DateTime.UtcNow - shown > TimeSpan.FromMilliseconds(300)) Dismiss(); };
+            KeyDown += delegate (object sender, KeyEventArgs e) { if (e.Key == Key.Escape) Dismiss(); };
             Closed += delegate { if (current == this) current = null; };
         }
 
@@ -90,7 +94,7 @@ namespace WindowsClaude.Launcher
             DockPanel.SetDock(icon, Dock.Left);
             line.Children.Add(icon); line.Children.Add(text);
             var button = new Button { Style = (Style)Application.Current.FindResource("MenuRow"), Content = line, IsEnabled = item.Enabled };
-            button.Click += delegate (object sender, RoutedEventArgs e) { Window owner = Window.GetWindow(button); if (owner != null) owner.Close(); if (item.Run != null) item.Run(); };
+            button.Click += delegate (object sender, RoutedEventArgs e) { var owner = Window.GetWindow(button) as TrayMenu; if (owner != null) owner.Dismiss(); if (item.Run != null) item.Run(); };
             return button;
         }
 
