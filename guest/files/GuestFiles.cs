@@ -300,7 +300,7 @@ namespace WindowsClaude.GuestFiles
             return matches.Length==1&&NicReady(matches[0]);
         }
         // Remembered per adapter after a verified static connection: a new or reset adapter stays unplugged
-        // (no DHCP route) until RUNFILES.CMD configures it again.
+        // (no DHCP route) until the helper configures it again with administrator consent.
         public static string NicMarker(string directory,string id)
         {
             Guid guid;if(!Guid.TryParse(id,out guid))throw new InvalidOperationException("ISOLATED_NIC_NOT_UNIQUE");
@@ -401,16 +401,16 @@ namespace WindowsClaude.GuestFiles
             switch(code)
             {
                 case "OK":return "Диски и папки ПК подключены. Они появятся в Проводнике. Подключение запускается автоматически при входе.";
-                case "ORDINARY_TOKEN_REQUIRED":return "Запусти RUNFILES.CMD обычным двойным щелчком, без «Запуск от имени администратора», чтобы диски появились в Проводнике.";
+                case "ORDINARY_TOKEN_REQUIRED":return "Помощник запущен от имени администратора, и диски не появятся в Проводнике. Выйди из учётной записи Windows и войди снова.";
                 case "OWN_MAPPING_BUSY":return "Закрой файлы и окна папок ПК в Windows, затем повтори подключение. Открытые файлы принудительно не отключены.";
                 case "UNLETTERED_CONNECTION_REMAINS":return "Осталось временное подключение без буквы. Выйди из учётной записи Windows и войди снова, чтобы очистить его.";
                 case "CREDENTIAL_CONFLICT":return "Windows уже подключена к ПК с другими учётными данными. Выйди из учётной записи Windows и войди снова. Чужие подключения не отключены.";
-                case "NIC_NOT_READY":return "Изолированная сеть папок ПК не готова. Проверь подключение в панели и повтори запуск RUNFILES.CMD.";
-                case "NIC_NOT_CONFIGURED":return "Отдельная сеть папок ПК ещё не настроена. Открой диск WCPFILES, запусти RUNFILES.CMD и подтверди запрос Windows.";
-                case "FILE_CHANNEL_FAILED":return "Не удалось сообщить панели о готовности сети папок ПК. Перезапусти Windows из панели и повтори RUNFILES.CMD.";
-                case "NIC_ADMIN_CANCELLED":return "Для настройки отдельной сети папок ПК нужно разрешение администратора. Повтори RUNFILES.CMD и подтверди запрос Windows.";
-                case "NIC_CONFIGURATION_FAILED":return "Не удалось настроить отдельный сетевой адаптер папок ПК. Повтори RUNFILES.CMD.";
-                case "EXPLORER_LABEL_FAILED":return "Папки ПК подключены, но Проводник не принял их понятные названия. Повтори RUNFILES.CMD.";
+                case "NIC_NOT_READY":return "Изолированная сеть папок ПК не готова. Проверь подключение в панели и перезапусти Windows.";
+                case "NIC_NOT_CONFIGURED":return "Отдельная сеть папок ПК ещё не настроена. Перезапусти Windows и подтверди запрос разрешения.";
+                case "FILE_CHANNEL_FAILED":return "Не удалось сообщить панели о готовности сети папок ПК. Перезапусти Windows из панели.";
+                case "NIC_ADMIN_CANCELLED":return "Для настройки отдельной сети папок ПК нужно разрешение администратора. Перезапусти Windows и подтверди запрос.";
+                case "NIC_CONFIGURATION_FAILED":return "Не удалось настроить отдельный сетевой адаптер папок ПК. Перезапусти Windows.";
+                case "EXPLORER_LABEL_FAILED":return "Папки ПК подключены, но Проводник не принял их понятные названия. Перезапусти Windows.";
                 case "ISOLATED_NIC_NOT_UNIQUE":return "Не найден единственный отдельный сетевой адаптер папок ПК. Проверь конфигурацию виртуальной машины.";
                 default:return "Подключение папок ПК не завершено. Код: "+code+". Передай этот код для диагностики.";
             }
@@ -424,7 +424,7 @@ namespace WindowsClaude.GuestFiles
                 try{ParseConfig(FindConfig());ConfigureNic(new WindowsNic(),Elevated());return 0;}catch{return 2;}
             }
             if(args.Length!=1||(args[0]!="--install"&&args[0]!="--apply"))return 64;
-            Config config=null;Outcome outcome=new Outcome();bool installed=false;
+            Config config=null;Outcome outcome=new Outcome();bool installed=false;Thread clipboard=null;
             try
             {
                 config=ParseConfig(FindConfig());
@@ -432,6 +432,8 @@ namespace WindowsClaude.GuestFiles
                 if(!Environment.UserInteractive||Process.GetCurrentProcess().SessionId==0)throw new InvalidOperationException("INTERACTIVE_USER_REQUIRED");
                 // The panel ships each new helper on its medium: switch to it at logon, nothing to click.
                 if(args[0]=="--apply"&&UpdateFromMedium())return 0;
+                // The shared clipboard runs beside everything below, so a file-sharing notice never delays it.
+                if(args[0]=="--apply")clipboard=GuestClipboard.StartBackground(config.Nonce);
                 // The desktop takes the panel's standard size (saved, so later starts boot into it) and reports it.
                 string displaySettings=ReadDisplaySettings();FitDisplay(RequestedSize(displaySettings));ReportDisplay(displaySettings);
                 using(var mutex=new Mutex(false,@"Local\WindowsClaude.HostFiles."+WindowsIdentity.GetCurrent().User.Value))
@@ -443,8 +445,9 @@ namespace WindowsClaude.GuestFiles
                         {
                             // The host keeps the file NIC unplugged until asked, so it is asked only for a static adapter.
                             bool remembered=NicRemembered();
-                            if(remembered)RequestLink(config);else if(args[0]=="--apply")throw new InvalidOperationException("NIC_NOT_CONFIGURED");
-                            if(args[0]=="--install")EnsureNic(Ready,ElevateNic,()=>RequestLink(config),()=>Thread.Sleep(1000),remembered?20:0);
+                            if(remembered)RequestLink(config);
+                            // First time only: Windows asks for administrator consent once to give the file adapter its fixed address, no script to run.
+                            EnsureNic(Ready,ElevateNic,()=>RequestLink(config),()=>Thread.Sleep(1000),remembered?20:0);
                         }
                         if(args[0]=="--install"){Install();installed=true;}
                         string state=StatePath();List<Mapping> previous;
@@ -461,6 +464,8 @@ namespace WindowsClaude.GuestFiles
             bool sent=true;try{SendReceipt(Receipt(config,outcome));}catch{sent=false;}
             string detail=outcome.Code=="NIC_NOT_READY"&&nicDetail!=null?Environment.NewLine+Environment.NewLine+"Состояние сети папок ПК: "+nicDetail+".":"";
             if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code)+detail,"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
+            // Stay resident while the clipboard channel works; without a channel the thread ends and so does the helper.
+            if(clipboard!=null)clipboard.Join();
             return !sent?3:outcome.Success?0:2;
         }
         public static int NativeMode(IList<int[]> modes)

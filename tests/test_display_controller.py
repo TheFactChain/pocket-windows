@@ -223,6 +223,21 @@ class DisplayControllerTests(unittest.TestCase):
                 self.assertEqual(report['windows_display']['generation'], 2)
             self.assertEqual(scope['command'].call_args.args[0], 'ringbuf-read')
 
+    def test_firmware_text_before_the_receipt_does_not_make_the_display_unconfirmed(self):
+        function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'read_display_receipt')
+        receipt = dict(schema=1, session_nonce='a' * 32, requested=dict(width=1920, height=1080),
+                       current=dict(width=1920, height=1080), success=True, code='OK', display_code='OK')
+        boot = '\x1b[2J\x1b[01;01HBdsDxe: loading Boot0005 "Windows Boot Manager"\r\nBdsDxe: starting Boot0005\r\n'
+        for data, status in [(boot, None), (boot + json.dumps(receipt) + '\n', 'applied')]:
+            report = {}
+            scope = dict(command=mock.Mock(return_value=data), report=report, display_buffer='',
+                         display_settings=settings.DEFAULTS, session_nonce='a' * 32, generation=1,
+                         windows_settings=settings, save=mock.Mock(), queue=queue)
+            exec(compile(ast.Module(body=[function], type_ignores=[]), 'display-response', 'exec'), scope)
+            scope['read_display_receipt']()
+            self.assertEqual(report.get('windows_display', {}).get('status'), status)
+
     @unittest.skipUnless(os.name == 'nt', 'Windows menu ownership regression')
     def test_close_menu_is_disabled_only_for_owned_qemu_process(self):
         function = next(node for node in self.tree().body if isinstance(node, ast.FunctionDef)

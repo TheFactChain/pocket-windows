@@ -132,6 +132,7 @@ work_reboot_session = args.guest == 'work-boot' and args.network == 'isolated-la
 normal_runtime = work_reboot_session and not args.work_test_media
 session_nonce=uuid.uuid4().hex if work_reboot_session else None
 files_session = None
+clipboard = clipboard_port = None
 display_settings = None
 if normal_runtime:
     viewer_settings = load_viewer_settings(root)
@@ -155,6 +156,11 @@ if normal_runtime:
     arguments += windows_settings.vga_arguments(display_settings)
     arguments += ['-chardev', 'ringbuf,id=wcdisplay,size=8192']
     arguments[arguments.index('-serial') + 1] = 'chardev:wcdisplay'
+    if viewer_settings.get('share_clipboard', False):
+        # Text clipboard shared with the guest helper through COM3 (loopback socket owned by this controller).
+        import clipboard_bridge
+        clipboard_port = clipboard_bridge.reserve_port()
+        arguments += clipboard_bridge.arguments(clipboard_port)
     # SDL's close button otherwise cuts guest power without an ACPI shutdown.
     arguments[arguments.index('-display') + 1] = ('sdl,gl=off,window-close=off'
         + (',full-screen=on' if viewer_settings['start_fullscreen'] else ''))
@@ -281,6 +287,8 @@ def read_display_receipt():
             raise ValueError('Display response is too large')
         while '\n' in display_buffer:
             line, display_buffer = display_buffer.split('\n', 1)
+            if not line.strip().startswith('{'):
+                continue  # firmware and boot text share COM1 with the receipt; only a JSON line is an answer
             receipt = windows_settings.validate_receipt(line.strip(), display_settings, session_nonce)
             report['windows_display'] = {'status': 'applied' if receipt['success'] else 'failed',
                                          'receipt': receipt, 'generation': generation, 'requested': display_settings}
@@ -526,6 +534,12 @@ try:
     if normal_runtime:
         files_session = file_sharing.Session(root, session_nonce)
         arguments += files_session.arguments
+        if clipboard_port is not None:
+            try:
+                clipboard = clipboard_bridge.Bridge(clipboard_port, session_nonce, clipboard_bridge.WindowsClipboard())
+                clipboard.start()
+            except OSError:
+                clipboard = None  # the guest keeps running without a shared clipboard
     while True:
         if not spawn_generation():
             report.update(status='exited',stop_requested=True)
@@ -660,6 +674,8 @@ except Exception:
         save()
     raise
 finally:
+    if clipboard is not None:
+        clipboard.stop()
     if files_session is not None:
         files_session.close(guest_stopped='process' not in globals() or process.poll() is not None)
     if stderr_writer:

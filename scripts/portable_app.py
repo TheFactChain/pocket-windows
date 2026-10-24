@@ -35,7 +35,7 @@ RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'scripts/session_carrier.py', 'scripts/file_snapshot.py', 'scripts/runtime_logs.py',
                  'scripts/windows_guest_settings.py',
                  'scripts/windows_hardware.py',
-                 'scripts/host_file_sharing.py', 'scripts/file_share_carrier.py',
+                 'scripts/host_file_sharing.py', 'scripts/file_share_carrier.py', 'scripts/clipboard_bridge.py',
                  'runtime/qemu-11.1.0/qemu-img.exe')
 GUEST_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 CHECK_INFO = {

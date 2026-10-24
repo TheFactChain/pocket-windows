@@ -5,7 +5,7 @@ DEFAULTS = {'schema': 1, 'work_memory_mib': 4096, 'gateway_memory_mib': 1024,
             'vcpus': 2, 'lan_port': 31861}
 RANGES = {'work_memory_mib': (1024, 32768), 'gateway_memory_mib': (256, 4096),
           'vcpus': (1, 32), 'lan_port': (1024, 65535)}
-VIEWER_DEFAULTS = {'schema': 1, 'start_fullscreen': False, 'remember_window': True}
+VIEWER_DEFAULTS = {'schema': 1, 'start_fullscreen': False, 'remember_window': True, 'share_clipboard': True}
 
 
 def validate_viewer_settings(value):
@@ -14,7 +14,7 @@ def validate_viewer_settings(value):
     result = VIEWER_DEFAULTS | value
     if type(result['schema']) is not int or result['schema'] != 1:
         raise ValueError('Unsupported viewer settings schema')
-    if any(type(result[key]) is not bool for key in ('start_fullscreen', 'remember_window')):
+    if any(type(result[key]) is not bool for key in ('start_fullscreen', 'remember_window', 'share_clipboard')):
         raise ValueError('Boolean viewer settings required')
     return result
 
