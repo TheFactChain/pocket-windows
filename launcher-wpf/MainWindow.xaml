@@ -220,6 +220,15 @@
                                 </DockPanel>
                                 <Border Style="{StaticResource Separator}" />
                                 <DockPanel Margin="16,5">
+                                    <Border Width="30" Height="30" CornerRadius="9" Background="#34C759" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Clipboard24" FontSize="17" Foreground="White" /></Border>
+                                    <ui:ToggleSwitch x:Name="ClipboardSwitch" DockPanel.Dock="Right" Click="OnSettingChanged" />
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Общий буфер обмена" Style="{StaticResource RowText}" />
+                                        <TextBlock Text="Текст копируется между ПК и Windows" Style="{StaticResource Caption}" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Style="{StaticResource Separator}" />
+                                <DockPanel Margin="16,5">
                                     <Border Width="30" Height="30" CornerRadius="9" Background="#FFCC00" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Folder24" FontSize="17" Foreground="White" /></Border>
                                     <ui:ToggleSwitch x:Name="FilesSwitch" DockPanel.Dock="Right" Click="OnFilesSwitch" />
                                     <StackPanel VerticalAlignment="Center">

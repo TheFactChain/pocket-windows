@@ -41,7 +41,7 @@ namespace WindowsClaude.Launcher
         readonly Border[] stepCards = new Border[4];
         readonly TextBlock[] stepTexts = new TextBlock[4];
         readonly Ellipse[] stepDots = new Ellipse[4];
-        Forms.NotifyIcon trayIcon; Forms.ToolStripMenuItem trayStop;
+        Forms.NotifyIcon trayIcon;
 
         Dictionary<string, object> readinessReport, operationResult, settingsHost, originalSettings, originalWindows, originalViewer, originalFiles;
         Task<Dictionary<string, object>> pendingOutcome;
@@ -631,15 +631,9 @@ namespace WindowsClaude.Launcher
         // ---------- Lifecycle, tray, polling ----------
         void StartLifecycle()
         {
-            var menu = new Forms.ContextMenuStrip();
-            var open = new Forms.ToolStripMenuItem("Открыть панель"); open.Click += delegate { ShowPanel(false, "tray menu"); };
-            trayStop = new Forms.ToolStripMenuItem("Выключить Windows");
-            trayStop.Click += async delegate { ShowPanel(false, "tray: stop Windows"); if (stopAvailable) await RunAction("stop", false); };
-            var quit = new Forms.ToolStripMenuItem("Закрыть панель (Windows продолжит работу)");
-            quit.Click += delegate { reallyClose = true; Close(); };
-            menu.Items.Add(open); menu.Items.Add(trayStop); menu.Items.Add(quit);
-            trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Windows Claude", ContextMenuStrip = menu };
+            trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Windows Claude" };
             trayIcon.DoubleClick += delegate { ShowPanel(false, "tray double click"); };
+            trayIcon.MouseUp += delegate (object sender, Forms.MouseEventArgs e) { if (e.Button == Forms.MouseButtons.Right) ShowTrayMenu(); };
             lifecycleTimer.Tick += async delegate { await RefreshRuntimeAsync(); };
             lifecycleTimer.Start(); UpdateTray();
         }
@@ -648,8 +642,18 @@ namespace WindowsClaude.Launcher
         {
             if (trayIcon == null || closing) return;
             trayIcon.Visible = runtimeActive || panelHiddenForSession;
-            trayStop.Enabled = stopAvailable && !busy && !outcomeUnknown;
             if (trayIcon.Visible && !trayPromotionStarted) PromoteTrayIcon();
+        }
+
+        void ShowTrayMenu()
+        {
+            TrayMenu.ShowAt(Forms.Cursor.Position, new[]
+            {
+                new TrayMenu.Item { Text = "Открыть панель", Icon = SymbolRegular.Open20, Tint = Blue, Run = delegate { ShowPanel(false, "tray menu"); } },
+                new TrayMenu.Item { Text = "Выключить Windows", Icon = SymbolRegular.Power20, Tint = Red, Enabled = stopAvailable && !busy && !outcomeUnknown,
+                    Run = async delegate { ShowPanel(false, "tray: stop Windows"); if (stopAvailable) await RunAction("stop", false); } },
+                new TrayMenu.Item { Text = "Закрыть панель", Caption = "Windows продолжит работать", Icon = SymbolRegular.Dismiss20, Tint = Grey, Run = delegate { reallyClose = true; Close(); } }
+            });
         }
 
         // Windows registers the icon a moment after it appears; retry briefly, then give up quietly.
@@ -798,6 +802,7 @@ namespace WindowsClaude.Launcher
                 ResolutionBox.SelectedIndex = selected;
                 FullscreenSwitch.IsChecked = Flag(originalViewer, "start_fullscreen");
                 RememberWindowSwitch.IsChecked = originalViewer == null || !originalViewer.ContainsKey("remember_window") || Flag(originalViewer, "remember_window");
+                ClipboardSwitch.IsChecked = originalViewer == null || !originalViewer.ContainsKey("share_clipboard") || Flag(originalViewer, "share_clipboard");
                 string mode = Text(originalFiles, "mode", "off");
                 folders.Clear();
                 var saved = originalFiles != null && originalFiles.ContainsKey("folders") ? originalFiles["folders"] as IEnumerable : null;
@@ -895,7 +900,7 @@ namespace WindowsClaude.Launcher
             value = new Dictionary<string, object>(originalSettings);
             value["schema"] = 1; value["work_memory_mib"] = mib; value["vcpus"] = cpus;
             value["windows"] = new Dictionary<string, object> { { "schema", 1 }, { "width", Modes[resolution, 0] }, { "height", Modes[resolution, 1] }, { "fit", false } };
-            value["viewer"] = new Dictionary<string, object> { { "schema", 1 }, { "start_fullscreen", FullscreenSwitch.IsChecked == true }, { "remember_window", RememberWindowSwitch.IsChecked == true } };
+            value["viewer"] = new Dictionary<string, object> { { "schema", 1 }, { "start_fullscreen", FullscreenSwitch.IsChecked == true }, { "remember_window", RememberWindowSwitch.IsChecked == true }, { "share_clipboard", ClipboardSwitch.IsChecked == true } };
             value["files"] = new Dictionary<string, object> { { "schema", 1 }, { "mode", mode }, { "folders", folders.ToArray() } };
             return true;
         }
