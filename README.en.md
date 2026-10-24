@@ -6,11 +6,11 @@
 
 Portable Windows for accessing blocked services through an existing proxy. One folder contains Windows 11, a launcher and a separate network environment. Extract the bundle, add your connection and open a desktop with Claude Desktop and Firefox already prepared.
 
-<p><a href="#download"><strong>Bundle download</strong></a></p>
+<p><a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><strong>Download the ready-to-run bundle</strong></a></p>
 <p><a href="#first-start">Get started</a></p>
 <p><a href="https://t.me/TheFactChain">News on Telegram</a></p>
 
-The screenshots show version **2026.10.24.13**. The full `Pocket-Windows-2026.10.24.13.zip` archive is about **16.9 GB** (15.8 GiB). A public download link for this bundle has not been published yet. GitHub **Source code** archives contain source files and cannot be used as the application.
+Version **2026.10.24.12** is available to download as the full `Pocket-Windows-2026.10.24.12.zip` archive, about **16.9 GB** (15.8 GiB). The screenshots were taken in version **2026.10.24.13**. GitHub **Source code** archives contain source files and cannot be used as the application.
 
 ![Windows desktop inside Pocket Windows with the prepared applications](docs/assets/readme/desktop.png)
 
@@ -70,11 +70,22 @@ These are the actual files on your PC. Editing or deleting a shared file inside 
 
 ## Download
 
-A link to the full ZIP and its `.sha256` file will appear here when the bundle is published. Follow the [project Telegram channel](https://t.me/TheFactChain) for news. The old `Setup.exe` does not match the version shown here; this version requires the full Pocket Windows archive.
+Open the [Pocket Windows folder on Google Drive](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD) and download `Pocket-Windows-2026.10.24.12.zip`. No account sign-in is required. Google Drive may ask you to confirm the download because the archive is too large for its virus scan.
+
+<details>
+<summary>SHA256 checksum</summary>
+
+For the accepted `Pocket-Windows-2026.10.24.12.zip` archive:
+
+```text
+0140a811fde1f7656ad68f72bdaef8c969b07ab9d46e16eadd79f4ed5200cfac
+```
+
+</details>
 
 ## First start
 
-1. **Download the bundle once it is published.** Use the link in the [Download section](#download) to get the full ZIP and matching `.sha256` file. You can compare the archive's SHA256 with that file to check the download.
+1. **Download the bundle.** Open the [download folder](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD) and download the full ZIP. To check the download, compare the file's SHA256 with the checksum in the [Download section](#download).
 2. **Extract the entire archive.** Use Windows File Explorer and a new writable folder. Do not run `Launcher.exe` from inside the archive or separate it from the other files.
 3. **Check your PC.** Open `Launcher.exe` and “Проверка” (Checks). If Windows Hypervisor Platform is disabled, use “Подготовить ПК” (Prepare PC), approve the administrator prompt and restart the PC if required.
 4. **Add a connection.** In “Подключения” (Connections), add an existing Hysteria2, SOCKS5, HTTP or HTTPS proxy and test it. Obtain the server credentials from your connection provider.
@@ -117,7 +128,7 @@ The Checks section can restore Python and QEMU from the local archive, replace t
 
 ### Do application updates require downloading the whole Windows image again?
 
-The update mechanism supports application files without downloading the Windows image again. The panel will offer an update when a compatible package is published for your installed version. Release news is posted in the [Telegram channel](https://t.me/TheFactChain).
+Built-in application updates were introduced in version **2026.10.24.13**. They allow application files to be updated without downloading the Windows image again when a compatible package is published. The **2026.10.24.12** bundle currently available on Google Drive does not include this mechanism; moving to a version with updates requires the full ZIP of a newer version. Release news is posted in the [Telegram channel](https://t.me/TheFactChain).
 
 ### Where can I report a problem?
 
