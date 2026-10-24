@@ -39,8 +39,7 @@
                                 <Border.Triggers>
                                     <EventTrigger RoutedEvent="Loaded">
                                         <BeginStoryboard><Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleX" From="0.96" To="1.04" Duration="0:0:3"><DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
-                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.ScaleY" From="0.96" To="1.04" Duration="0:0:3"><DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.5" To="1" Duration="0:0:2.6"><DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut" /></DoubleAnimation.EasingFunction></DoubleAnimation>
                                         </Storyboard></BeginStoryboard>
                                     </EventTrigger>
                                 </Border.Triggers>

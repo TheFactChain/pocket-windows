@@ -645,7 +645,7 @@ namespace WindowsClaude.Launcher
         void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Proxy за 900 ₽"); }
         void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Claude Pro за 2 000 ₽"); }
         // t.me opens the chat with the message already typed in; a bot takes the same idea as ?start=<code>.
-        // Every 5 seconds the shop group lifts and swells for a moment, smooth but noticeable, to catch the eye.
+        // Every 5 seconds the shop group lifts by a pixel or two, barely there, so it only seems to have moved; it never grows, because the page clips at its edge.
         void StartShopNudge()
         {
             var scale = new ScaleTransform(1, 1); var lift = new TranslateTransform();
@@ -655,13 +655,9 @@ namespace WindowsClaude.Launcher
             timer.Tick += delegate
             {
                 if (!ShopGroup.IsVisible || ShopGroup.IsMouseOver || SheetHost.Visibility == Visibility.Visible) return;
-                var grow = new DoubleAnimationUsingKeyFrames();
-                grow.KeyFrames.Add(new EasingDoubleKeyFrame(1.035, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(450)), ease));
-                grow.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(950)), ease));
                 var up = new DoubleAnimationUsingKeyFrames();
-                up.KeyFrames.Add(new EasingDoubleKeyFrame(-5, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(450)), ease));
-                up.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(950)), ease));
-                scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow); scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow.Clone());
+                up.KeyFrames.Add(new EasingDoubleKeyFrame(-1.5, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(700)), ease));
+                up.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1500)), ease));
                 lift.BeginAnimation(TranslateTransform.YProperty, up);
             };
             timer.Start();
