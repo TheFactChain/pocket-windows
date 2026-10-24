@@ -644,11 +644,12 @@ namespace WindowsClaude.Launcher
         const string ContactUrl = "https://t.me/Daniil_Simples";
         bool runningNoted, promoBalloonPending;
 
-        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact(); }
-        void OnClaude(object sender, RoutedEventArgs e) { OpenContact(); }
-        static void OpenContact()
+        void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Здравствуйте! Хочу купить Proxy за 900 ₽."); }
+        void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Здравствуйте! Хочу оформить Claude Pro за 2 000 ₽."); }
+        // t.me opens the chat with the message already typed in; a bot takes the same idea as ?start=<code>.
+        static void OpenContact(string message)
         {
-            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ContactUrl) { UseShellExecute = true }); }
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ContactUrl + "?text=" + Uri.EscapeDataString(message)) { UseShellExecute = true }); }
             catch (Exception) { System.Windows.MessageBox.Show("Не удалось открыть Telegram. Ссылка на бота: " + ContactUrl, "Pocket Windows"); }
         }
         // Once a day, right after Windows has come up, a quiet reminder from the tray.
@@ -674,7 +675,7 @@ namespace WindowsClaude.Launcher
         {
             trayIcon = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location), Text = "Pocket Windows" };
             trayIcon.DoubleClick += delegate { ShowPanel(false, "tray double click"); };
-            trayIcon.BalloonTipClicked += delegate { if (promoBalloonPending) { promoBalloonPending = false; OpenContact(); } };
+            trayIcon.BalloonTipClicked += delegate { if (promoBalloonPending) { promoBalloonPending = false; OpenContact("Здравствуйте! Хочу купить Proxy или Claude Pro."); } };
             trayIcon.BalloonTipClosed += delegate { promoBalloonPending = false; };
             trayIcon.MouseUp += delegate (object sender, Forms.MouseEventArgs e) { if (e.Button == Forms.MouseButtons.Right) ShowTrayMenu(); };
             lifecycleTimer.Tick += async delegate { await RefreshRuntimeAsync(); };
