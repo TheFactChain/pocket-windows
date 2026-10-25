@@ -428,6 +428,7 @@ def stage_gateway(app, target, generated, reserved=0):
                 atomic_json(destination / 'manifest.json', manifest)
     if current and current['current'] == version:
         return []
+    directory(generated / 'gateway/packages')
     pointer = {'schema': 1, 'current': version, 'previous': current['current'] if current else None}
     atomic_json(generated / 'gateway/packages/current.json', pointer)
     atomic_json(generated / 'gateway/packages/update.json',

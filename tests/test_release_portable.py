@@ -220,6 +220,30 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(release.stage_gateway(self.app, self.target, generated), [])
         self.assertEqual(list(generated.iterdir()), [])
 
+    def test_switch_to_existing_gateway_without_extracting_a_disk(self):
+        fixture = self.gateway_fixture()
+        archive, digest = fixture.archive('v2')
+        release.pack.gateway_package.install_package(self.target, archive, digest)
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[0], json.dumps(
+            dict(schema=1, file='gateway-recovery.zip', sha256=digest)).encode())
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[1], archive.read_bytes())
+        pointer = self.target / 'gateway/packages/current.json'
+        for previous in ('v1', None):
+            with self.subTest(previous=previous):
+                if previous:
+                    release.atomic_json(pointer, dict(schema=1, current=previous, previous=None))
+                else:
+                    pointer.unlink()
+                generated = self.base / ('generated-' + str(previous))
+                generated.mkdir()
+                with mock.patch.object(release.shutil, 'disk_usage', return_value=mock.Mock(free=0)):
+                    rows = release.stage_gateway(self.app, self.target, generated)
+                self.assertEqual({row['path'] for row in rows},
+                                 {'gateway/packages/current.json', 'gateway/packages/update.json'})
+                self.assertEqual(release.read_json(generated / 'gateway/packages/current.json'),
+                                 dict(schema=1, current='v2', previous=previous))
+                self.assertEqual(list(generated.rglob('*.qcow2')), [])
+
     def test_existing_gateway_and_archive_still_receive_full_validation(self):
         fixture = self.gateway_fixture()
         generated = self.base / 'generated'
