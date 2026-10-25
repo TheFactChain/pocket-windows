@@ -310,7 +310,7 @@
                                     <Border x:Name="ChecksHeroBadge" Width="40" Height="40" CornerRadius="20" Background="#EDEDF0" Margin="0,0,12,0">
                                         <ui:SymbolIcon x:Name="ChecksHeroGlyph" Symbol="Pulse24" FontSize="22" Foreground="#8A8A8E" />
                                     </Border>
-                                    <Button x:Name="RefreshButton" DockPanel.Dock="Right" Style="{StaticResource SoftPill}" Height="36" FontSize="13.5" Content="Проверить снова" Click="OnRefresh" ToolTip="F5" VerticalAlignment="Center" />
+                                    <Button x:Name="RefreshButton" DockPanel.Dock="Right" Style="{StaticResource SoftPill}" Height="36" FontSize="13.5" Content="Проверить снова" Click="OnDiagnosticAction" ToolTip="F5" VerticalAlignment="Center" />
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock x:Name="ChecksHeroTitle" Text="Проверка не выполнялась" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource Ink}" TextTrimming="CharacterEllipsis" />
                                         <TextBlock x:Name="ChecksHeroDetail" Text="ПК и комплект" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />

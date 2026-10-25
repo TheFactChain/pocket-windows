@@ -219,7 +219,9 @@ def preflight(root, host=None, *, full=True):
         check('connection', selected is not None and not selected['needs_credentials'],
               'Пароль выбранного подключения недоступен. Открой раздел «Подключение» и введи его заново.'
               if selected and selected['needs_credentials'] else 'Подключение выбрано для следующего запуска.' if selected else
-              'Открой раздел «Подключение», добавь сервер и выбери его для запуска.')
+              'Добавь подключение, чтобы запустить Windows.')
+        if selected is None:
+            checks['connection'].update(setup_required=True, action_label='Добавить подключение')
     except (OSError, ValueError, RuntimeError):
         check('connection', False, 'Не удалось прочитать подключение. Открой раздел «Подключение» и проверь сохранённый профиль.')
     network_verified = False
@@ -255,7 +257,8 @@ def preflight(root, host=None, *, full=True):
     force_stop = runtime.force_stop_offer(root, guests) if host['windows'] else None
     ok = all(item['passed'] for item in checks.values())
     blockers = [{'code': name, 'title': CHECK_INFO[name][1], 'detail': item['detail'],
-                 'action': item['action'], 'action_label': item['action_label']}
+                 'action': item['action'], 'action_label': item['action_label'],
+                 'setup_required': item.get('setup_required', False)}
                 for name, item in checks.items() if not item['passed']]
     return {'ok': ok, 'report_kind': 'preflight' if full else 'runtime_status',
             'message': (('Windows уже запущена.' if already_running else 'Всё готово к запуску Windows.')

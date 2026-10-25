@@ -353,9 +353,11 @@ class PortableAppTests(unittest.TestCase):
             with mock.patch('profile_store._unprotect', side_effect=app.SecretsUnavailable('private failure')):
                 report = app.preflight(root, host=self.facts())
             self.assertFalse(report['checks']['connection']['passed'])
+            self.assertFalse(report['checks']['connection'].get('setup_required', False))
             self.assertTrue(report['connection']['selected_profile']['needs_credentials'])
             blocker = next(item for item in report['blockers'] if item['code'] == 'connection')
             self.assertEqual(blocker['action'], 'connection')
+            self.assertFalse(blocker.get('setup_required', False))
             self.assertIn('заново', blocker['detail'])
             self.assertEqual(report['connection']['selected_profile']['name'], 'Test proxy')
             self.assertEqual(report['connection']['selected_profile']['revision_id'], view['revision_id'])
@@ -364,6 +366,33 @@ class PortableAppTests(unittest.TestCase):
             self.assertIsNone(report['connection']['applied_revision_id'])
             self.assertEqual(report['runtime']['work'], 'stopped')
             self.assertNotIn('never-in-diagnostics', json.dumps(report))
+
+    def test_missing_connection_is_setup_and_still_blocks_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = app.preflight(Path(temporary), host=self.facts())
+            connection = report['checks']['connection']
+            self.assertFalse(report['ok'])
+            self.assertFalse(connection['passed'])
+            self.assertTrue(connection.get('setup_required', False))
+            blocker = next(item for item in report['blockers'] if item['code'] == 'connection')
+            self.assertTrue(blocker.get('setup_required', False))
+            self.assertEqual(blocker['action'], 'connection')
+            self.assertEqual(blocker['action_label'], 'Добавить подключение')
+            self.assertFalse(report['checks']['guest_files']['passed'])
+            self.assertFalse(report['checks']['guest_files'].get('setup_required', False))
+
+    def test_unreadable_connection_store_is_an_error_not_initial_setup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'profiles').mkdir()
+            (root / 'profiles/profiles.json').write_text('{', encoding='utf-8')
+            report = app.preflight(root, host=self.facts())
+            self.assertFalse(report['ok'])
+            self.assertFalse(report['checks']['connection']['passed'])
+            self.assertFalse(report['checks']['connection'].get('setup_required', False))
+            blocker = next(item for item in report['blockers'] if item['code'] == 'connection')
+            self.assertFalse(blocker.get('setup_required', False))
+            self.assertIn('Не удалось прочитать', blocker['detail'])
 
     def test_settings_roundtrip_at_a_root_with_spaces(self):
         with tempfile.TemporaryDirectory(prefix='portable app ') as temporary:

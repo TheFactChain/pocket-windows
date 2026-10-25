@@ -469,6 +469,11 @@ namespace WindowsClaude.Launcher
         }
         void OnOpenDesktop(object sender, RoutedEventArgs e) { var task = RunAction("show-desktop", false); }
         void OnRefresh(object sender, RoutedEventArgs e) { var task = RunAction("diagnose", true); }
+        void OnDiagnosticAction(object sender, RoutedEventArgs e)
+        {
+            if (Checks(readinessReport).Any(item => !Flag(item, "passed") && Flag(item, "setup_required"))) Navigate(AppPage.Connection);
+            else OnRefresh(sender, e);
+        }
         void OnPrepare(object sender, RoutedEventArgs e) { var task = RunAction("prepare-components", false); }
         void OnRepairGateway(object sender, RoutedEventArgs e) { var task = RunAction("repair-gateway", false); }
         void OnPrepareHost(object sender, RoutedEventArgs e) { var task = RunAction("prepare-host", false); }
@@ -565,7 +570,7 @@ namespace WindowsClaude.Launcher
                     var check = item.Value as Dictionary<string, object>; if (check == null) continue;
                     var row = new Dictionary<string, object>(check); if (!row.ContainsKey("title")) row["title"] = item.Key; checks.Add(row);
                 }
-            return checks.OrderBy(item => Flag(item, "passed")).ToList();
+            return checks.OrderBy(item => Flag(item, "passed") ? 2 : Flag(item, "setup_required") ? 1 : 0).ToList();
         }
 
         void Display(Dictionary<string, object> result)
@@ -606,20 +611,23 @@ namespace WindowsClaude.Launcher
             }
             var report = readinessReport ?? result;
             var checks = Checks(report);
-            int failed = checks.Count(item => !Flag(item, "passed"));
-            DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? "Всё в порядке" : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
-            DiagnosticPill.Background = checks.Count == 0 ? GreySoft : failed == 0 ? GreenSoft : Hex("#FFF1DE");
-            DiagnosticSummary.Foreground = checks.Count == 0 ? Grey : failed == 0 ? GreenInk : Hex("#B36200");
-            ChecksHeroTitle.Text = checks.Count == 0 ? "Проверка не выполнялась" : failed == 0 ? "Всё в порядке" : "Нужно исправить: " + failed;
-            ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : (checks.Count - failed) + " из " + checks.Count + " проверок пройдено";
+            bool setupRequired = checks.Any(item => !Flag(item, "passed") && Flag(item, "setup_required"));
+            int failed = checks.Count(item => !Flag(item, "passed") && !Flag(item, "setup_required"));
+            DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
+            DiagnosticPill.Background = checks.Count == 0 ? GreySoft : failed == 0 ? (setupRequired ? BlueSoft : GreenSoft) : Hex("#FFF1DE");
+            DiagnosticSummary.Foreground = checks.Count == 0 ? Grey : failed == 0 ? (setupRequired ? BlueInk : GreenInk) : Hex("#B36200");
+            ChecksHeroTitle.Text = checks.Count == 0 ? "Проверка не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : "Нужно исправить: " + failed;
+            ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : setupRequired && failed == 0 ? "Добавь или выбери подключение для запуска Windows." : checks.Count(item => Flag(item, "passed")) + " из " + checks.Count + " проверок пройдено";
             ChecksHeroBadge.Background = DiagnosticPill.Background; ChecksHeroGlyph.Foreground = DiagnosticSummary.Foreground;
-            ChecksHeroGlyph.Symbol = checks.Count == 0 ? SymbolRegular.Pulse24 : failed == 0 ? SymbolRegular.Checkmark24 : SymbolRegular.Warning24;
+            ChecksHeroGlyph.Symbol = checks.Count == 0 ? SymbolRegular.Pulse24 : failed == 0 ? (setupRequired ? SymbolRegular.Globe24 : SymbolRegular.Checkmark24) : SymbolRegular.Warning24;
+            RefreshButton.Content = setupRequired ? "Добавить подключение" : "Проверить снова";
+            RefreshButton.ToolTip = setupRequired ? "Добавить или выбрать подключение. F5: проверить снова." : "F5";
 
             Dictionary<string, object> blocker = null;
             if (!Bridge.Ok(result))
             {
                 var blockers = result.ContainsKey("blockers") ? result["blockers"] as IEnumerable : null;
-                if (blockers != null) blocker = blockers.Cast<object>().OfType<Dictionary<string, object>>().FirstOrDefault();
+                if (blockers != null) blocker = blockers.Cast<object>().OfType<Dictionary<string, object>>().OrderBy(item => Flag(item, "setup_required")).FirstOrDefault();
                 if (blocker == null && isReadiness) blocker = checks.FirstOrDefault(item => !Flag(item, "passed"));
             }
             StatusText.Text = blocker == null ? Friendly(Bridge.Message(result)) : Text(blocker, "title", Bridge.Message(result));
@@ -640,6 +648,8 @@ namespace WindowsClaude.Launcher
                 if (blocker == null) StatusText.Text = outcomeUnknown ? "Действие не подтверждено" : "Действие не завершено";
                 NextStepText.Text = "Открой «Проверка»: там причина и дальнейшие действия.";
             }
+            if (isReadiness && Flag(blocker, "setup_required") && !outcomeUnknown)
+                NextStepText.Text = Text(blocker, "detail", "Добавь или выбери подключение для запуска Windows.");
             if (Flag(Child(report, "capabilities"), "recover_session"))
             {
                 StatusText.Text = "Windows завершилась с ошибкой";
@@ -658,7 +668,7 @@ namespace WindowsClaude.Launcher
             string warning = runtimeActive ? Text(report, "network_warning", "") : "";
             NetworkText.Text = "Проверь подключение. Подробности в «Проверка»."; Show(NetworkText, warning.Length > 0 && Bridge.Ok(result));
 
-            string signature = new JavaScriptSerializer().Serialize(checks.Select(item => new object[] { Flag(item, "passed"), Text(item, "title", ""), Text(item, "detail", "") }).ToArray()) + Bridge.Message(result);
+            string signature = new JavaScriptSerializer().Serialize(checks.Select(item => new object[] { Flag(item, "passed"), Flag(item, "setup_required"), Text(item, "title", ""), Text(item, "detail", "") }).ToArray()) + Bridge.Message(result);
             if (signature != displayedChecks)
             {
                 displayedChecks = signature; CheckCards.Children.Clear();
@@ -666,13 +676,13 @@ namespace WindowsClaude.Launcher
                 var passedGrid = new WrapPanel { Margin = new Thickness(10, 7, 10, 7) };
                 foreach (var item in checks)
                 {
-                    var row = CheckRow(Flag(item, "passed"), Text(item, "title", "Проверка"), Text(item, "detail", ""));
+                    var row = CheckRow(Flag(item, "passed"), Text(item, "title", "Проверка"), Text(item, "detail", ""), Flag(item, "setup_required"));
                     if (Flag(item, "passed")) passedGrid.Children.Add(row); else CheckCards.Children.Add(row);
                 }
                 if (passedGrid.Children.Count > 0) CheckCards.Children.Add(passedGrid);
                 if (checks.Count == 0) CheckCards.Children.Add(new TextBlock { Text = Bridge.Message(result), Style = (Style)FindResource("Caption"), Margin = new Thickness(16, 6, 16, 10) });
             }
-            var lines = checks.Select(item => (Flag(item, "passed") ? "Готово: " : "Нужно исправить: ") + Text(item, "title", "Проверка") + Environment.NewLine + Text(item, "detail", "")).ToList();
+            var lines = checks.Select(item => (Flag(item, "passed") ? "Готово: " : Flag(item, "setup_required") ? "Настройка: " : "Нужно исправить: ") + Text(item, "title", "Проверка") + Environment.NewLine + Text(item, "detail", "")).ToList();
             if (checks.Count == 0) lines.Add(Bridge.Message(result));
             if (operationResult != null && !Bridge.Ok(operationResult))
                 lines.Insert(0, Bridge.Message(operationResult) + Environment.NewLine + Text(operationResult, "detail", ""));
@@ -689,7 +699,7 @@ namespace WindowsClaude.Launcher
             }
         }
 
-        UIElement CheckRow(bool passed, string title, string detail)
+        UIElement CheckRow(bool passed, string title, string detail, bool setupRequired)
         {
             // A passed check is a small green tag with its detail in a tooltip.
             if (passed)
@@ -697,9 +707,9 @@ namespace WindowsClaude.Launcher
                     Child = new StackPanel { Orientation = Orientation.Horizontal, Children = {
                         new SymbolIcon { Symbol = SymbolRegular.Checkmark16, FontSize = 12, Foreground = GreenInk, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center },
                         new TextBlock { Text = title, FontSize = 12.5, Foreground = GreenInk, VerticalAlignment = VerticalAlignment.Center } } } };
-            var row = new DockPanel { Margin = new Thickness(16, 9, 12, 9), Background = Brushes.Transparent };
-            var dot = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = Hex("#FFF1DE"), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top,
-                Child = new SymbolIcon { Symbol = SymbolRegular.Warning16, FontSize = 12, Foreground = Hex("#B36200") } };
+            var row = new DockPanel { Margin = new Thickness(16, 9, 12, 9), Background = setupRequired ? BlueSoft : Brushes.Transparent };
+            var dot = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = setupRequired ? BlueSoft : Hex("#FFF1DE"), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top,
+                Child = new SymbolIcon { Symbol = setupRequired ? SymbolRegular.Globe16 : SymbolRegular.Warning16, FontSize = 12, Foreground = setupRequired ? BlueInk : Hex("#B36200") } };
             DockPanel.SetDock(dot, Dock.Left); row.Children.Add(dot);
             var text = new StackPanel { Children = { new TextBlock { Text = title, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Ink, TextTrimming = TextTrimming.CharacterEllipsis } } };
             if (detail.Length > 0) text.Children.Add(new TextBlock { Text = detail, Style = (Style)FindResource("Caption"), Margin = new Thickness(0, 1, 0, 0) });
@@ -1043,6 +1053,7 @@ namespace WindowsClaude.Launcher
                     || workState != Text(state, "work", "unknown") || gatewayState != Text(state, "gateway", "unknown")
                     || Bridge.Ok(report) != Bridge.Ok(readinessReport) || Flag(report, "network_verified") != Flag(readinessReport, "network_verified")
                     || DisplayState(report) != DisplayState(readinessReport) || FileSharingState(report) != FileSharingState(readinessReport)
+                    || new JavaScriptSerializer().Serialize(Child(report, "checks")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "checks"))
                     || new JavaScriptSerializer().Serialize(Child(report, "capabilities")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "capabilities"))
                     || new JavaScriptSerializer().Serialize(Child(report, "force_stop")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "force_stop"))
                     || Text(report, "message", "") != Text(readinessReport, "message", "") || (pendingOutcome != null && pendingOutcome.IsCompleted);
