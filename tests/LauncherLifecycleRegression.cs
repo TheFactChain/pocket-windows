@@ -108,6 +108,37 @@ internal static class LauncherLifecycleRegression
             Call(window, "Display", Report());
             Assert(!(bool)Field(window, "closing") && ((TextBox)Field(window, "MemoryInput")).Text == "6", "failed persistence keeps the panel and input");
             Assert(((TextBlock)Field(window, "SettingsNote")).Text == "settings file locked", "refresh preserves save error");
+            foreach (bool closeAgain in new[] { false, true })
+            {
+                window = Window(); window.ShowActivated = false; window.ShowInTaskbar = false;
+                window.Left = -30000; window.Top = -30000; window.Show();
+                Pump(() => Bridge.Calls.Contains("diagnose") && !(bool)Field(window, "busy"));
+                Bridge.Calls.Clear();
+                var delayedCloseSave = new TaskCompletionSource<Dictionary<string, object>>();
+                Bridge.Handler = (action, payload) => action == "save-settings" ? delayedCloseSave.Task : Task.FromResult(Report());
+                ((TextBox)Field(window, "MemoryInput")).Text = "6"; Call(window, "ScheduleSave");
+                args = new CancelEventArgs(); Call(window, "OnClosing", window, args);
+                Pump(() => Bridge.Calls.Contains("save-settings"));
+                window.ShowExistingPanel();
+                if (closeAgain) Call(window, "OnClosing", window, new CancelEventArgs());
+                delayedCloseSave.SetResult(saved);
+                Pump(() => !(bool)Field(window, "closePending"));
+                Assert((bool)Field(window, "closing") == closeAgain, "latest open/close request wins while settings save is pending");
+                Assert(closeAgain || window.IsVisible, "repeat startup keeps the saved panel open");
+                if (!closeAgain) { Call(window, "FinishClosing"); window.Close(); }
+            }
+            window = Window(); window.ShowActivated = false; window.ShowInTaskbar = false;
+            window.Left = -30000; window.Top = -30000; window.Show();
+            Pump(() => Bridge.Calls.Contains("diagnose") && !(bool)Field(window, "busy"));
+            using (var cancelUpdate = new System.Threading.CancellationTokenSource())
+            {
+                Set(window, "updating", true); Set(window, "updateCancel", cancelUpdate);
+                args = new CancelEventArgs(); Call(window, "OnClosing", window, args);
+                Assert(args.Cancel && cancelUpdate.IsCancellationRequested && (bool)Field(window, "closeAfterUpdateCancel"), "close waits for update cancellation");
+                window.ShowExistingPanel();
+                Assert(!(bool)Field(window, "closeAfterUpdateCancel") && cancelUpdate.IsCancellationRequested, "repeat startup cancels closing but keeps the update cancelled");
+                Call(window, "FinishClosing"); window.Close();
+            }
             window = Window();
             Call(window, "Display", Report("running", "running"));
             var stop = new TaskCompletionSource<Dictionary<string, object>>();
@@ -210,6 +241,8 @@ internal static class LauncherLifecycleRegression
             Set(window, "trayIcon", tray);
             args = new CancelEventArgs(); Call(window, "OnClosing", window, args);
             Assert(!args.Cancel && (bool)Field(window, "closing"), "updater handoff exits despite busy state");
+            window.ShowExistingPanel();
+            Assert((bool)Field(window, "closing") && !window.IsVisible, "repeat startup never reopens a panel handed to the updater");
             Assert(!lifecycle.IsEnabled && !saveTimer.IsEnabled && Field(window, "trayIcon") == null, "handoff clears timers and tray");
             Assert(!Bridge.Calls.Contains("save-settings"), "handoff never saves settings again");
             foreach (string settledAction in new[] { "stop", "recover-session" })

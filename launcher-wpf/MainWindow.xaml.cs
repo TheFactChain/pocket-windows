@@ -47,7 +47,7 @@ namespace WindowsClaude.Launcher
         Dictionary<string, object> readinessReport, operationResult, settingsHost, originalSettings, originalWindows, originalViewer, originalFiles;
         Task<Dictionary<string, object>> pendingOutcome;
         Task<bool> settingsSave, stopTask;
-        bool settingsDirty, closePending, startPending, startAttempted;
+        bool settingsDirty, closePending, closeRequested, startPending, startAttempted;
         int settingsRevision;
         string pendingStartReceipt, activeOperationAction, workState = "unknown", gatewayState = "unknown", suggestedAction = "retry", reportText = "", displayedChecks;
         bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing,
@@ -961,6 +961,13 @@ namespace WindowsClaude.Launcher
                 trayIcon.ShowBalloonTip(5000, "Pocket Windows", "Windows требует внимания. Открой панель двойным щелчком по значку.", Forms.ToolTipIcon.Warning);
             }
         }
+        internal void ShowExistingPanel()
+        {
+            if (closing || updateHandedOff) return;
+            closeRequested = false; closeAfterUpdateCancel = false;
+            ShowPanel(false, "another Launcher startup");
+        }
+
         void ShowPanel(bool home, string why)
         {
             bool wasHidden = !IsVisible;
@@ -995,17 +1002,18 @@ namespace WindowsClaude.Launcher
             if (runtimeActive || outcomeUnknown || pendingOutcome != null || (busy && activeOperationAction != "save-settings"))
             { e.Cancel = true; panelDismissedByUser = true; HidePanelForSession("closed by the user while Windows runs"); return; }
             e.Cancel = true;
+            closeRequested = true;
             if (closePending) return;
             closePending = true;
             try
             {
                 await Dispatcher.Yield(DispatcherPriority.Background);
                 if (!await CommitPendingSettingsAsync()) return;
-                if (runtimeActive || outcomeUnknown || pendingOutcome != null || busy || (startAttempted && !SessionStopped)) return;
+                if (!closeRequested || runtimeActive || outcomeUnknown || pendingOutcome != null || busy || (startAttempted && !SessionStopped)) return;
                 FinishClosing();
                 Close();
             }
-            finally { closePending = false; }
+            finally { closePending = false; closeRequested = false; }
         }
 
         void FinishClosing()
