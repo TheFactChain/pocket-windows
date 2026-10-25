@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Disposable dual-stack acceptance client; config and public CA live only in /run."""
+"""Disposable IPv4-egress/local-IPv6 client; config and public CA live only in /run."""
 import ipaddress
 import json
 import os
@@ -111,8 +111,7 @@ def ra_ready(nic):
         and item.get('prefixlen') == 64 and item.get('dynamic') is True
         for link in addresses for item in link.get('addr_info', []))
     routes = json.loads(command('/usr/sbin/ip', '-j', '-6', 'route', 'show', 'default', 'dev', nic))
-    return address_ready and any(route.get('dst') == 'default' and route.get('protocol') == 'ra'
-                                 and route.get('dev', nic) == nic and route.get('gateway') for route in routes)
+    return address_ready and not routes
 
 
 def wait_ra(nic, deadline, clock=time.monotonic, pause=time.sleep):
@@ -157,12 +156,14 @@ def valid_dns(data, query_id, question_type=28):
     if not 12 <= len(data) <= 4096:
         return False
     ident, flags, questions, answers, authority, additional = struct.unpack('!6H', data[:12])
-    if ident != query_id or flags & 0xfa0f != 0x8000 or questions != 1 or not 0 < answers <= 64:
+    if ident != query_id or flags & 0xfa0f != 0x8000 or questions != 1 or not 0 <= answers <= 64:
         return False
     name, offset = dns_name(data, 12)
     if name != b'example.com' or data[offset:offset + 4] != struct.pack('!HH', question_type, 1):
         return False
     offset += 4
+    if question_type == 28:
+        return answers == 0
     found, names = False, {b'example.com'}
     for _ in range(answers):
         name, offset = dns_name(data, offset)
@@ -197,29 +198,35 @@ def dns_probe(deadline, family=socket.AF_INET6):
 
 def tls_probe(config, context, deadline, family=socket.AF_INET6):
     target = IPV4_TARGET if family == socket.AF_INET else config['target']
+    payload = (config['nonce'] * 2048).encode('ascii')
+    expected_body = ('WCPROBE ' + config['nonce'] + '\n').encode('ascii') + payload
+    limit = 8192 + len(expected_body)
     with socket.socket(family, socket.SOCK_STREAM) as raw:
         raw.settimeout(remaining(deadline))
         raw.connect((target, 443))
         with context.wrap_socket(raw, server_hostname=config['hostname']) as secure:
             secure.settimeout(remaining(deadline))
-            secure.sendall(('GET /probe/' + config['nonce'] + ' HTTP/1.0\r\nHost: '
-                            + config['hostname'] + '\r\nConnection: close\r\n\r\n').encode('ascii'))
+            secure.sendall(('POST /probe/' + config['nonce'] + ' HTTP/1.0\r\nHost: '
+                            + config['hostname'] + '\r\nContent-Length: 65536\r\n'
+                            + 'Connection: close\r\n\r\n').encode('ascii') + payload)
             response = bytearray()
-            while len(response) <= 8192:
+            while len(response) <= limit:
                 secure.settimeout(remaining(deadline))
-                part = secure.recv(1024)
+                part = secure.recv(16384)
                 if not part:
                     break
                 response.extend(part)
-            if len(response) > 8192:
+            if len(response) > limit:
                 return False
-    headers, body = bytes(response).split(b'\r\n\r\n', 1)
+    headers, separator, body = bytes(response).partition(b'\r\n\r\n')
+    if not separator or len(headers) > 8192:
+        return False
     lines = headers.split(b'\r\n')
     if lines[0].split()[:2] not in ([b'HTTP/1.0', b'200'], [b'HTTP/1.1', b'200']):
         return False
     if any(line.lower().startswith(b'transfer-encoding:') for line in lines[1:]):
         return False
-    return body == ('WCPROBE ' + config['nonce'] + '\n').encode('ascii')
+    return body == expected_body
 
 
 def checked(function, *args):
@@ -233,12 +240,12 @@ def monitor(config, context, deadline, clock=time.monotonic, pause=time.sleep):
     phase = 'waiting'
     last_check_code = 'dns-tls-unavailable'
     while clock() < deadline:
-        # Run all four independently; cached DNS or a surviving family must not count as lost.
+        # IPv6 DNS stays local and empty AAAA is healthy; external IPv6 TLS must fail.
         dns6 = checked(dns_probe, min(deadline, clock() + 4), socket.AF_INET6)
         tls6 = checked(tls_probe, config, context, min(deadline, clock() + 6), socket.AF_INET6)
         dns4 = checked(dns_probe, min(deadline, clock() + 4), socket.AF_INET)
         tls4 = checked(tls_probe, config, context, min(deadline, clock() + 6), socket.AF_INET)
-        dns, tls = dns6 and dns4, tls6 and tls4
+        dns, tls = dns6 and dns4, not tls6 and tls4
         last_check_code = ('connection-probes-failed' if dns and tls else
                            'tls-unavailable' if dns else
                            'dns-unavailable' if tls else 'dns-tls-unavailable')
@@ -282,7 +289,13 @@ def main():
         failure_code = 'ra-not-ready'
         wait_ra(nic, min(deadline, time.monotonic() + 60))
         failure_code = 'connection-probes-failed'
-        monitor(config, context, deadline)
+        # Exercise the gateway's IPv6 rejection despite having no IPv6 default route.
+        fixture_route = ('2001:db8:77::2/128', 'via', 'fd77:233::1', 'dev', nic)
+        command('/usr/sbin/ip', '-6', 'route', 'add', *fixture_route)
+        try:
+            monitor(config, context, deadline)
+        finally:
+            command('/usr/sbin/ip', '-6', 'route', 'del', *fixture_route)
     except Exception as error:
         if (failure_code == 'connection-probes-failed' and isinstance(error, TimeoutError)
                 and len(error.args) == 1 and type(error.args[0]) is str

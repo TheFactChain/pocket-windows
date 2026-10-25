@@ -1,4 +1,4 @@
-"""Isolated dual-stack LAN/TUN acceptance; no Windows or user profiles are attached."""
+"""Isolated IPv4 egress/local IPv6 acceptance; no Windows or user profiles are attached."""
 import argparse
 import base64
 from contextlib import ExitStack
@@ -64,9 +64,11 @@ class TlsFixture(socketserver.ThreadingTCPServer):
 class TlsHandler(socketserver.StreamRequestHandler):
     def handle(self):
         header = self.rfile.readline(4097)
-        if header != ('GET /probe/' + self.server.nonce + ' HTTP/1.0\r\n').encode('ascii'):
+        suffix = (' /probe/' + self.server.nonce + ' HTTP/1.0\r\n').encode('ascii')
+        large = header == b'POST' + suffix
+        if not large and header != b'GET' + suffix:
             return
-        total = len(header)
+        total, content_length = len(header), None
         while True:
             line = self.rfile.readline(4097)
             total += len(line)
@@ -74,7 +76,19 @@ class TlsHandler(socketserver.StreamRequestHandler):
                 return
             if line == b'\r\n':
                 break
+            if line.lower().startswith(b'transfer-encoding:'):
+                return
+            if line.lower().startswith(b'content-length:'):
+                if content_length is not None:
+                    return
+                content_length = line.split(b':', 1)[1].strip()
         body = ('WCPROBE ' + self.server.nonce + '\n').encode('ascii')
+        if large:
+            payload = (self.server.nonce * 2048).encode('ascii')
+            if content_length != b'65536' or self.rfile.read(65536) != payload:
+                return
+            body += payload
+            self.server.large_requests += 1
         self.server.valid_requests += 1
         self.wfile.write(b'HTTP/1.0 200 OK\r\nConnection: close\r\nContent-Length: '
                          + str(len(body)).encode('ascii') + b'\r\n\r\n' + body)
@@ -308,14 +322,14 @@ def main():
             with TlsFixture(('127.0.0.1', 0), TlsHandler) as tls, Proxy(('127.0.0.1', 0), ProbeProxyHandler) as proxy:
                 tls.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 tls.context.load_cert_chain(operation / 'probe-cert.pem', operation / 'probe-key.pem')
-                tls.nonce, tls.valid_requests = nonce, 0
+                tls.nonce, tls.valid_requests, tls.large_requests = nonce, 0, 0
                 proxy.reject, proxy.attempts, proxy.fixture_connects, proxy.fixture4_connects = False, 0, 0, 0
                 proxy.fixture_port = tls.server_address[1]
                 servers = [threading.Thread(target=server.serve_forever, daemon=True) for server in (tls, proxy)]
                 for server in servers:
                     server.start()
                 store = ProfileStore(operation / 'fixture-profiles')
-                profile = store.save({'name': 'Isolated dual-stack acceptance', 'protocol': 'http',
+                profile = store.save({'name': 'Isolated IPv4 egress acceptance', 'protocol': 'http',
                     'host': '10.0.2.2', 'port': proxy.server_address[1]})
                 store.select(profile['profile_id'])
                 before = set((ROOT / 'logs').glob('guest-gateway-boot-*'))
@@ -387,15 +401,16 @@ def main():
                 observed.update(schema=1, state=str(state_path), controller_exit_code=code,
                     proxy_attempts=proxy.attempts, ipv6_connects=proxy.fixture_connects,
                     ipv4_connects=proxy.fixture4_connects, dhcp_tested=False,
-                    verified_tls_requests=tls.valid_requests, gateway_guest_shutdown=state.get('guest_shutdown'),
+                    verified_tls_requests=tls.valid_requests, large_tls_requests=tls.large_requests,
+                    gateway_guest_shutdown=state.get('guest_shutdown'),
                     gateway_carrier_removed=state.get('carrier_removed'), gateway_overlay_removed=state.get('overlay_removed'),
                     live_qemu=list(runtime.engine_processes(ROOT)), external_ipv6_tested=False,
-                    scope='IPv4/IPv6 LAN/TUN and CONNECT authorities; controlled TLS targets map to IPv4 loopback')
+                    scope='IPv4 TLS 64 KiB upload/download, local IPv6 ULA/DNS without default, IPv6 literal blocked; TLS fixture maps to IPv4 loopback')
                 observed['passed'] = (code == 0 and observed.get('probe_phases') == ['connected', 'lost', 'recovered', 'finished']
                     and observed.get('probe_exit_code') == 0 and observed.get('probe_gone') is True
                     and observed.get('probe_guest_shutdown') is True and observed.get('probe_media_removed') is True
                     and not observed.get('probe_forced_stop') and observed['outage_observed']
-                    and tls.valid_requests >= 4 and proxy.fixture_connects >= 2 and proxy.fixture4_connects >= 2
+                    and tls.large_requests >= 2 and proxy.fixture_connects == 0 and proxy.fixture4_connects >= 2
                     and 'wan_capture' in observed
                     and observed.get('capture_before_nics') is True
                     and all(observed.get(key) is True for key in ('gateway_guest_shutdown', 'gateway_carrier_removed', 'gateway_overlay_removed'))

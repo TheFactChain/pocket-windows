@@ -191,7 +191,7 @@ def start_services(config, children):
         children.append(subprocess.Popen(['/usr/sbin/dnsmasq', '--keep-in-foreground', '--conf-file=/dev/null',
             '--port=0', '--interface=lan0', '--bind-interfaces', '--except-interface=lo',
             '--enable-ra', '--dhcp-range=fd77:233::,ra-stateless,64,1h',
-            '--dhcp-option=option6:dns-server,[fd77:233::1]', '--ra-param=lan0,mtu:1280,30,90',
+            '--dhcp-option=option6:dns-server,[fd77:233::1]', '--ra-param=lan0,mtu:1280,30,0',
             '--dhcp-range=192.168.233.2,192.168.233.2,255.255.255.0,1h',
             '--dhcp-host=52:54:00:77:00:03,192.168.233.2', '--dhcp-option=3,192.168.233.1',
             '--dhcp-option=6,192.168.233.1', '--dhcp-leasefile=' + str(RUN / 'leases'),

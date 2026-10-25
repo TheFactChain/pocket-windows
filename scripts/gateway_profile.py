@@ -50,14 +50,14 @@ def sing_box_config(value):
         outbound.update(version='5', network='tcp')
     if protocol in ('hysteria2', 'https'):
         outbound['tls'] = {'enabled': True, 'server_name': p.get('tls_server_name', p['host']), 'insecure': False}
-    rules = [{'port': 53, 'action': 'hijack-dns'}]
+    rules = [{'port': 53, 'action': 'hijack-dns'}, {'ip_version': 6, 'action': 'reject'}]
     if protocol != 'hysteria2':
         rules.append({'network': 'udp', 'action': 'reject'})
     return {'log': {'disabled': True},
             'dns': {'servers': [{'type': 'https', 'tag': 'secure-dns', 'server': '1.1.1.1',
                                   'server_port': 443, 'path': '/dns-query', 'detour': 'proxy',
                                   'tls': {'enabled': True, 'server_name': 'cloudflare-dns.com'}}],
-                    'final': 'secure-dns', 'strategy': 'prefer_ipv4'},
+                    'final': 'secure-dns', 'strategy': 'ipv4_only'},
             'inbounds': [{'type': 'tun', 'tag': 'tun', 'interface_name': 'wc-tun0',
                           'address': ['172.19.0.1/30', 'fd77:19::1/126'],
                           'route_exclude_address': ['192.168.233.0/24', 'fd77:233::/64', 'fe80::/10', 'ff00::/8'],
@@ -92,19 +92,19 @@ def firewall(value, connected=True):
     if connected:
         # The system TUN stack reinjects TCP into these local listener pairs.
         lan_input += '  iifname "wc-tun0" ip saddr 172.19.0.2 ip daddr 172.19.0.1 meta l4proto tcp accept\n'
-        lan_input += '  iifname "wc-tun0" ip6 saddr fd77:19::2 ip6 daddr fd77:19::1 meta l4proto tcp accept\n'
         for family, network, gateway in (('ip', '192.168.233.0/24', '192.168.233.1'),
                                           ('ip6', 'fd77:233::/64', 'fd77:233::1')):
             for dns_transport in ('udp', 'tcp'):
                 lan_input += f'  iifname "lan0" {family} saddr {network} {family} daddr {gateway} {dns_transport} dport 53 accept\n'
                 lan_output += f'  oifname "lan0" {family} saddr {gateway} {family} daddr {network} {dns_transport} sport 53 accept\n'
-            forwarding += f'  iifname "lan0" oifname "wc-tun0" {family} saddr {network} meta l4proto {networks} accept\n'
-            forwarding += f'  iifname "wc-tun0" oifname "lan0" {family} daddr {network} meta l4proto {networks} ct state established,related accept\n'
-            lan_output += f'  oifname "wc-tun0" meta nfproto {"ipv4" if family == "ip" else "ipv6"} meta l4proto {networks} accept\n'
+        forwarding += f'  iifname "lan0" oifname "wc-tun0" ip saddr 192.168.233.0/24 meta l4proto {networks} accept\n'
+        forwarding += f'  iifname "wc-tun0" oifname "lan0" ip daddr 192.168.233.0/24 meta l4proto {networks} ct state established,related accept\n'
+        # Fail cached IPv6 destinations immediately; local IPv6 remains available.
+        forwarding += '  iifname "lan0" ip6 saddr fd77:233::/64 reject with icmpv6 type no-route\n'
+        lan_output += f'  oifname "wc-tun0" meta nfproto ipv4 meta l4proto {networks} accept\n'
         # Preserve PMTU/error delivery only along the owned TUN/LAN path.
-        forwarding += '  iifname "wc-tun0" oifname "lan0" ip6 daddr fd77:233::/64 meta l4proto ipv6-icmp icmpv6 type { 1, 2, 3, 4 } accept\n'
         forwarding += '  iifname "wc-tun0" oifname "lan0" ip daddr 192.168.233.0/24 ip protocol icmp ct state related accept\n'
-        lan_input += '  iifname "wc-tun0" meta l4proto ipv6-icmp icmpv6 type { 1, 2, 3, 4 } ct state related accept\n'
+        lan_output += '  oifname "lan0" ip saddr 192.168.233.1 ip daddr 192.168.233.0/24 ip protocol icmp ct state related accept\n'
         lan_output += '  oifname "lan0" ip6 daddr fd77:233::/64 meta l4proto ipv6-icmp icmpv6 type { 1, 2, 3, 4 } accept\n'
     # These link-local controls remain available while forwarding/DNS are closed.
     local_input = '''  iifname "lan0" ip6 saddr { ::/128, fe80::/10 } ip6 daddr ff02::2 ip6 hoplimit 255 meta l4proto ipv6-icmp icmpv6 type 133 accept

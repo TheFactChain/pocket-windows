@@ -289,7 +289,7 @@ class SessionTests(unittest.TestCase):
                 session.wait_lan_ipv6(lambda: False)
             sleep.assert_not_called()
 
-    def test_dnsmasq_advertises_lan_ula_dns_without_becoming_dns_forwarder(self):
+    def test_dnsmasq_preserves_local_ipv6_but_withdraws_external_ipv6_route(self):
         children = []
         with mock.patch('builtins.open', mock.mock_open()), \
              mock.patch.object(session.subprocess, 'Popen') as start:
@@ -298,7 +298,7 @@ class SessionTests(unittest.TestCase):
         for option in ('--port=0', '--interface=lan0', '--enable-ra',
                        '--dhcp-range=fd77:233::,ra-stateless,64,1h',
                        '--dhcp-option=option6:dns-server,[fd77:233::1]',
-                       '--ra-param=lan0,mtu:1280,30,90'):
+                       '--ra-param=lan0,mtu:1280,30,0'):
             self.assertIn(option, args)
 
     def test_network_failures_remain_closed_and_never_emit_ready(self):

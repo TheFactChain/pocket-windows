@@ -96,29 +96,30 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(calls[-1], ('/usr/sbin/ip', '-4', 'route', 'add', 'default', 'via', '192.168.233.1', 'dev', 'ens3'))
         self.assertFalse(any('-6' in call and 'add' in call for call in calls))
 
-    def test_ra_route_filtered_by_device_can_omit_device_field(self):
+    def test_ra_rejects_default_routes_even_when_device_field_is_omitted(self):
         addresses = [{'addr_info': [{'family': 'inet6', 'local': 'fd77:233::1234',
                                     'prefixlen': 64, 'dynamic': True}]}]
         route = {'dst': 'default', 'protocol': 'ra', 'gateway': 'fe80::1'}
         with patch.object(probe, 'command', side_effect=[json.dumps(addresses), json.dumps([route])]) as command:
-            self.assertTrue(probe.ra_ready('ens3'))
+            self.assertFalse(probe.ra_ready('ens3'))
         command.assert_called_with('/usr/sbin/ip', '-j', '-6', 'route', 'show', 'default', 'dev', 'ens3')
         with patch.object(probe, 'command', side_effect=[json.dumps(addresses), json.dumps([dict(route, dev='ens4')])]):
             self.assertFalse(probe.ra_ready('ens3'))
 
-    def test_wait_requires_dynamic_ula_and_ra_default(self):
+    def test_wait_requires_dynamic_ula_without_external_ipv6_route(self):
         addr = [{'addr_info': [{'family': 'inet6', 'local': 'fd77:233::1234',
                                'prefixlen': 64, 'dynamic': True}]}]
-        route = [{'dst': 'default', 'protocol': 'ra', 'dev': 'ens3', 'gateway': 'fe80::1'}]
+        route = []
         with patch.object(probe, 'command', side_effect=[json.dumps(addr), json.dumps(route)]):
             self.assertTrue(probe.ra_ready('ens3'))
         for change in ({'dynamic': False}, {'tentative': True}, {'local': '2001:db8::2'}):
             candidate = [{'addr_info': [dict(addr[0]['addr_info'][0], **change)]}]
             with patch.object(probe, 'command', side_effect=[json.dumps(candidate), json.dumps(route)]):
                 self.assertFalse(probe.ra_ready('ens3'))
-        route[0]['protocol'] = 'static'
-        with patch.object(probe, 'command', side_effect=[json.dumps(addr), json.dumps(route)]):
-            self.assertFalse(probe.ra_ready('ens3'))
+        for protocol in ('static', 'ra'):
+            route = [{'dst': 'default', 'protocol': protocol, 'dev': 'ens3', 'gateway': 'fe80::1'}]
+            with patch.object(probe, 'command', side_effect=[json.dumps(addr), json.dumps(route)]):
+                self.assertFalse(probe.ra_ready('ens3'))
 
     def test_ra_wait_never_sets_static_address(self):
         with patch.object(probe, 'ra_ready', side_effect=[False, True]) as ready:
@@ -129,25 +130,26 @@ class NetworkTests(unittest.TestCase):
         with patch.object(probe, 'ra_ready', return_value=False), self.assertRaises(TimeoutError):
             probe.wait_ra('ens3', 1, clock=lambda: 2, pause=Mock())
 
-    def test_dns_validates_id_question_flags_and_aaaa(self):
-        header = struct.pack('!6H', 123, 0x8180, 1, 1, 0, 0)
+    def test_dns_validates_successful_empty_aaaa_and_rejects_ipv6_answers(self):
+        header = struct.pack('!6H', 123, 0x8180, 1, 0, 0, 0)
         question = b'\x07example\x03com\0' + struct.pack('!HH', 28, 1)
         answer = b'\xc0\x0c' + struct.pack('!HHIH', 28, 1, 60, 16) + bytes.fromhex('20010db8000000000000000000000002')
-        data = header + question + answer
+        data = header + question
         self.assertTrue(probe.valid_dns(data, 123))
+        self.assertFalse(probe.valid_dns(struct.pack('!6H', 123, 0x8180, 1, 1, 0, 0) + question + answer, 123))
         self.assertFalse(probe.valid_dns(data, 124))
         self.assertFalse(probe.valid_dns(data[:-1], 123))
         self.assertFalse(probe.valid_dns(data[:2] + b'\x83\x80' + data[4:], 123))
-        self.assertFalse(probe.valid_dns(header + question.replace(b'example', b'invalid') + answer, 123))
+        self.assertFalse(probe.valid_dns(header + question.replace(b'example', b'invalid'), 123))
 
     def test_dns_a_and_aaaa_use_distinct_gateway_sockets_and_record_types(self):
         for family, resolver, qtype, address in (
                 (probe.socket.AF_INET, '192.168.233.1', 1, bytes((198, 51, 100, 77))),
                 (probe.socket.AF_INET6, 'fd77:233::1', 28, bytes.fromhex('20010db8000000000000000000000002'))):
-            header = struct.pack('!6H', 123, 0x8180, 1, 1, 0, 0)
+            header = struct.pack('!6H', 123, 0x8180, 1, int(qtype == 1), 0, 0)
             question = b'\x07example\x03com\0' + struct.pack('!HH', qtype, 1)
             answer = b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 60, len(address)) + address
-            data = header + question + answer
+            data = header + question + (answer if qtype == 1 else b'')
             client = MagicMock()
             client.__enter__.return_value = client
             client.recv.return_value = data
@@ -159,18 +161,20 @@ class NetworkTests(unittest.TestCase):
             self.assertEqual(client.send.call_args.args[0][-4:], struct.pack('!HH', qtype, 1))
             self.assertFalse(probe.valid_dns(data, 123, 1 if qtype == 28 else 28))
             self.assertFalse(probe.valid_dns(data[:-1], 123, qtype))
-            wrong_size = header + question + b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 60, len(address) - 1) + address[:-1]
+            wrong_size = struct.pack('!6H', 123, 0x8180, 1, 1, 0, 0) + question + b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 60, len(address) - 1) + address[:-1]
             self.assertFalse(probe.valid_dns(wrong_size, 123, qtype))
 
-    def test_tls_uses_literal_ips_supplied_ca_and_exact_nonce_response(self):
-        body = b'WCPROBE ' + b'a' * 32 + b'\n'
+    def test_tls_uses_literal_ips_supplied_ca_and_exact_large_echo_response(self):
+        payload = b'a' * 65536
+        body = b'WCPROBE ' + b'a' * 32 + b'\n' + payload
         responses = [(b'HTTP/1.0 200 OK\r\n\r\n' + body, True),
-                     (b'HTTP/1.1 200 OK\r\nContent-Length: 41\r\n\r\n' + body, True),
+                     (b'HTTP/1.1 200 OK\r\nContent-Length: 65577\r\n\r\n' + body, True),
                      (b'HTTP/1.0 403 Forbidden\r\n\r\n' + body, False),
                      (b'HTTP/1.0 200 OK\r\n\r\nWCPROBE ' + b'b' * 32 + b'\n', False),
                      (b'HTTP/1.0 200 OK\r\n\r\n' + body + b'extra', False),
                      (b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n' + body, False),
-                     (b'x' * 8193, False)]
+                     (b'x' * 73770, False),
+                     (b'HTTP/1.0 200 OK\r\n\r\n' + body[:-1], False)]
         for family, target in ((probe.socket.AF_INET6, CONFIG['target']), (probe.socket.AF_INET, '198.51.100.77')):
             for response, expected in responses:
                 raw, secure, context = MagicMock(), MagicMock(), Mock()
@@ -184,15 +188,18 @@ class NetworkTests(unittest.TestCase):
                 factory.assert_called_once_with(family, probe.socket.SOCK_STREAM)
                 raw.connect.assert_called_once_with((target, 443))
                 context.wrap_socket.assert_called_once_with(raw, server_hostname='probe.wcp.test')
-                self.assertIn(b'GET /probe/' + b'a' * 32, secure.sendall.call_args.args[0])
+                request = secure.sendall.call_args.args[0]
+                self.assertIn(b'POST /probe/' + b'a' * 32, request)
+                self.assertIn(b'Content-Length: 65536\r\n', request)
+                self.assertTrue(request.endswith(payload))
 
-    def test_state_requires_both_lost_and_both_recovered(self):
-        # Tuple order is DNS6/TLS6/DNS4/TLS4; one surviving check prevents a false lost.
-        samples = [(True, True, False, False), (False, False, True, True),
-                   (True, True, True, True), (False, False, True, True),
+    def test_state_requires_ipv4_and_local_dns_with_external_ipv6_blocked(self):
+        # DNS6 means a valid empty AAAA response; TLS6 must fail in every online state.
+        samples = [(True, True, True, True), (False, False, True, True),
+                   (True, False, True, True), (False, False, True, True),
                    (True, True, False, False), (True, False, False, True),
                    (False, False, False, False), (True, True, False, False),
-                   (True, True, True, True)]
+                   (True, False, True, True)]
         with patch.object(probe, 'dns_probe', side_effect=[pair[index] for pair in samples for index in (0, 2)]) as dns, \
              patch.object(probe, 'tls_probe', side_effect=[pair[index] for pair in samples for index in (1, 3)]) as tls, \
              patch.object(probe, 'emit') as emit:
@@ -216,7 +223,7 @@ class NetworkTests(unittest.TestCase):
                                    (True, False, 'tls-unavailable'),
                                    (False, False, 'dns-tls-unavailable')):
             with self.subTest(expected=expected), patch.object(probe, 'dns_probe', return_value=dns), \
-                 patch.object(probe, 'tls_probe', return_value=tls), patch.object(probe, 'emit'), \
+                 patch.object(probe, 'tls_probe', side_effect=lambda *args: tls if args[-1] == probe.socket.AF_INET else False), patch.object(probe, 'emit'), \
                  self.assertRaises(TimeoutError) as error:
                 ticks = iter((1, 1, 1, 1, 1, 1, 2, 10))
                 probe.monitor(CONFIG, None, 5, clock=lambda: next(ticks), pause=Mock())
@@ -254,11 +261,11 @@ class ShutdownTests(unittest.TestCase):
         emit.assert_called_once_with(CONFIG, 'failed', 'ra-not-ready')
         command.assert_called_once_with('/usr/bin/systemctl', '--no-block', 'poweroff')
 
-    def test_monitor_failure_code_allowlist_does_not_echo_exception(self):
+    def test_monitor_routes_only_ipv6_fixture_cleans_up_and_does_not_echo_exception(self):
         def readonly(fd, operation, output):
             output[:] = struct.pack('=I', 1)
 
-        for message, expected in (('dns-unavailable', 'dns-unavailable'),
+        for message, expected in ((None, None), ('dns-unavailable', 'dns-unavailable'),
                                   ('tls-unavailable', 'tls-unavailable'),
                                   ('dns-tls-unavailable', 'dns-tls-unavailable'),
                                   ('PRIVATE diagnostic details', 'connection-probes-failed')):
@@ -269,13 +276,21 @@ class ShutdownTests(unittest.TestCase):
                  patch.dict(sys.modules, {'fcntl': types.SimpleNamespace(ioctl=readonly)}), \
                  patch.object(probe, 'read_carrier', return_value=(CONFIG, CA.decode(), Mock())), \
                  patch.object(probe, 'setup_network', return_value='ens3'), patch.object(probe, 'wait_ra'), \
-                 patch.object(probe, 'monitor', side_effect=TimeoutError(message)), \
+                 patch.object(probe, 'monitor', side_effect=TimeoutError(message) if message else None), \
                  patch.object(probe, 'emit') as emit, patch.object(probe, 'command') as command:
                 path.return_value.stat.return_value.st_mode = stat.S_IFBLK
                 path.return_value.open.return_value = opened
-                self.assertEqual(probe.main(), 1)
-            emit.assert_called_once_with(CONFIG, 'failed', expected)
-            command.assert_called_once_with('/usr/bin/systemctl', '--no-block', 'poweroff')
+                self.assertEqual(probe.main(), int(message is not None))
+            if message:
+                emit.assert_called_once_with(CONFIG, 'failed', expected)
+            else:
+                emit.assert_not_called()
+            self.assertEqual([call.args for call in command.call_args_list], [
+                ('/usr/sbin/ip', '-6', 'route', 'add', '2001:db8:77::2/128',
+                 'via', 'fd77:233::1', 'dev', 'ens3'),
+                ('/usr/sbin/ip', '-6', 'route', 'del', '2001:db8:77::2/128',
+                 'via', 'fd77:233::1', 'dev', 'ens3'),
+                ('/usr/bin/systemctl', '--no-block', 'poweroff')])
 
 
 class BuilderTests(unittest.TestCase):

@@ -48,7 +48,7 @@ class GatewayProfileTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gateway.firewall(self.session(),connected=invalid)
 
-    def test_dual_stack_config_keeps_ipv4_proxy_and_dns_detour(self):
+    def test_ipv4_egress_keeps_local_ipv6_and_dns_detour(self):
         for protocol in ('hysteria2', 'socks5', 'http', 'https'):
             config = gateway.sing_box_config(self.session(protocol))
             tun = config['inbounds'][0]
@@ -56,12 +56,13 @@ class GatewayProfileTests(unittest.TestCase):
             self.assertEqual(tun['route_exclude_address'], [
                 '192.168.233.0/24', 'fd77:233::/64', 'fe80::/10', 'ff00::/8'])
             self.assertTrue(tun['strict_route'])
-            self.assertEqual(config['dns']['strategy'], 'prefer_ipv4')
+            self.assertEqual(config['dns']['strategy'], 'ipv4_only')
             self.assertIn({'type': 'direct', 'tag': 'lan-dns6', 'listen': 'fd77:233::1',
                            'listen_port': 53}, config['inbounds'])
             self.assertEqual(config['outbounds'][0]['server'], '203.0.113.7')
             rules = config['route']['rules']
             self.assertEqual(rules[0], {'port': 53, 'action': 'hijack-dns'})
+            self.assertEqual(rules[1], {'ip_version': 6, 'action': 'reject'})
             self.assertEqual({'network': 'udp', 'action': 'reject'} in rules, protocol != 'hysteria2')
 
     def test_dual_stack_local_control_stays_up_without_allowing_offline_lan_or_wan6(self):
@@ -84,10 +85,12 @@ class GatewayProfileTests(unittest.TestCase):
             self.assertNotIn('dport 53', offline)
             self.assertNotIn('sport 53', offline)
             self.assertNotIn('ct state established,related accept', offline)
-            self.assertIn('iifname "lan0" oifname "wc-tun0" ip6 saddr fd77:233::/64', online)
+            self.assertNotIn('oifname "wc-tun0" meta nfproto ipv6', online)
             forwards = online.split(' chain forward {', 1)[1].split(' chain output {', 1)[0]
+            self.assertIn('iifname "lan0" ip6 saddr fd77:233::/64 reject with icmpv6 type no-route', forwards)
             for line in forwards.splitlines():
                 if 'accept' in line:
+                    self.assertNotIn('ip6', line)
                     self.assertTrue(('iifname "lan0" oifname "wc-tun0"' in line)
                                     or ('iifname "wc-tun0" oifname "lan0"' in line))
             self.assertEqual('meta l4proto { tcp, udp }' in forwards, protocol == 'hysteria2')
@@ -97,7 +100,6 @@ class GatewayProfileTests(unittest.TestCase):
     def test_system_stack_tcp_listeners_are_reachable_only_from_owned_tun_pairs(self):
         expected = {
             'iifname "wc-tun0" ip saddr 172.19.0.2 ip daddr 172.19.0.1 meta l4proto tcp accept',
-            'iifname "wc-tun0" ip6 saddr fd77:19::2 ip6 daddr fd77:19::1 meta l4proto tcp accept',
         }
         for protocol in ('hysteria2', 'socks5', 'http', 'https'):
             online = gateway.firewall(self.session(protocol), connected=True)
@@ -106,6 +108,14 @@ class GatewayProfileTests(unittest.TestCase):
                            if 'iifname "wc-tun0"' in line and 'tcp' in line}
             self.assertEqual(tcp_accepts, expected)
             self.assertNotIn('wc-tun0', gateway.firewall(self.session(protocol), connected=False))
+
+    def test_ipv4_pmtu_errors_from_gateway_reach_lan_only_while_connected(self):
+        rule = ('oifname "lan0" ip saddr 192.168.233.1 ip daddr 192.168.233.0/24 '
+                'ip protocol icmp ct state related accept')
+        for protocol in ('hysteria2', 'socks5', 'http', 'https'):
+            online = gateway.firewall(self.session(protocol)).split(' chain output {', 1)[1]
+            self.assertIn(rule, online)
+            self.assertNotIn(rule, gateway.firewall(self.session(protocol), connected=False))
 
     def test_rejects_injection_unknown_fields_and_missing_auth(self):
         for key, value in [('endpoint_ipv4', '1.2.3.4; accept'), ('nonce', 'bad'), ('revision', True), ('surprise', 1)]:

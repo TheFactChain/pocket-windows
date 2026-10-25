@@ -14,6 +14,22 @@ import acceptance_gateway_lan as harness
 
 
 class GatewayLanHarnessTests(unittest.TestCase):
+    def test_large_post_echo_requires_exact_nonce_payload_and_length(self):
+        nonce = 'a' * 32
+        payload = (nonce * 2048).encode('ascii')
+        for length, body, accepted in ((65536, payload, True), (65535, payload, False),
+                                       (65536, payload[:-1], False), (65536, b'b' * 65536, False)):
+            handler = object.__new__(harness.TlsHandler)
+            handler.server = mock.Mock(nonce=nonce, valid_requests=0, large_requests=0)
+            handler.rfile = io.BytesIO(('POST /probe/' + nonce + ' HTTP/1.0\r\nContent-Length: '
+                                       + str(length) + '\r\n\r\n').encode('ascii') + body)
+            handler.wfile = io.BytesIO()
+            with self.subTest(length=length, body_length=len(body)):
+                handler.handle()
+                self.assertEqual(handler.server.large_requests, int(accepted))
+                self.assertEqual(handler.server.valid_requests, int(accepted))
+                self.assertEqual(handler.wfile.getvalue().endswith(b'WCPROBE ' + nonce.encode() + b'\n' + payload), accepted)
+
     def test_temporary_certificate_authenticates_only_fixture_hostname(self):
         with tempfile.TemporaryDirectory(prefix='lan-tls-fixture-', dir=harness.ROOT / 'state') as name:
             directory = Path(name).resolve()
