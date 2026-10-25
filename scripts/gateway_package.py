@@ -212,7 +212,7 @@ def repair_package(root, source, expected_sha256):
     return _install(root, source, expected_sha256, repair=True)
 
 
-def _archive_manifest(archive, base):
+def _archive_manifest(archive):
     entries = archive.infolist()
     if len(entries) != 2 or {entry.filename for entry in entries} != {'manifest.json', 'gateway.qcow2'}:
         raise ValueError('Gateway package has unsupported members')
@@ -228,12 +228,12 @@ def _archive_manifest(archive, base):
         manifest = _manifest(_json(stream))
     if archive.getinfo('gateway.qcow2').file_size != manifest['bytes']:
         raise ValueError('Gateway archive disk size mismatch')
-    if shutil.disk_usage(base).free < manifest['bytes'] + 64 * 1024**2:
-        raise ValueError('Insufficient free space for the gateway update')
     return manifest
 
 
 def _stage_archive(base, archive, manifest):
+    if shutil.disk_usage(base).free < manifest['bytes'] + 64 * 1024**2:
+        raise ValueError('Insufficient free space for the gateway update')
     staging = base / 'releases' / ('.staging-' + uuid.uuid4().hex)
     staging.mkdir()
     with _pinned_directory(staging, create=False):
@@ -287,7 +287,7 @@ def _repair_journal(base):
 def _repair_locked(base, reader, expected_sha256, current, pending):
     with _pinned_directory(base / 'quarantine'):
         with zipfile.ZipFile(reader) as archive:
-            manifest = _archive_manifest(archive, base)
+            manifest = _archive_manifest(archive)
             version = manifest['version']
             if pending and pending['phase'] == 'prepared':
                 if pending['package_sha256'] != expected_sha256 or pending['new']['current'] != version:
@@ -415,7 +415,7 @@ def _install(root, source, expected_sha256, repair):
                 with _release(base, current['previous']):
                     pass
         with zipfile.ZipFile(reader) as archive:
-            manifest = _archive_manifest(archive, base)
+            manifest = _archive_manifest(archive)
             disk_info = archive.getinfo('gateway.qcow2')
             version = manifest['version']
             target = base / 'releases' / version

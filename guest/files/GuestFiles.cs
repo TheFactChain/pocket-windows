@@ -43,13 +43,13 @@ namespace WindowsClaude.GuestFiles
     public static class Program
     {
         public const string Server=@"\\192.168.234.4";
-        static readonly JavaScriptSerializer Json=new JavaScriptSerializer{MaxJsonLength=32768,RecursionLimit=8};
+        static readonly JavaScriptSerializer Json=new JavaScriptSerializer{MaxJsonLength=65536,RecursionLimit=8};
         static bool Matches(string value,string pattern){return value!=null&&Regex.IsMatch(value,"\\A"+pattern+"\\z",RegexOptions.CultureInvariant);}
         static FormatException Invalid(){return new FormatException("CONFIG_INVALID");}
         sealed class Reader
         {
             readonly string text;int offset;
-            internal Reader(string input){if(input==null||Encoding.UTF8.GetByteCount(input)>32768)throw Invalid();text=input;}
+            internal Reader(string input){if(input==null||Encoding.UTF8.GetByteCount(input)>65536)throw Invalid();text=input;}
             void Space(){while(offset<text.Length&&" \r\n\t".IndexOf(text[offset])>=0)offset++;}
             char Peek(){Space();return offset<text.Length?text[offset]:'\0';}
             void Take(char expected){if(Peek()!=expected)throw Invalid();offset++;}
@@ -223,9 +223,14 @@ namespace WindowsClaude.GuestFiles
         static void NoReparse(string path){for(string item=Path.GetFullPath(path);!String.IsNullOrEmpty(item);item=Path.GetDirectoryName(item))if((File.Exists(item)||Directory.Exists(item))&&(File.GetAttributes(item)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("REPARSE_PATH_REFUSED");}
         static string ReadBounded(string path)
         {
-            NoReparse(path);using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){if(stream.Length>32768)throw Invalid();using(var reader=new StreamReader(stream,new UTF8Encoding(false,true),true))return reader.ReadToEnd();}
+            NoReparse(path);using(var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){if(stream.Length>65536)throw Invalid();using(var reader=new StreamReader(stream,new UTF8Encoding(false,true),true))return reader.ReadToEnd();}
         }
         static string mediumRoot;
+        static string ConfigPath(string directory)
+        {
+            string current=Path.Combine(directory,"HOSTFIL2.JSN");
+            return File.Exists(current)?current:Path.Combine(directory,"HOSTFILS.JSN");
+        }
         static string FindConfig()
         {
             string found=null;
@@ -233,7 +238,7 @@ namespace WindowsClaude.GuestFiles
             {
                 if(!drive.IsReady||drive.VolumeLabel!="WCPFILES")continue;if(found!=null)throw new InvalidOperationException("AMBIGUOUS_MEDIUM");
                 uint serial,length,flags;if(!GetVolumeInformation(drive.RootDirectory.FullName,null,0,out serial,out length,out flags,null,0))throw new InvalidOperationException("MEDIUM_INSPECTION_FAILED");
-                if(!drive.DriveFormat.StartsWith("FAT",StringComparison.OrdinalIgnoreCase)||(flags&0x80000)==0)throw new InvalidOperationException("MEDIUM_NOT_READONLY_FAT");found=Path.Combine(drive.RootDirectory.FullName,"HOSTFILS.JSN");mediumRoot=drive.RootDirectory.FullName;
+                if(!drive.DriveFormat.StartsWith("FAT",StringComparison.OrdinalIgnoreCase)||(flags&0x80000)==0)throw new InvalidOperationException("MEDIUM_NOT_READONLY_FAT");found=ConfigPath(drive.RootDirectory.FullName);mediumRoot=drive.RootDirectory.FullName;
             }
             if(found==null)throw new InvalidOperationException("MEDIUM_NOT_FOUND");return ReadBounded(found);
         }

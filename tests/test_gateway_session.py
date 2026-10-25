@@ -16,7 +16,7 @@ spec.loader.exec_module(session)
 
 
 class SessionTests(unittest.TestCase):
-    def exercise_service(self, probe, event_hook=None, probe_seconds=0, child_exit=None, trace=None):
+    def exercise_service(self, probe, event_hook=None, probe_seconds=0, child_exit=None, trace=None, rule_hook=None):
         value = {'schema':1,'nonce':'a'*32,'revision':'b'*32,'gateway_version':'fixture1',
                  'endpoint_ipv4':'203.0.113.7','profile':{'protocol':'socks5','host':'proxy.example','port':1080}}
         events, children, handlers, clock, policies = [], [], {}, [0], []
@@ -35,13 +35,19 @@ class SessionTests(unittest.TestCase):
             events.append((event,*args))
             if event_hook:
                 event_hook(event,children,handlers)
+        def apply_rules(policy):
+            policies.append(policy)
+            if trace is not None:
+                trace.append(('firewall', policy))
+            if rule_hook:
+                rule_hook(policy, clock, handlers)
         with ExitStack() as stack:
             for target, replacement in [('RUN',mock.MagicMock()),('VERSION',mock.MagicMock()),
                     ('wait_nics',mock.Mock()),('wait_lan_ipv6',mock.Mock(),),
                     ('setup_forwarding',mock.Mock(side_effect=lambda: trace.append(('forwarding',)) if trace is not None else None)),
                     ('command',mock.Mock(side_effect=lambda *args: trace.append(('command', *args)) if trace is not None else None)),
                     ('read_session',mock.Mock(return_value=value)),
-                    ('apply_rules',mock.Mock(side_effect=lambda policy: (policies.append(policy), trace.append(('firewall', policy)) if trace is not None else None))),
+                    ('apply_rules',mock.Mock(side_effect=apply_rules)),
                     ('emit',mock.Mock(side_effect=emit)),('health',mock.Mock(side_effect=bounded_probe)),
                     ('stop_children', mock.Mock(wraps=getattr(session,'stop_children',lambda children:None)))]:
                 if target == 'stop_children' and not hasattr(session,target):
@@ -200,6 +206,52 @@ class SessionTests(unittest.TestCase):
                 session.proxy_https('1.1.1.1', 'cloudflare-dns.com', '/', deadline=3)
         self.assertLessEqual(raw.recv.call_count, 3)
         tls.assert_not_called()
+
+    def test_deadline_after_opening_firewall_closes_lan_and_retries(self):
+        for reconnect in (False, True):
+            openings = [0]
+            events_seen = []
+            def rule(policy, clock, handlers):
+                if 'oifname "wc-tun0"' in policy:
+                    openings[0] += 1
+                    if openings[0] == (2 if reconnect else 1):
+                        clock[0] += 0.3
+            def event(name, children, handlers):
+                events_seen.append(name)
+                if name == 'READY' and openings[0] >= (3 if reconnect else 2):
+                    handlers[session.signal.SIGTERM](None, None)
+            probe = [None, TimeoutError(), None, None] if reconnect else [None, None]
+            with self.subTest(reconnect=reconnect):
+                result, events, _, policies, _, value, _ = self.exercise_service(
+                    probe, event, probe_seconds=24.8, rule_hook=rule)
+                self.assertEqual(result, 0)
+                self.assertNotIn('ERROR', [row[0] for row in events])
+                self.assertEqual(events_seen.count('READY'), 2 if reconnect else 1)
+                opening = session.firewall(value)
+                expired = [i for i, policy in enumerate(policies) if policy == opening][1 if reconnect else 0]
+                self.assertEqual(policies[expired + 1], session.firewall(value, connected=False))
+
+    def test_opening_firewall_failure_is_fatal_not_retried(self):
+        def rule(policy, clock, handlers):
+            if 'oifname "wc-tun0"' in policy:
+                raise OSError('nft failed')
+        result, events, _, policies, _, _, _ = self.exercise_service([None], rule_hook=rule)
+        self.assertEqual(result, 1)
+        self.assertEqual(events[-1][0], 'ERROR')
+        self.assertEqual(events[-1][-1], 'NFT_RULES_FAILED')
+        self.assertNotIn('RECONNECTING', [row[0] for row in events])
+        self.assertEqual(policies[-1], session.closed_firewall())
+
+    def test_shutdown_during_firewall_application_never_emits_ready_or_error(self):
+        def rule(policy, clock, handlers):
+            if 'oifname "wc-tun0"' in policy:
+                handlers[session.signal.SIGTERM](None, None)
+                clock[0] += 26
+        result, events, _, policies, _, _, _ = self.exercise_service([None], rule_hook=rule)
+        self.assertEqual(result, 0)
+        self.assertEqual(events[-1][0], 'STOPPED')
+        self.assertFalse(any(row[0] in ('READY', 'ERROR') for row in events))
+        self.assertEqual(policies[-1], session.closed_firewall())
 
     def test_health_shares_one_deadline_across_dns_and_https(self):
         response = b'{"Status":0,"Answer":[{"type":1,"data":"93.184.215.14"}]}'

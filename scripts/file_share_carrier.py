@@ -18,11 +18,17 @@ class Medium:
         self.path = self.base / nonce
         self.holds = 0
         self.identities = {}
-        self.files = {'HOSTFILS.JSN': json.dumps(config, ensure_ascii=True, separators=(',', ':')).encode('ascii'),
+        self.files = {'HOSTFILS.JSN': json.dumps(config, ensure_ascii=False, separators=(',', ':')).encode('utf-8'),
                       'HOSTFILS.EXE': executable,
                       'RUNFILES.CMD': b'@echo off\r\n"%~dp0HOSTFILS.EXE" --install\r\n'}
-        if len(self.files['HOSTFILS.JSN']) > 32768:
+        if len(self.files['HOSTFILS.JSN']) > 65536:
             raise ValueError('Guest file-sharing config is too large')
+        if len(self.files['HOSTFILS.JSN']) > 32768:
+            # The installed 32KiB helper must parse a bootstrap before it can update itself.
+            self.files['HOSTFIL2.JSN'] = self.files['HOSTFILS.JSN']
+            self.files['HOSTFILS.JSN'] = json.dumps(dict(config, shares=[]), ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            if len(self.files['HOSTFILS.JSN']) > 32768:
+                raise ValueError('Guest file-sharing bootstrap is too large')
         kernel, _ = private._api()
         with private._private_base(self.base, create=True):
             with private._descriptor(True) as attributes:

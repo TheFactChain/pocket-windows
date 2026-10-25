@@ -140,14 +140,35 @@ internal static class GuestFilesRegression
         outcome.Mappings.Clear();outcome.Mappings.Add(new Mapping{Name="PC_work",Letter="C"});Assert(Program.ExplorerLabels(config,outcome).Count==0,"System drive cannot be a label target");
         outcome.Mappings.Clear();outcome.Mappings.Add(new Mapping{Name="PC_work",Letter=""});Assert(Program.ExplorerLabels(config,outcome).ContainsKey(target),"Successful deviceless mapping labels only its exact UNC share");
     }
-    static int Main()
+    static int Main(string[] args)
     {
         try
         {
+            if(args.Length>0&&File.Exists(args[0]))
+            {
+                var read=typeof(Program).GetMethod("ReadBounded",BindingFlags.Static|BindingFlags.NonPublic);
+                if(args.Length==2&&args[1]=="--reject")
+                {
+                    bool oversized=false;try{read.Invoke(null,new object[]{args[0]});}catch(TargetInvocationException error){oversized=error.InnerException is FormatException;}
+                    Assert(oversized,"Guest reader must reject more than 64KiB before parsing");return 0;
+                }
+                if(args.Length==2&&args[1]=="--legacy")
+                {
+                    Assert(new FileInfo(args[0]).Length<=32768,"Bootstrap must fit the installed helper's limit");
+                    Config bootstrap=Program.ParseConfig((string)read.Invoke(null,new object[]{args[0]}));
+                    Assert(bootstrap.Shares.Count==0,"Bootstrap only authorizes the helper upgrade; the new helper must load the full config");return 0;
+                }
+                var choose=typeof(Program).GetMethod("ConfigPath",BindingFlags.Static|BindingFlags.NonPublic);
+                string selected=(string)choose.Invoke(null,new object[]{Path.GetDirectoryName(args[0])});
+                string text=(string)read.Invoke(null,new object[]{selected});Config carried=Program.ParseConfig(text);
+                Assert(carried.Shares.Count==64&&carried.Shares.All(share=>share.Label.Length-share.Label.Count(Char.IsLowSurrogate)==128),"64 Unicode labels must survive the actual carrier and bounded guest reader");
+                Reject(new string(' ',65537));Reject(ConfigText().Replace("Работа и 📁",new string('Я',129)));
+                return 0;
+            }
             bool rejected=false;try{Program.ParseConfig("{\"schema\":1,\"schema\":1}");}catch(FormatException){rejected=true;}
             Assert(rejected,"Duplicate JSON keys must be rejected before any mapping");
             string valid=ConfigText();Config config=Program.ParseConfig(valid);Assert(config.Shares.Count==1&&config.Shares[0].Label.Contains("Работа"),"Unicode share label must round-trip");
-            foreach(string bad in new[]{valid.Replace("\"schema\":1","\"schema\":\"1\""),valid.Replace("\"schema\":1","\"schema\":1.0"),valid.Replace("\"schema\":1","\"schema\":true"),valid.Replace("\"schema\":1","\"schema\":1,\"schema\":1"),valid.Replace("\"name\":\"PC_work\"","\"name\":\"PC_work\",\"name\":\"PC_other\""),valid.Replace("\"username\":","\"unknown\":0,\"username\":"),valid.Replace("PC_work","\\\\host\\\\share"),valid.Replace("PC_work","PC_x:stream"),valid.Replace("WCP_session","WCP_x\\\\name"),valid.Replace("\"Z\"","\"C:\""),valid.Replace("\"Z\"","null"),valid.Replace("\"Z\"","\"z\""),valid.Replace("0123456789abcdefghijklmnopqrstuvwxyz_-","short"),valid.Replace("0123456789abcdef0123456789abcdef","not-a-nonce"),valid.Replace("}]}","}, {\"name\":\"PC_WORK\",\"label\":\"duplicate\",\"preferred_letter\":\"Y\"}]}"),valid.Replace("\"schema\":1","\"schema\":01"),valid+"x","{\"schema\":1,}",new string(' ',32769)})Reject(bad);
+            foreach(string bad in new[]{valid.Replace("\"schema\":1","\"schema\":\"1\""),valid.Replace("\"schema\":1","\"schema\":1.0"),valid.Replace("\"schema\":1","\"schema\":true"),valid.Replace("\"schema\":1","\"schema\":1,\"schema\":1"),valid.Replace("\"name\":\"PC_work\"","\"name\":\"PC_work\",\"name\":\"PC_other\""),valid.Replace("\"username\":","\"unknown\":0,\"username\":"),valid.Replace("PC_work","\\\\host\\\\share"),valid.Replace("PC_work","PC_x:stream"),valid.Replace("WCP_session","WCP_x\\\\name"),valid.Replace("\"Z\"","\"C:\""),valid.Replace("\"Z\"","null"),valid.Replace("\"Z\"","\"z\""),valid.Replace("0123456789abcdefghijklmnopqrstuvwxyz_-","short"),valid.Replace("0123456789abcdef0123456789abcdef","not-a-nonce"),valid.Replace("}]}","}, {\"name\":\"PC_WORK\",\"label\":\"duplicate\",\"preferred_letter\":\"Y\"}]}"),valid.Replace("\"schema\":1","\"schema\":01"),valid+"x","{\"schema\":1,}",new string(' ',65537)})Reject(bad);
             var many=Json.Deserialize<Dictionary<string,object>>(valid);many["shares"]=Enumerable.Range(0,65).Select(index=>new{name="PC_"+index,label="share",preferred_letter=""}).ToArray();Reject(Json.Serialize(many));
             Assert(Program.ChooseLetter("Z",new[]{"C","Z"})=="Y"&&Program.ChooseLetter("C",new string[0])=="Z","Occupied preferred letter and C must be preserved");
             string[] full=Enumerable.Range('A',26).Select(value=>((char)value).ToString()).ToArray();Assert(Program.ChooseLetter("",full)=="","Full letters must fall back to UNC");

@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 import json
+import contextlib
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -131,6 +133,61 @@ class SessionRecoveryTests(unittest.TestCase):
         with runtime.ProjectLock(self.root),self.patches():
             with self.assertRaises(RuntimeError):runtime.recover_session(self.root)
         self.assertEqual(path.read_bytes(),before)
+
+    def test_stop_after_failed_windows_exit_finishes_retained_gateway(self):
+        path, state = self.work()
+        state.update(status='exited', exit_code=1, error='fixture abnormal Windows exit')
+        path.write_text(json.dumps(state))
+        gateway, gateway_state = self.gateway()
+        gateway_state['status'] = 'running'
+        Path(gateway['state']).write_text(json.dumps(gateway_state))
+        self.identities[202] = gateway_state['controller']
+        receipt = self.root / 'logs/runtime-launch-fixture/receipt.json'
+        receipt.parent.mkdir()
+        report = {'schema':1, 'project':str(self.root), 'phase':'error',
+                  'guests':{'work':runtime.state_record(path, state, state['process']), 'gateway':gateway}}
+        receipt.write_text(json.dumps(report))
+        def stopped(root, records):
+            if any(record['process']['pid'] == 102 for record in records):
+                self.inventory.clear()
+                self.identities.clear()
+            return []
+        with self.patches(), mock.patch.object(runtime, 'require_runtime'), \
+                mock.patch.object(runtime, 'active_receipt', return_value=(receipt, report)), \
+                mock.patch.object(runtime, 'wait_records', side_effect=stopped), \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = runtime.run_stop(self.root)
+        self.assertEqual(result, 0)
+        self.assertFalse(self.inventory)
+        self.assertEqual(len(list(Path(gateway['state']).parent.glob('control-runtime-*.json'))), 1)
+        self.assertEqual(runtime.read_json(path)['error'], 'fixture abnormal Windows exit')
+
+    def test_error_receipt_with_live_windows_still_allows_graceful_stop(self):
+        path, state = self.work()
+        self.identities.update({101:state['process'], 201:state['controller']})
+        self.inventory[101] = state['process']
+        gateway, gateway_state = self.gateway()
+        gateway_state['status'] = 'running'
+        Path(gateway['state']).write_text(json.dumps(gateway_state))
+        self.identities[202] = gateway_state['controller']
+        def stopped(root, records):
+            for record in records:
+                pid = record['process']['pid']
+                self.inventory.pop(pid, None)
+                self.identities.pop(pid, None)
+                self.identities.pop(record['controller']['pid'], None)
+                if pid == 101:
+                    state.update(status='exited', exit_code=0)
+                    path.write_text(json.dumps(state))
+                    path.with_name('qmp-events.json').write_text(json.dumps([
+                        {'event':'SHUTDOWN', 'generation':1, 'data':{'guest':True,'reason':'guest-shutdown'}}]))
+            return []
+        with self.patches(), mock.patch.object(runtime, 'require_runtime'), \
+                mock.patch.object(runtime, 'active_receipt', return_value=(None, {'phase':'error'})), \
+                mock.patch.object(runtime, 'wait_records', side_effect=stopped), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runtime.run_stop(self.root), 0)
+        self.assertFalse(self.inventory)
 
     def test_pid_reuse_does_not_turn_a_dead_windows_into_a_live_owned_process(self):
         path,state=self.work()

@@ -167,12 +167,12 @@ def preflight(root, host=None, *, full=True):
     if not checks['runtime_state']['passed']:
         try:
             recovery_available = runtime.recovery_snapshot(root)['available']
-            if supervisor_active:
+            if supervisor_active and active.get('phase') not in ('error', 'stopped'):
                 recovery_available = False
         except (OSError, ValueError, RuntimeError, KeyError, TypeError):
             pass
         if recovery_available:
-            checks['runtime_state'].update(action='recover_session', action_label='Восстановить сеанс',
+            checks['runtime_state'].update(action='recover_session', action_label='Завершить прерванный сеанс',
                 detail='Windows и её контроллер уже завершились. Восстанови прерванный сеанс: при необходимости будет сброшен только одноразовый шлюз. Диск Windows и подключения сохранятся.')
     required_memory = settings['work_memory_mib'] + settings['gateway_memory_mib'] + 1024
     check('memory', already_running or host['ram_available_mib'] >= required_memory,
@@ -252,6 +252,7 @@ def preflight(root, host=None, *, full=True):
                     selected['state'] = 'verified'
         except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
             runtime_state['control_available'] = False
+    force_stop = runtime.force_stop_offer(root, guests) if host['windows'] else None
     ok = all(item['passed'] for item in checks.values())
     blockers = [{'code': name, 'title': CHECK_INFO[name][1], 'detail': item['detail'],
                  'action': item['action'], 'action_label': item['action_label']}
@@ -266,7 +267,9 @@ def preflight(root, host=None, *, full=True):
             'blockers': blockers, 'checked_utc': runtime.utc_now(),
             'already_running': already_running, 'network_verified': network_verified,
             'runtime': runtime_state, 'startup': startup, 'connection': connection,
+            'force_stop': force_stop,
             'capabilities': {'stop': bool(guests),
+                              'force_stop': force_stop is not None,
                               'recover_session': recovery_available,
                              'test_profile': bool(gateway_version) and not guests and checks['runtime_state']['passed'],
                              'prepare_host': (root / 'scripts/Prepare-Host.ps1').is_file()},
@@ -603,11 +606,8 @@ def stop_runtime(root):
         str(root / 'scripts/launch_runtime.py'), '--project', str(root), '--stop'], cwd=root,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding='utf-8', creationflags=subprocess.CREATE_NO_WINDOW)
-    try:
-        _stdout, _stderr = process.communicate(timeout=480)
-    except subprocess.TimeoutExpired:
-        return {'ok': False, 'code': 'shutdown_pending',
-                'message': 'Выключение ещё не подтверждено. Работающие VM сохранены; проверь диагностику.'}
+    # The bridge owns the timeout and retains this operation while its pipes are drained.
+    _stdout, _stderr = process.communicate()
     stopped = process.returncode == 0 and not runtime.engine_processes(root)
     return {'ok': stopped, 'code': 'stopped' if stopped else 'shutdown_not_confirmed',
             'message': 'Windows и шлюз выключены.' if stopped else
@@ -736,7 +736,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--action', choices=['diagnose', 'status', 'show-desktop', 'get-settings', 'save-settings', 'start', 'recover-session',
-                                            'stop', 'test-profile', 'repair-gateway',
+                                            'stop', 'force-stop', 'test-profile', 'repair-gateway',
                                             *PROFILE_ACTIONS], required=True)
     args = parser.parse_args()
     try:
@@ -747,6 +747,8 @@ def main():
             result = stop_runtime(root)
         elif args.action == 'recover-session':
             result = runtime.recover_session(root)
+        elif args.action == 'force-stop':
+            result = runtime.force_stop(root, read_request())
         elif args.action == 'repair-gateway':
             result = repair_gateway(root)
         elif args.action in PROFILE_ACTIONS:
@@ -798,7 +800,9 @@ def main():
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
         result = {'ok': False, 'message': profile_error(error) if args.action in PROFILE_ACTIONS or args.action == 'test-profile' else str(error)}
         if args.action == 'recover-session':
-            result.update(code='recovery_refused', message='Восстановление не подтверждено: Windows или служебные процессы ещё работают либо состояние файлов не удалось проверить. VM сохранены. Повтори диагностику после завершения текущей операции.')
+            result.update(code='recovery_refused', detail=str(error), message='Восстановление не подтверждено: Windows или служебные процессы ещё работают либо состояние файлов не удалось проверить. VM сохранены. Повтори диагностику после завершения текущей операции.')
+        elif args.action == 'force-stop':
+            result.update(code='force_stop_refused', detail=str(error), message='Аварийное завершение не подтверждено. Сеанс мог измениться или служебные процессы ещё завершаются. Повтори проверку состояния; чужие процессы не останавливались.')
     result.setdefault('schema', 1)
     print(json.dumps(result, ensure_ascii=True), flush=True)
     return 0 if result['ok'] else 1

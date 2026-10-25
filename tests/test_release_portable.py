@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -73,6 +75,184 @@ class ReleaseTests(unittest.TestCase):
 
     def save_manifest(self):
         self.write(self.bundle, 'RELEASE.json', json.dumps(self.manifest).encode())
+
+    def recovery_fixture(self, schema, phase):
+        transaction = self.target / 'state' / ('app-update-' + 'a' * 32)
+        rows = []
+        for index, name in enumerate(('Launcher.exe', 'scripts/portable_app.py')):
+            old = (self.target / name).read_bytes()
+            new = b'replacement ' + name.encode()
+            self.write(transaction / 'old', name, old)
+            self.write(transaction / 'new', name, new)
+            staged = transaction / 'new' / name
+            owned = release.identity(staged)
+            installed = phase == 'installed' or (phase == 'rollback' and index == 1)
+            if installed:
+                os.replace(staged, self.target / name)
+            restored = phase == 'rollback' and index == 0
+            if restored:
+                staged.unlink()
+            rows.append(dict(path=name, old=record(name, old), new=record(name, new),
+                             new_id=owned, phase='installed' if installed else 'restored' if restored else 'pending'))
+        journal = dict(schema=schema, target=str(self.target), target_id=release.identity(self.target),
+                       transaction=transaction.name, files=rows, phase='prepared')
+        if schema == 1:
+            journal.pop('target_id')
+        release.atomic_json(self.target / release.JOURNAL, journal)
+        return journal
+
+    def test_recovery_after_portable_directory_move(self):
+        original = self.target
+        for schema in (1, 2):
+            for phase in ('pending', 'installed', 'rollback'):
+                with self.subTest(schema=schema, phase=phase):
+                    self.target = original
+                    self.recovery_fixture(schema, phase)
+                    moved = self.base / 'renamed portable'
+                    self.target.rename(moved)
+                    self.target = moved
+                    try:
+                        release.rollback_update(moved)
+                        self.assertEqual((moved / 'Launcher.exe').read_bytes(), self.old_launcher)
+                        self.assertEqual((moved / 'scripts/portable_app.py').read_bytes(), b'old code: scripts/portable_app.py')
+                        self.assertFalse((moved / release.JOURNAL).exists())
+                    finally:
+                        moved.rename(original)
+        self.target = original
+
+    def test_new_journal_records_directory_identity(self):
+        result = release.apply_update(self.bundle, self.target)
+        journal = release.read_json(Path(result['backup']) / 'journal.json')
+        self.assertEqual(journal['schema'], 2)
+        self.assertEqual(journal['target_id'], release.identity(self.target))
+
+    def test_external_complete_runner_recovers_moved_legacy_without_using_installed_scripts(self):
+        journal = self.recovery_fixture(1, 'installed')
+        saved = self.target / 'state' / ('app-updater-' + 'b' * 32)
+        self.write(saved, 'scripts/release_portable.py', b'raise RuntimeError("saved old tools must remain unused")')
+        self.write(self.target, 'scripts/release_portable.py', b'raise RuntimeError("partially updated installation must remain unused")')
+        self.write(self.target, 'state/update-recovery.json', json.dumps({'work': str(saved)}).encode())
+        original_marker = (self.target / 'state/update-recovery.json').read_bytes()
+        moved = self.base / 'moved portable'
+        self.target.rename(moved)
+        self.target = moved
+        tools = self.base / 'complete new tools'
+        shutil.copytree(ROOT / 'runtime/python-3.12.14', tools / 'py')
+        for name in release.pack.APP_FILES:
+            self.write(tools, name, (ROOT / name).read_bytes())
+        result = subprocess.run([str(tools / 'py/python.exe'), '-X', 'utf8', '-I', '-B',
+            str(tools / 'scripts/release_portable.py'), 'rollback', '--target', str(moved)],
+            cwd=tools, capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode('utf-8', errors='replace'))
+        self.assertTrue(json.loads(result.stdout)['rolled_back'])
+        self.assertEqual((moved / 'Launcher.exe').read_bytes(), self.old_launcher)
+        self.assertEqual((moved / 'scripts/portable_app.py').read_bytes(), b'old code: scripts/portable_app.py')
+        self.assertFalse((moved / release.JOURNAL).exists())
+        self.assertEqual((moved / 'state/update-recovery.json').read_bytes(), original_marker)
+        self.assertIn(b'saved old tools must remain unused', (moved / 'state' / saved.name / 'scripts/release_portable.py').read_bytes())
+        self.unchanged_private()
+
+    def test_recovery_rejects_different_directory_identity(self):
+        journal = self.recovery_fixture(2, 'installed')
+        journal['target_id']['file_id'] += 1
+        release.atomic_json(self.target / release.JOURNAL, journal)
+        with self.assertRaises(ValueError):
+            release.rollback_update(self.target)
+        self.assertNotEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
+
+    def test_moved_legacy_requires_identity_anchor_before_replacing_files(self):
+        journal = self.recovery_fixture(1, 'installed')
+        journal['target'] = str(self.base / 'former location')
+        for row in journal['files']:
+            row['new_id']['file_id'] += 123
+        release.atomic_json(self.target / release.JOURNAL, journal)
+        with self.assertRaises(ValueError):
+            release.rollback_update(self.target)
+
+    def test_moved_legacy_validates_all_backups_before_replacing_files(self):
+        journal = self.recovery_fixture(1, 'installed')
+        journal['target'] = str(self.base / 'former location')
+        backup = self.target / 'state' / journal['transaction'] / 'old/Launcher.exe'
+        backup.write_bytes(b'corrupt backup')
+        release.atomic_json(self.target / release.JOURNAL, journal)
+        before = (self.target / 'scripts/portable_app.py').read_bytes()
+        with self.assertRaises(ValueError):
+            release.rollback_update(self.target)
+        self.assertEqual((self.target / 'scripts/portable_app.py').read_bytes(), before)
+
+    def test_moved_legacy_already_restored_finishes_without_rewriting_files(self):
+        journal = self.recovery_fixture(1, 'pending')
+        journal['target'] = str(self.base / 'former location')
+        for row in journal['files']:
+            row['phase'] = 'installed'
+            row['new_id']['file_id'] += 123
+        release.atomic_json(self.target / release.JOURNAL, journal)
+        before = release.identity(self.target / 'Launcher.exe')
+        with mock.patch.object(release, 'copy_record', side_effect=AssertionError('Already restored file rewritten')):
+            release.rollback_update(self.target)
+        self.assertEqual(release.identity(self.target / 'Launcher.exe'), before)
+
+    def test_recovery_rejects_unsafe_transaction_and_file_paths(self):
+        journal = self.recovery_fixture(2, 'installed')
+        for changed in (dict(journal, transaction='../outside'),
+                        dict(journal, files=[dict(journal['files'][0], path='../Launcher.exe')])):
+            release.atomic_json(self.target / release.JOURNAL, changed)
+            with self.assertRaises(ValueError):
+                release.rollback_update(self.target)
+
+    def gateway_fixture(self):
+        from test_gateway_package import GatewayPackageTests
+        fixture = GatewayPackageTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        (self.target / 'gateway/packages/current.json').unlink()
+        archive, digest = fixture.archive('v1')
+        release.pack.gateway_package.install_package(self.target, archive, digest)
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[0], json.dumps(dict(schema=1, file='gateway-recovery.zip', sha256=digest)).encode())
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[1], archive.read_bytes())
+        return fixture
+
+    def test_same_gateway_does_not_generate_disk_or_require_staging_space(self):
+        self.gateway_fixture()
+        generated = self.base / 'generated'
+        generated.mkdir()
+        with mock.patch.object(release.shutil, 'disk_usage', return_value=mock.Mock(free=0)):
+            self.assertEqual(release.stage_gateway(self.app, self.target, generated), [])
+        self.assertEqual(list(generated.iterdir()), [])
+
+    def test_existing_gateway_and_archive_still_receive_full_validation(self):
+        fixture = self.gateway_fixture()
+        generated = self.base / 'generated'
+        generated.mkdir()
+        disk = self.target / 'gateway/packages/releases/v1/gateway.qcow2'
+        good = disk.read_bytes()
+        disk.write_bytes(good[:-1] + b'x')
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            release.stage_gateway(self.app, self.target, generated)
+        disk.write_bytes(good)
+        archive, digest = fixture.archive('v1', changes={'sha256': '0' * 64})
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[0], json.dumps(dict(schema=1, file='gateway-recovery.zip', sha256=digest)).encode())
+        self.write(self.app, release.pack.GATEWAY_RECOVERY[1], archive.read_bytes())
+        with self.assertRaises(ValueError):
+            release.stage_gateway(self.app, self.target, generated)
+        self.assertEqual(list(generated.iterdir()), [])
+
+    def test_same_gateway_rejects_bad_archive_structure_checksum_and_disk(self):
+        fixture = self.gateway_fixture()
+        generated = self.base / 'generated'
+        generated.mkdir()
+        good = (self.target / 'gateway/packages/releases/v1/gateway.qcow2').read_bytes()
+        for damage in ('structure', 'checksum', 'disk'):
+            with self.subTest(damage=damage):
+                archive, digest = fixture.archive('v1', extra='unexpected' if damage == 'structure' else None,
+                    disk=good[:-1] + b'x' if damage == 'disk' else good,
+                    changes={'sha256': hashlib.sha256(good).hexdigest()})
+                self.write(self.app, release.pack.GATEWAY_RECOVERY[0], json.dumps(dict(schema=1,
+                    file='gateway-recovery.zip', sha256='0' * 64 if damage == 'checksum' else digest)).encode())
+                self.write(self.app, release.pack.GATEWAY_RECOVERY[1], archive.read_bytes())
+                with self.assertRaises(ValueError):
+                    release.stage_gateway(self.app, self.target, generated)
+                self.assertEqual(list(generated.iterdir()), [])
 
     def unchanged_private(self):
         self.assertEqual({name: (self.target / name).read_bytes() for name in self.protected}, self.before)

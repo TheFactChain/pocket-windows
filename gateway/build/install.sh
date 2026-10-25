@@ -8,7 +8,7 @@ install -m 0755 sing-box /usr/local/bin/sing-box
 install -m 0755 session.py /usr/local/lib/wc-gateway/session.py
 install -m 0644 gateway_profile.py connection_profile.py /usr/local/lib/wc-gateway/
 install -m 0644 wc-session.service /etc/systemd/system/
-printf '%s\n' '2026.10.20.6' > /etc/windowsclaude/gateway-version
+printf '%s\n' '2026.10.25.4' > /etc/windowsclaude/gateway-version
 printf '%s\n' 'auto lo' 'iface lo inet loopback' > /etc/network/interfaces
 for entry in 'wan0 52:54:00:77:00:01' 'lan0 52:54:00:77:00:02'; do
     set -- $entry
@@ -44,4 +44,4 @@ rm -rf /var/lib/apt/lists/*
 find /var/log -type f -exec truncate -s 0 {} \;
 rm -f /etc/machine-id /var/lib/dbus/machine-id
 touch /etc/machine-id
-printf 'WC_BUILD_COMPLETE 2026.10.20.6\n' > /dev/ttyS0
+printf 'WC_BUILD_COMPLETE 2026.10.25.4\n' > /dev/ttyS0

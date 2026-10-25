@@ -253,13 +253,21 @@ def project_processes(root):
 
 def _journal(target):
     value = read_json(pack.file_under(target, JOURNAL), JSON_LIMIT)
-    if (type(value) is not dict or value.get('schema') != 1 or value.get('target') != str(target)
-            or not re.fullmatch('app-update-[a-f0-9]{32}', value.get('transaction', ''))
+    if (type(value) is not dict or type(value.get('schema')) is not int or value['schema'] not in (1, 2)
+            or not isinstance(value.get('target'), str) or not os.path.isabs(value['target'])
+            or not isinstance(value.get('transaction'), str)
+            or not re.fullmatch('app-update-[a-f0-9]{32}', value['transaction'])
             or type(value.get('files')) is not list or not 1 <= len(value['files']) <= 40000):
         raise ValueError('Invalid update journal; retain it for inspection')
+    if value['schema'] == 2:
+        owned = value.get('target_id')
+        if (type(owned) is not dict or set(owned) != {'device', 'file_id'}
+                or any(type(owned[key]) is not int for key in owned) or owned != identity(target)):
+            raise ValueError('Update target directory identity changed; retain it for inspection')
     seen = set()
     for row in value['files']:
-        if (not transaction_name(row.get('path')) or row['path'].casefold() in seen
+        if (type(row) is not dict or not {'path', 'new', 'old', 'new_id', 'phase'} <= row.keys()
+                or not isinstance(row['path'], str) or not transaction_name(row['path']) or row['path'].casefold() in seen
                 or row.get('phase') not in ('pending', 'replacing', 'installed', 'restored')):
             raise ValueError('Invalid update journal row')
         seen.add(row['path'].casefold())
@@ -276,6 +284,37 @@ def _journal(target):
         if (type(owned) is not dict or set(owned) != {'device', 'file_id'}
                 or any(type(owned[key]) is not int for key in owned) or owned['device'] < 0 or owned['file_id'] <= 0):
             raise ValueError('Invalid staged file identity')
+    if value['schema'] == 1 and os.path.normcase(value['target']) != os.path.normcase(str(target)):
+        transaction = target / 'state' / value['transaction']
+        for parent in (*reversed(transaction.parents), transaction):
+            _plain(parent)
+        if not transaction.is_dir():
+            raise ValueError('Moved legacy update transaction is missing')
+        anchored, restored = False, True
+        for row in value['files']:
+            name = row['path']
+            path = target / name
+            _plain(path)
+            current = file_record(pack.file_under(target, name), name) if path.exists() else None
+            if current != row['old']:
+                restored = False
+                if (row['phase'] in ('pending', 'restored') or current != row['new']
+                        or (current is not None and identity(path) != row['new_id'])):
+                    raise ValueError('Moved legacy update destination changed; retain it for inspection')
+            if row['old'] is not None:
+                backup = pack.file_under(transaction / 'old', name)
+                if file_record(backup, name) != row['old']:
+                    raise ValueError('Moved legacy update backup changed; retain it for inspection')
+            if row['new'] is not None:
+                staged = transaction / 'new' / name
+                _plain(staged)
+                if staged.exists():
+                    if file_record(pack.file_under(transaction / 'new', name), name) != row['new']:
+                        raise ValueError('Moved legacy staged update changed; retain it for inspection')
+                    anchored |= identity(staged) == row['new_id']
+                anchored |= current == row['new'] and identity(path) == row['new_id']
+        if not restored and not anchored:
+            raise ValueError('Moved legacy update has no matching file identity; retain it for inspection')
     return value
 
 
@@ -291,6 +330,8 @@ def _rollback(target, journal):
             continue
         if current != row['new']:
             raise RuntimeError('Installed file changed; rollback retained for inspection: ' + row['path'])
+        if current is not None and identity(path) != row['new_id']:
+            raise RuntimeError('Installed file identity changed; rollback retained for inspection: ' + row['path'])
         with _pinned_directory(path.parent, create=False):
             if row['old'] is None:
                 remove_owned_file(path, row['new_id'])
@@ -362,26 +403,29 @@ def stage_gateway(app, target, generated, reserved=0):
             raise ValueError('Gateway recovery checksum mismatch')
         reader.seek(0)
         with zipfile.ZipFile(reader) as archive:
-            manifest = gateway._archive_manifest(archive, generated)
-            if shutil.disk_usage(target).free < 2 * manifest['bytes'] + reserved + 64 * 1024**2:
-                raise RuntimeError('Insufficient space to stage and install the gateway')
+            manifest = gateway._archive_manifest(archive)
             version = manifest['version']
             prefix = 'gateway/packages/releases/' + version + '/'
-            destination = directory(generated / prefix)
-            with archive.open('gateway.qcow2') as incoming, (destination / 'gateway.qcow2').open('xb') as outgoing:
-                shutil.copyfileobj(incoming, outgoing, 1 << 20)
-                outgoing.flush()
-                os.fsync(outgoing.fileno())
-            with locked_read(destination / 'gateway.qcow2') as disk:
-                gateway._check_disk(disk, manifest)
-            atomic_json(destination / 'manifest.json', manifest)
-    existing = base / 'releases' / version
-    _plain(existing)
-    existing_payload = existing.exists() and any(existing.iterdir())
-    if existing_payload:
-        with gateway._release(base, version):
-            if read_json(existing / 'manifest.json', 65536) != manifest:
-                raise ValueError('Gateway version already exists with different content')
+            existing = base / 'releases' / version
+            _plain(existing)
+            existing_payload = existing.exists() and any(existing.iterdir())
+            if existing_payload:
+                with gateway._release(base, version):
+                    if read_json(existing / 'manifest.json', 65536) != manifest:
+                        raise ValueError('Gateway version already exists with different content')
+                with archive.open('gateway.qcow2') as incoming:
+                    gateway._check_disk(incoming, manifest)
+            else:
+                if shutil.disk_usage(target).free < 2 * manifest['bytes'] + reserved + 64 * 1024**2:
+                    raise RuntimeError('Insufficient space to stage and install the gateway')
+                destination = directory(generated / prefix)
+                with archive.open('gateway.qcow2') as incoming, (destination / 'gateway.qcow2').open('xb') as outgoing:
+                    shutil.copyfileobj(incoming, outgoing, 1 << 20)
+                    outgoing.flush()
+                    os.fsync(outgoing.fileno())
+                with locked_read(destination / 'gateway.qcow2') as disk:
+                    gateway._check_disk(disk, manifest)
+                atomic_json(destination / 'manifest.json', manifest)
     if current and current['current'] == version:
         return []
     pointer = {'schema': 1, 'current': version, 'previous': current['current'] if current else None}
@@ -458,7 +502,7 @@ def apply_update(release, target):
             transaction = directory(target / 'state' / ('app-update-' + uuid.uuid4().hex))
             pins.enter_context(unpublished_transaction(target, transaction))
             pins.enter_context(_pinned_directory(transaction, create=False))
-            journal = {'schema': 1, 'target': str(target), 'transaction': transaction.name,
+            journal = {'schema': 2, 'target': str(target), 'target_id': identity(target), 'transaction': transaction.name,
                        'release_id': manifest['release_id'], 'phase': 'prepared', 'files': []}
             generated = transaction / 'generated'
             directory(generated / 'state')
