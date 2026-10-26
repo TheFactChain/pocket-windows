@@ -6,11 +6,14 @@
 
 Portable Windows for accessing blocked services through an existing proxy. One folder contains Windows 11, a launcher and a separate network environment. Extract the bundle, add your connection and open a desktop with Claude Desktop and Firefox already prepared.
 
-<p><a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><strong>Download the ready-to-run bundle</strong></a></p>
+<p><a href="https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.25.7"><strong>Download the 2026.10.25.7 update</strong></a></p>
+<p><a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><strong>Download the full 2026.10.24.12 bundle</strong></a></p>
 <p><a href="#first-start">Get started</a></p>
 <p><a href="https://t.me/TheFactChain">News on Telegram</a></p>
 
-Version **2026.10.24.12** is available to download as the full `Pocket-Windows-2026.10.24.12.zip` archive, about **16.9 GB** (15.8 GiB). The screenshots were taken in version **2026.10.24.13**. GitHub **Source code** archives contain source files and cannot be used as the application.
+Application update **2026.10.25.7** is available on GitHub: `Pocket-Windows-2026.10.25.7-app.zip`, **957,576,617 bytes** (about 957.6 MB). It updates an existing installation and does not include the Windows disk; see the [tested update paths](#do-application-updates-require-downloading-the-whole-windows-image-again).
+
+The full download on Google Drive remains version **2026.10.24.12**: `Pocket-Windows-2026.10.24.12.zip`, about **16.9 GB** (15.8 GiB). The screenshots were taken in version **2026.10.24.13**. GitHub **Source code** archives contain source files and cannot be used as the application.
 
 ![Windows desktop inside Pocket Windows with the prepared applications](docs/assets/readme/desktop.png)
 
@@ -33,6 +36,8 @@ The home screen shows the Windows status and selected connection. Start the desk
 *The panel for starting and managing a session.*
 
 The panel minimizes to the system tray after startup. Closing it does not shut down a running Windows session. Use “Выключить Windows” (Shut down Windows) in the panel or tray menu, then wait for shutdown before moving the folder.
+
+Version **2026.10.25.7** also provides “Выключить Windows и выйти” (Shut down Windows and exit) in the tray. It waits for confirmed Windows and gateway shutdown before closing the panel. An unconfirmed shutdown may expose a separate “Принудительно выключить” (Force shut down) button. It requires confirmation: unsaved work may be lost and the guest Windows disk may be damaged.
 
 ## Connect through an existing server or proxy
 
@@ -70,7 +75,22 @@ These are the actual files on your PC. Editing or deleting a shared file inside 
 
 ## Download
 
-Open the [Pocket Windows folder on Google Drive](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD) and download `Pocket-Windows-2026.10.24.12.zip`. No account sign-in is required. Google Drive may ask you to confirm the download because the archive is too large for its virus scan.
+### Application update 2026.10.25.7
+
+Download `Pocket-Windows-2026.10.25.7-app.zip` from the [GitHub release](https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.25.7). The package is **957,576,617 bytes** and does not include the Windows disk. Read the [update instructions](#do-application-updates-require-downloading-the-whole-windows-image-again) before installing it. Do not copy the contents of `app` over your installation manually: that bypasses validation and rollback.
+
+<details>
+<summary>SHA256 of the 2026.10.25.7 application package</summary>
+
+```text
+70379972667e923383c35519c73812072b009cb2448bf9710e8ef89e13798c72
+```
+
+</details>
+
+### Full bundle 2026.10.24.12
+
+Google Drive has not been updated to 25.7. Open the [Pocket Windows folder on Google Drive](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD) and download `Pocket-Windows-2026.10.24.12.zip`. No account sign-in is required. Google Drive may ask you to confirm the download because the archive is too large for its virus scan.
 
 <details>
 <summary>SHA256 checksum</summary>
@@ -128,7 +148,11 @@ The Checks section can restore Python and QEMU from the local archive, replace t
 
 ### Do application updates require downloading the whole Windows image again?
 
-Built-in application updates were introduced in version **2026.10.24.13**. They allow application files to be updated without downloading the Windows image again when a compatible package is published. The **2026.10.24.12** bundle currently available on Google Drive does not include this mechanism; moving to a version with updates requires the full ZIP of a newer version. Release news is posted in the [Telegram channel](https://t.me/TheFactChain).
+For **2026.10.25.3 and later**, use the launcher's normal update flow: shut guest Windows down normally, open “Обновления” (Updates) and install **2026.10.25.7**. No Windows image download is needed: the Windows disk, applications inside it, connections and personal settings are preserved.
+
+The **2026.10.24.13 to 2026.10.25.7** transition was tested only with the new external updater from a separate extraction of `Pocket-Windows-2026.10.25.7-app.zip`. Shut guest Windows down normally, close every launcher panel for that copy, then follow the [step-by-step release instructions](https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.25.7) (currently in Russian). Do not use the old 24.13 built-in updater for this transition: it does not fully replace the active gateway.
+
+The exact upgrade from **2026.10.24.12** has not been tested separately; no verified instructions for updating that version are provided here. The full bundle on Google Drive is still version 24.12. Release news is posted in the [Telegram channel](https://t.me/TheFactChain).
 
 ### Where can I report a problem?
 

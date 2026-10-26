@@ -208,19 +208,44 @@ namespace WindowsClaude.Launcher
         internal static void Launch(string root, Package package)
         {
             string state = Path.Combine(root, "state"); Directory.CreateDirectory(state);
-            File.WriteAllText(Path.Combine(state, "update-recovery.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, string> { { "work", package.Tools } }), Encoding.UTF8);
+            File.WriteAllText(Path.Combine(state, "update-recovery.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "schema", 2 }, { "work", Path.GetFileName(package.Tools) } }), Encoding.UTF8);
             RunInstaller(root, package.Tools, new[] { "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id });
         }
 
         internal static void Recover(string root)
         {
+            RunInstaller(root, RecoveryWork(root), new[] { "--recover" });
+        }
+
+        internal static string RecoveryWork(string root)
+        {
             string path = Path.Combine(root, "state", "update-recovery.json");
             if (new FileInfo(path).Length > 4096) throw new InvalidDataException("Запись восстановления повреждена.");
-            var value = new JavaScriptSerializer().Deserialize<Dictionary<string, string>>(File.ReadAllText(path));
-            string work = Path.GetFullPath(value["work"]);
-            if (!IsTools(root, work) || !File.Exists(Path.Combine(work, "scripts", "release_portable.py")))
+            var value = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(path));
+            object saved, schema;
+            if (value == null || !value.TryGetValue("work", out saved) || !(saved is string))
+                throw new InvalidDataException("Запись восстановления повреждена.");
+            string name = (string)saved;
+            if (value.TryGetValue("schema", out schema) && (!(schema is int) || (int)schema != 1 && (int)schema != 2))
+                throw new InvalidDataException("Неизвестная запись восстановления.");
+            if (schema == null || (int)schema == 1)
+            {
+                if (!Path.IsPathRooted(name) || !String.Equals(Path.GetFullPath(name), name, StringComparison.OrdinalIgnoreCase)
+                    || !String.Equals(Path.GetFileName(Path.GetDirectoryName(name)), "state", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Запись восстановления повреждена.");
+                if (!String.Equals(name, Path.Combine(Path.GetFullPath(root), "state", Path.GetFileName(name)), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Папка перенесена, а сохранённый обновлятор относится к старой версии. Для восстановления нужен полный комплект новой версии в отдельной папке. Сохрани папку state.");
+                name = Path.GetFileName(name);
+            }
+            if (!Regex.IsMatch(name, @"\Aapp-updater-[a-f0-9]{32}\z"))
+                throw new InvalidDataException("Запись восстановления повреждена.");
+            string work = Path.Combine(Path.GetFullPath(root), "state", name);
+            string script = Path.Combine(work, "scripts", "release_portable.py");
+            if (!IsTools(root, work) || !File.Exists(script)
+                || (File.GetAttributes(Path.GetDirectoryName(script)) & FileAttributes.ReparsePoint) != 0
+                || (File.GetAttributes(script) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("Сохранённый обновлятор не найден. Сохрани папку state для восстановления.");
-            RunInstaller(root, work, new[] { "--recover" });
+            return work;
         }
 
         static void RunInstaller(string root, string work, string[] arguments)
@@ -257,6 +282,8 @@ namespace WindowsClaude.Launcher
         {
             return String.Equals(Path.GetDirectoryName(path), Path.Combine(Path.GetFullPath(root), "state"), StringComparison.OrdinalIgnoreCase)
                 && Regex.IsMatch(Path.GetFileName(path), @"\Aapp-updater-[a-f0-9]{32}\z")
+                && (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0
+                && (File.GetAttributes(Path.GetDirectoryName(path)) & FileAttributes.ReparsePoint) == 0
                 && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
         }
 

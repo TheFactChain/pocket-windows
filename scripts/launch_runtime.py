@@ -1,4 +1,4 @@
-"""Supervise owned guests; Windows is never terminated or sent QMP quit."""
+"""Supervise owned guests; a hard stop requires explicit confirmation of this session."""
 import argparse
 import ctypes
 from ctypes import wintypes
@@ -589,6 +589,89 @@ def recover_session(root):
         return result
 
 
+def force_stop_offer(root, guests=None):
+    """Offer a hard stop only for a proved live Windows after timeout or lost control."""
+    try:
+        record = (discover_guests(root) if guests is None else guests).get('work')
+        if (not record or not record_live(root, record)
+                or not same_identity(record['process'], process_identity(record['process']['pid']))):
+            return None
+        path = safe_state_path(root, record['state'])
+        state = read_json(path)
+        if not valid_work_session(root, state) or not state_matches(root, path, state, record['process']):
+            return None
+        failed = state.get('status') == 'control-unavailable-guest-running'
+        if not failed:
+            requested = datetime.fromisoformat(state.get('acpi_powerdown_requested_utc', ''))
+            if (state.get('stop_requested') is not True or requested.tzinfo is None
+                    or (datetime.now(timezone.utc) - requested).total_seconds() < SHUTDOWN_TIMEOUT):
+                return None
+        return {key: state[key] for key in ('session_nonce', 'generation', 'process')}
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def force_stop(root, request):
+    if (type(request) is not dict or set(request) != {'confirmed', 'session'}
+            or request['confirmed'] is not True or type(request['session']) is not dict):
+        raise ValueError('Explicit confirmation of the current Windows session is required')
+    guests = discover_guests(root)
+    record = guests.get('work')
+    if not record:
+        raise RuntimeError('Windows session changed; refresh before confirming a hard stop')
+    path = safe_state_path(root, record['state'])
+    with work_session_lock(path.parent):
+        offered = force_stop_offer(root)
+        if offered is None or offered != request['session']:
+            raise RuntimeError('Windows session or shutdown eligibility changed')
+        state = read_json(path)
+        expected = offered['process']
+        kernel = kernel_api()
+        handle = kernel.OpenProcess(0x101001, False, expected['pid'])
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not same_identity(expected, _handle_identity(kernel, handle, expected['pid'])):
+                raise RuntimeError('Windows process identity changed; hard stop refused')
+            actual = _handle_arguments(handle)
+            if (not actual or not same_path(actual[0], engine_path(root))
+                    or actual[1:] != state['arguments']):
+                raise RuntimeError('Process is not the recorded Windows; hard stop refused')
+            # The lifecycle lock and marker prevent a guest-reset from spawning another generation.
+            atomic_json(path.with_name('stop-session.json'),
+                        {'session_nonce':state['session_nonce'], 'controller':state['controller']})
+            audit = {'schema':1, 'phase':'requested', 'session':offered, 'requested_utc':utc_now()}
+            atomic_json(path.with_name('force-stop.json'), audit)
+            kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel.TerminateProcess.restype = wintypes.BOOL
+            kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel.WaitForSingleObject.restype = wintypes.DWORD
+            if not kernel.TerminateProcess(handle, 1):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if kernel.WaitForSingleObject(handle, 10000) != 0:
+                raise RuntimeError('Windows termination has not completed; state retained')
+            audit.update(phase='terminated', completed_utc=utc_now())
+            atomic_json(path.with_name('force-stop.json'), audit)
+        finally:
+            kernel.CloseHandle(handle)
+    deadline = time.monotonic() + 15
+    while same_identity(state['controller'], process_identity(state['controller']['pid'])):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Windows controller is finishing; retry session recovery')
+        time.sleep(.2)
+    while True:
+        with ProjectLock(root) as acquired:
+            if acquired:
+                break
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Runtime operation is finishing; retry session recovery')
+        time.sleep(.2)
+    recovered = recover_session(root)
+    recovered.update(code='forced_stopped', forced=True, windows_terminated=True,
+                     message='Windows завершена принудительно, сеанс закрыт. Несохранённые данные могли быть потеряны.')
+    return recovered
+
+
 def record_live(root, record):
     path = safe_state_path(root, record['state'])
     if 'session_nonce' in record:
@@ -1046,6 +1129,15 @@ def run_stop(root):
             report = read_json(path)
         if report.get('phase') == 'starting':
             raise RuntimeError('Startup has not settled; running guests retained. Retry Stop after checking ' + str(path))
+    if report.get('phase') in ('error', 'stopped'):
+        try:
+            recoverable = recovery_snapshot(root)['available']
+        except RuntimeError:
+            recoverable = False
+        if recoverable:
+            result = recover_session(root)
+            print(json.dumps({'phase':'stopped', 'message':result['message']}))
+            return 0
     records = owned_records(root)
     for role, record in discover_guests(root).items():
         if not any(same_identity(record['process'], existing['process']) for existing in records.get(role, [])):

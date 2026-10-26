@@ -46,6 +46,9 @@ namespace WindowsClaude.Launcher
 
         Dictionary<string, object> readinessReport, operationResult, settingsHost, originalSettings, originalWindows, originalViewer, originalFiles;
         Task<Dictionary<string, object>> pendingOutcome;
+        Task<bool> settingsSave, stopTask;
+        bool settingsDirty, closePending, closeRequested, startPending, startAttempted;
+        int settingsRevision;
         string pendingStartReceipt, activeOperationAction, workState = "unknown", gatewayState = "unknown", suggestedAction = "retry", reportText = "", displayedChecks;
         bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing,
             panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, checksOpen, pulsing;
@@ -258,17 +261,19 @@ namespace WindowsClaude.Launcher
         bool BeginOperation(string action)
         {
             if (closing || busy || updating) return false;
-            if (outcomeUnknown && action != "diagnose" && action != "recover-session")
+            if (outcomeUnknown && action != "diagnose" && action != "recover-session" && action != "force-stop")
             {
                 SetOperation("Предыдущая операция ещё не подтверждена. Сначала нажми «Проверить снова».");
                 return false;
             }
             activeOperationAction = action; operationRevision++;
+            if (action == "start") startAttempted = true;
             Busy(true);
             switch (action)
             {
                 case "start": SetOperation("Запускаем шлюз и Windows…"); break;
                 case "stop": SetOperation("Выключаем Windows и шлюз… Дождись штатного выключения."); break;
+                case "force-stop": SetOperation("Принудительно выключаем Windows… Несохранённые данные могут быть потеряны."); break;
                 case "repair-gateway": SetOperation("Восстанавливаем шлюз из комплекта…"); break;
                 case "recover-session": SetOperation("Восстанавливаем прерванный сеанс… Диск Windows и подключения сохраняются."); break;
                 case "prepare-host": SetOperation("Готовим этот ПК… Подтверди запрос UAC."); break;
@@ -294,7 +299,7 @@ namespace WindowsClaude.Launcher
             PrepareHostButton.IsEnabled = !value && !runtimeActive;
             TestProfileButton.IsEnabled = !value && testAvailable && profiles.Any(item => Flag(item, "selected"));
             ExportButton.IsEnabled = !value && profiles.Count > 0;
-            SettingsBody.IsEnabled = settingsLoaded && !runtimeActive && !outcomeUnknown && !updating;
+            SettingsBody.IsEnabled = settingsLoaded && !value && !runtimeActive && !outcomeUnknown && !updating;
             ConnectionsPane.IsEnabled = !updating; EditorSheet.IsEnabled = !updating; AddSheet.IsEnabled = !updating;
             UpdateLaunchButtons(); UpdateTray(); UpdatePulse(); ShowUpdateOffer();
         }
@@ -306,8 +311,10 @@ namespace WindowsClaude.Launcher
             Show(OpenDesktopButton, workState == "running");
             OpenDesktopButton.IsEnabled = !busy && !outcomeUnknown && workState == "running";
             Show(StatusGlyph, StartButton.Visibility != Visibility.Visible && OpenDesktopButton.Visibility != Visibility.Visible);
-            Show(StopButton, stopAvailable);
+            Show(StopButton, stopAvailable && !Flag(Child(readinessReport, "capabilities"), "recover_session"));
             StopButton.IsEnabled = !busy && !outcomeUnknown && stopAvailable;
+            Show(ForceStopButton, Flag(Child(readinessReport, "capabilities"), "force_stop") && Child(readinessReport, "force_stop") != null);
+            ForceStopButton.IsEnabled = !busy && pendingOutcome == null;
         }
 
         void UpdatePulse()
@@ -336,24 +343,33 @@ namespace WindowsClaude.Launcher
             if (activeOperationAction == "start" && result.ContainsKey("receipt")) pendingStartReceipt = Text(result, "receipt", "");
         }
 
-        async Task RunAction(string action, bool selectDiagnostics)
+        async Task<bool> RunAction(string action, bool selectDiagnostics, object payload = null)
         {
-            if (!BeginOperation(action)) return;
+            if (!BeginOperation(action)) return false;
             if (selectDiagnostics) Navigate(AppPage.Diagnostics);
             Dictionary<string, object> completed = null;
             try
             {
-                completed = await Run(action, null);
-                if (closing) return;
-                if (action == "recover-session" && Bridge.Ok(completed)) { outcomeUnknown = false; pendingOutcome = null; pendingStartReceipt = null; }
+                completed = await Run(action, payload);
+                if (closing) return false;
+                if (action != "diagnose") operationResult = completed;
+                if ((action == "recover-session" || action == "force-stop") && Bridge.Ok(completed) && (pendingOutcome == null || pendingOutcome.IsCompleted)) { outcomeUnknown = false; pendingOutcome = null; pendingStartReceipt = null; }
                 Display(completed);
                 SetOperation(action == "diagnose" && completed.ContainsKey("checks") ? "" : Friendly(Bridge.Message(completed)));
-                if (action == "prepare-components" || action == "prepare-host" || action == "repair-gateway" || action == "recover-session" || action == "stop" || action == "start")
+                if (action == "prepare-components" || action == "prepare-host" || action == "repair-gateway" || action == "recover-session" || action == "force-stop" || action == "stop" || action == "start")
                     await RefreshAfterAsync(completed);
                 if (action == "prepare-host" && Flag(completed, "restart_required")) SetOperation("Подготовка завершена. Перезагрузи ПК самостоятельно, затем нажми «Проверить снова».");
                 else if (action == "diagnose") CheckedAtText.Text = completed.ContainsKey("checks") ? "Проверено в " + DateTime.Now.ToString("HH:mm") : "Проверка не обновилась. Повтори.";
             }
-            catch (Exception) { FailedAction(action, completed); }
+            catch (Exception error)
+            {
+                FailedAction(action, completed);
+                var failure = operationResult;
+                failure["detail"] = error.ToString();
+                completed = failure;
+                try { if (action != "diagnose") await RefreshAfterAsync(failure); } catch (Exception) { }
+                reportText = error.ToString() + Environment.NewLine + Environment.NewLine + reportText;
+            }
             finally
             {
                 if (!closing)
@@ -364,12 +380,13 @@ namespace WindowsClaude.Launcher
                     UpdateTray();
                 }
             }
+            return Bridge.Ok(completed);
         }
 
         void FailedAction(string action, Dictionary<string, object> completed)
         {
             if (closing) return;
-            if (completed != null && Bridge.Ok(completed)) Display(Bridge.Unknown(Bridge.Message(completed) + " Не удалось обновить проверку. Проверь состояние повторно.", "diagnose_failed"));
+            if (completed != null && Bridge.Ok(completed)) Display(Bridge.Failure(Bridge.Message(completed) + " Не удалось обновить проверку. Проверь состояние повторно."));
             else if (action == "diagnose" || action == "get-settings") Display(Bridge.Failure("Не удалось выполнить проверку. Проверь доступ к папке и целостность компонентов."));
             else Display(Bridge.Unknown("Действие не подтверждено. Исход операции неизвестен. Нажми «Проверить снова».", "operation_failed"));
             SetOperation(Bridge.Message(operationResult));
@@ -378,10 +395,20 @@ namespace WindowsClaude.Launcher
 
         async Task RefreshAfterAsync(Dictionary<string, object> completed)
         {
-            if (closing || (!Bridge.Ok(completed) && !Flag(completed, "outcome_unknown"))) return;
+            if (closing) return;
             var check = await Run("diagnose", null);
             if (closing) return;
             Display(check);
+            if (!Bridge.Ok(completed))
+            {
+                operationResult = completed;
+                if (!Flag(Child(readinessReport, "capabilities"), "recover_session"))
+                {
+                    StatusText.Text = "Действие не завершено";
+                    NextStepText.Text = "Повтори проверку. Подробности ошибки — в разделе «Проверка».";
+                    Show(NextActionButton, !stopAvailable);
+                }
+            }
             SetOperation(Friendly(Bridge.Message(completed)));
             CheckedAtText.Text = "Проверено в " + DateTime.Now.ToString("HH:mm");
         }
@@ -397,10 +424,56 @@ namespace WindowsClaude.Launcher
             return message;
         }
 
-        void OnStart(object sender, RoutedEventArgs e) { CommitPendingSettings(); var task = RunAction("start", false); }
-        void OnStop(object sender, RoutedEventArgs e) { if (stopAvailable) { var task = RunAction("stop", false); } }
+        async void OnStart(object sender, RoutedEventArgs e)
+        {
+            if (startPending) return;
+            startPending = true;
+            try { if (await CommitPendingSettingsAsync()) await RunAction("start", false); }
+            finally { startPending = false; }
+        }
+        async void OnStop(object sender, RoutedEventArgs e) { await StopSessionAsync(false); }
+
+        bool SessionStopped { get { return workState == "stopped" && gatewayState == "stopped" && !busy && !outcomeUnknown && pendingOutcome == null; } }
+        async Task<bool> StopSessionAsync(bool exit)
+        {
+            if (stopTask == null || stopTask.IsCompleted) stopTask = StopSessionCoreAsync();
+            bool stopped = await stopTask;
+            if (exit && stopped && SessionStopped) Close();
+            return stopped;
+        }
+        async Task<bool> StopSessionCoreAsync()
+        {
+            if (busy || pendingOutcome != null) return false;
+            if (!SessionStopped)
+            {
+                bool recover = Flag(Child(readinessReport, "capabilities"), "recover_session");
+                if (!recover && (!stopAvailable || outcomeUnknown)) return false;
+                if (!await RunAction(recover ? "recover-session" : "stop", false)) return false;
+            }
+            return SessionStopped;
+        }
+        async void OnForceStop(object sender, RoutedEventArgs e)
+        {
+            if (busy || pendingOutcome != null || !Flag(Child(readinessReport, "capabilities"), "force_stop")) return;
+            if (System.Windows.MessageBox.Show(this,
+                "Принудительное выключение может повредить данные Windows и потерять несохранённую работу. Продолжить?",
+                "Принудительно выключить Windows", System.Windows.MessageBoxButton.YesNo, MessageBoxImage.Warning, System.Windows.MessageBoxResult.No) != System.Windows.MessageBoxResult.Yes) return;
+            await ForceStopConfirmedAsync();
+        }
+        async Task ForceStopConfirmedAsync()
+        {
+            // Read the current capability and session after confirmation, never retain a token across an await.
+            if (busy || pendingOutcome != null || !Flag(Child(readinessReport, "capabilities"), "force_stop")) return;
+            var session = Child(readinessReport, "force_stop");
+            if (session != null) await RunAction("force-stop", false, new Dictionary<string, object> { { "confirmed", true }, { "session", session } });
+        }
         void OnOpenDesktop(object sender, RoutedEventArgs e) { var task = RunAction("show-desktop", false); }
         void OnRefresh(object sender, RoutedEventArgs e) { var task = RunAction("diagnose", true); }
+        void OnDiagnosticAction(object sender, RoutedEventArgs e)
+        {
+            if (Checks(readinessReport).Any(item => !Flag(item, "passed") && Flag(item, "setup_required"))) Navigate(AppPage.Connection);
+            else OnRefresh(sender, e);
+        }
         void OnPrepare(object sender, RoutedEventArgs e) { var task = RunAction("prepare-components", false); }
         void OnRepairGateway(object sender, RoutedEventArgs e) { var task = RunAction("repair-gateway", false); }
         void OnPrepareHost(object sender, RoutedEventArgs e) { var task = RunAction("prepare-host", false); }
@@ -410,7 +483,7 @@ namespace WindowsClaude.Launcher
             if (suggestedAction == "settings") Navigate(AppPage.Settings);
             else if (suggestedAction == "connection") Navigate(AppPage.Connection);
             else if (suggestedAction == "repair_gateway") { var task = RunAction("repair-gateway", false); }
-            else if (suggestedAction == "recover_session") { var task = RunAction("recover-session", false); }
+            else if (suggestedAction == "recover_session") { var task = StopSessionAsync(false); }
             else if (suggestedAction == "windows_features") { Navigate(AppPage.Diagnostics); SetOperation("Нажми «Подготовить этот ПК» в проверке. Потребуется UAC; перезагрузка выполняется вручную."); }
             else { var task = RunAction(suggestedAction == "prepare" ? "prepare-components" : "diagnose", suggestedAction != "prepare"); }
         }
@@ -497,7 +570,7 @@ namespace WindowsClaude.Launcher
                     var check = item.Value as Dictionary<string, object>; if (check == null) continue;
                     var row = new Dictionary<string, object>(check); if (!row.ContainsKey("title")) row["title"] = item.Key; checks.Add(row);
                 }
-            return checks.OrderBy(item => Flag(item, "passed")).ToList();
+            return checks.OrderBy(item => Flag(item, "passed") ? 2 : Flag(item, "setup_required") ? 1 : 0).ToList();
         }
 
         void Display(Dictionary<string, object> result)
@@ -516,7 +589,7 @@ namespace WindowsClaude.Launcher
                     && (Text(startup, "phase", "") == "ready" || (!Flag(startup, "supervisor_active") && (Text(startup, "phase", "") == "stopped" || Text(startup, "phase", "") == "error"))))
                 { outcomeUnknown = false; pendingStartReceipt = null; }
                 var capabilities = Child(result, "capabilities");
-                stopAvailable = Flag(capabilities, "stop"); testAvailable = Flag(capabilities, "test_profile");
+                stopAvailable = Flag(capabilities, "stop") || Flag(capabilities, "recover_session"); testAvailable = Flag(capabilities, "test_profile");
                 var runtime = Child(result, "runtime");
                 workState = Text(runtime, "work", "unknown"); gatewayState = Text(runtime, "gateway", "unknown");
                 runtimeActive = ActiveVmState(workState) || ActiveVmState(gatewayState);
@@ -538,23 +611,27 @@ namespace WindowsClaude.Launcher
             }
             var report = readinessReport ?? result;
             var checks = Checks(report);
-            int failed = checks.Count(item => !Flag(item, "passed"));
-            DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? "Всё в порядке" : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
-            DiagnosticPill.Background = checks.Count == 0 ? GreySoft : failed == 0 ? GreenSoft : Hex("#FFF1DE");
-            DiagnosticSummary.Foreground = checks.Count == 0 ? Grey : failed == 0 ? GreenInk : Hex("#B36200");
-            ChecksHeroTitle.Text = checks.Count == 0 ? "Проверка не выполнялась" : failed == 0 ? "Всё в порядке" : "Нужно исправить: " + failed;
-            ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : (checks.Count - failed) + " из " + checks.Count + " проверок пройдено";
+            bool setupRequired = checks.Any(item => !Flag(item, "passed") && Flag(item, "setup_required"));
+            int failed = checks.Count(item => !Flag(item, "passed") && !Flag(item, "setup_required"));
+            DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
+            DiagnosticPill.Background = checks.Count == 0 ? GreySoft : failed == 0 ? (setupRequired ? BlueSoft : GreenSoft) : Hex("#FFF1DE");
+            DiagnosticSummary.Foreground = checks.Count == 0 ? Grey : failed == 0 ? (setupRequired ? BlueInk : GreenInk) : Hex("#B36200");
+            ChecksHeroTitle.Text = checks.Count == 0 ? "Проверка не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : "Нужно исправить: " + failed;
+            ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : setupRequired && failed == 0 ? "Добавь или выбери подключение для запуска Windows." : checks.Count(item => Flag(item, "passed")) + " из " + checks.Count + " проверок пройдено";
             ChecksHeroBadge.Background = DiagnosticPill.Background; ChecksHeroGlyph.Foreground = DiagnosticSummary.Foreground;
-            ChecksHeroGlyph.Symbol = checks.Count == 0 ? SymbolRegular.Pulse24 : failed == 0 ? SymbolRegular.Checkmark24 : SymbolRegular.Warning24;
+            ChecksHeroGlyph.Symbol = checks.Count == 0 ? SymbolRegular.Pulse24 : failed == 0 ? (setupRequired ? SymbolRegular.Globe24 : SymbolRegular.Checkmark24) : SymbolRegular.Warning24;
+            RefreshButton.Content = setupRequired ? "Добавить подключение" : "Проверить снова";
+            RefreshButton.ToolTip = setupRequired ? "Добавить или выбрать подключение. F5: проверить снова." : "F5";
 
             Dictionary<string, object> blocker = null;
             if (!Bridge.Ok(result))
             {
                 var blockers = result.ContainsKey("blockers") ? result["blockers"] as IEnumerable : null;
-                if (blockers != null) blocker = blockers.Cast<object>().OfType<Dictionary<string, object>>().FirstOrDefault();
+                if (blockers != null) blocker = blockers.Cast<object>().OfType<Dictionary<string, object>>().OrderBy(item => Flag(item, "setup_required")).FirstOrDefault();
                 if (blocker == null && isReadiness) blocker = checks.FirstOrDefault(item => !Flag(item, "passed"));
             }
             StatusText.Text = blocker == null ? Friendly(Bridge.Message(result)) : Text(blocker, "title", Bridge.Message(result));
+            if (StatusText.Text.Length > 56) StatusText.Text = "Нужна проверка";
             if (blocker == null && !Bridge.Ok(result) && Friendly(Bridge.Message(result)) != Bridge.Message(result)) StatusText.Text = "Windows не запустилась";
             if (isReadiness && Bridge.Ok(result)) StatusText.Text = RuntimeHeading(workState, gatewayState);
             NextStepText.Text = blocker == null ? (Bridge.Ok(result) ? "Сначала поднимется защищённое подключение, затем Windows." : Friendly(Bridge.Message(result))) : Text(blocker, "detail", Bridge.Message(result));
@@ -565,7 +642,21 @@ namespace WindowsClaude.Launcher
             // Restoring needs one short line; the full explanation stays on the Проверка page.
             if (blocker != null) { string detail = Text(blocker, "detail", ""); int stop = detail.IndexOf(". "); NextStepText.Text = stop > 0 ? detail.Substring(0, stop + 1) : detail; }
             NextActionButton.Style = (Style)FindResource(restore ? "Pill" : "SoftPill");
-            Show(NextActionButton, !Bridge.Ok(result));
+            Show(NextActionButton, !Bridge.Ok(result) && !stopAvailable);
+            if (!Bridge.Ok(result))
+            {
+                if (blocker == null) StatusText.Text = outcomeUnknown ? "Действие не подтверждено" : "Действие не завершено";
+                NextStepText.Text = "Открой «Проверка»: там причина и дальнейшие действия.";
+            }
+            if (isReadiness && Flag(blocker, "setup_required") && !outcomeUnknown)
+                NextStepText.Text = Text(blocker, "detail", "Добавь или выбери подключение для запуска Windows.");
+            if (Flag(Child(report, "capabilities"), "recover_session"))
+            {
+                StatusText.Text = "Windows завершилась с ошибкой";
+                NextStepText.Text = "Заверши прерванный сеанс перед новым запуском.";
+                suggestedAction = "recover_session"; NextActionButton.Content = "Завершить прерванный сеанс";
+                Show(NextActionButton, true); Show(StopButton, false);
+            }
 
             string displayState = DisplayState(report);
             if (Child(report, "windows_settings") != null && (displayState == "failed" || displayState == "unconfirmed") && blocker == null)
@@ -575,9 +666,9 @@ namespace WindowsClaude.Launcher
             UpdateHero(report, filesState);
             if (StatusText.Text != shownStatus) { shownStatus = StatusText.Text; Rise(StatusText, 0); Rise(NextStepText, 60); }
             string warning = runtimeActive ? Text(report, "network_warning", "") : "";
-            NetworkText.Text = warning; Show(NetworkText, warning.Length > 0);
+            NetworkText.Text = "Проверь подключение. Подробности в «Проверка»."; Show(NetworkText, warning.Length > 0 && Bridge.Ok(result));
 
-            string signature = new JavaScriptSerializer().Serialize(checks.Select(item => new object[] { Flag(item, "passed"), Text(item, "title", ""), Text(item, "detail", "") }).ToArray()) + Bridge.Message(result);
+            string signature = new JavaScriptSerializer().Serialize(checks.Select(item => new object[] { Flag(item, "passed"), Flag(item, "setup_required"), Text(item, "title", ""), Text(item, "detail", "") }).ToArray()) + Bridge.Message(result);
             if (signature != displayedChecks)
             {
                 displayedChecks = signature; CheckCards.Children.Clear();
@@ -585,26 +676,30 @@ namespace WindowsClaude.Launcher
                 var passedGrid = new WrapPanel { Margin = new Thickness(10, 7, 10, 7) };
                 foreach (var item in checks)
                 {
-                    var row = CheckRow(Flag(item, "passed"), Text(item, "title", "Проверка"), Text(item, "detail", ""));
+                    var row = CheckRow(Flag(item, "passed"), Text(item, "title", "Проверка"), Text(item, "detail", ""), Flag(item, "setup_required"));
                     if (Flag(item, "passed")) passedGrid.Children.Add(row); else CheckCards.Children.Add(row);
                 }
                 if (passedGrid.Children.Count > 0) CheckCards.Children.Add(passedGrid);
                 if (checks.Count == 0) CheckCards.Children.Add(new TextBlock { Text = Bridge.Message(result), Style = (Style)FindResource("Caption"), Margin = new Thickness(16, 6, 16, 10) });
             }
-            var lines = checks.Select(item => (Flag(item, "passed") ? "Готово: " : "Нужно исправить: ") + Text(item, "title", "Проверка") + Environment.NewLine + Text(item, "detail", "")).ToList();
+            var lines = checks.Select(item => (Flag(item, "passed") ? "Готово: " : Flag(item, "setup_required") ? "Настройка: " : "Нужно исправить: ") + Text(item, "title", "Проверка") + Environment.NewLine + Text(item, "detail", "")).ToList();
             if (checks.Count == 0) lines.Add(Bridge.Message(result));
-            if (!isReadiness && !Bridge.Ok(result)) lines.Insert(0, Bridge.Message(result));
+            if (operationResult != null && !Bridge.Ok(operationResult))
+                lines.Insert(0, Bridge.Message(operationResult) + Environment.NewLine + Text(operationResult, "detail", ""));
             if (warning.Length > 0) lines.Add(warning);
             string reportPath = Text(report, "diagnostic_report", "");
             if (reportPath.Length > 0) lines.Add("Отчёт: " + reportPath);
             ReportLocation.Text = reportPath.Length > 0 ? "Отчёт: " + reportPath : Text(report, "diagnostic_report_error", "");
             reportText = String.Join(Environment.NewLine + Environment.NewLine, lines);
             Busy(busy);
-            SettingsNote.Foreground = Grey;
-            SettingsNote.Text = runtimeActive ? "Настройки можно менять, когда Windows выключена." : "Сохраняется само, применится при следующем запуске.";
+            if (!settingsDirty)
+            {
+                SettingsNote.Foreground = Grey;
+                SettingsNote.Text = runtimeActive ? "Настройки можно менять, когда Windows выключена." : "Сохраняется само, применится при следующем запуске.";
+            }
         }
 
-        UIElement CheckRow(bool passed, string title, string detail)
+        UIElement CheckRow(bool passed, string title, string detail, bool setupRequired)
         {
             // A passed check is a small green tag with its detail in a tooltip.
             if (passed)
@@ -612,9 +707,9 @@ namespace WindowsClaude.Launcher
                     Child = new StackPanel { Orientation = Orientation.Horizontal, Children = {
                         new SymbolIcon { Symbol = SymbolRegular.Checkmark16, FontSize = 12, Foreground = GreenInk, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center },
                         new TextBlock { Text = title, FontSize = 12.5, Foreground = GreenInk, VerticalAlignment = VerticalAlignment.Center } } } };
-            var row = new DockPanel { Margin = new Thickness(16, 9, 12, 9), Background = Brushes.Transparent };
-            var dot = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = Hex("#FFF1DE"), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top,
-                Child = new SymbolIcon { Symbol = SymbolRegular.Warning16, FontSize = 12, Foreground = Hex("#B36200") } };
+            var row = new DockPanel { Margin = new Thickness(16, 9, 12, 9), Background = setupRequired ? BlueSoft : Brushes.Transparent };
+            var dot = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = setupRequired ? BlueSoft : Hex("#FFF1DE"), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top,
+                Child = new SymbolIcon { Symbol = setupRequired ? SymbolRegular.Globe16 : SymbolRegular.Warning16, FontSize = 12, Foreground = setupRequired ? BlueInk : Hex("#B36200") } };
             DockPanel.SetDock(dot, Dock.Left); row.Children.Add(dot);
             var text = new StackPanel { Children = { new TextBlock { Text = title, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Ink, TextTrimming = TextTrimming.CharacterEllipsis } } };
             if (detail.Length > 0) text.Children.Add(new TextBlock { Text = detail, Style = (Style)FindResource("Caption"), Margin = new Thickness(0, 1, 0, 0) });
@@ -742,7 +837,7 @@ namespace WindowsClaude.Launcher
             if (updateOffer == null || checkingUpdate) return;
             if (runtimeActive || busy || outcomeUnknown) { SetOperation("Сначала выключи Windows, потом обновляй."); return; }
             Keyboard.ClearFocus();
-            if (saveTimer.IsEnabled) { saveTimer.Stop(); if (!await SaveSettingsAsync()) return; }
+            if (!await CommitPendingSettingsAsync()) return;
             if (runtimeActive || busy || outcomeUnknown || closing) return;
             updating = true; updateCancel = new CancellationTokenSource(); Busy(true);
             StatusText.Text = "Обновляем Pocket Windows";
@@ -813,15 +908,19 @@ namespace WindowsClaude.Launcher
             if (trayIcon.Visible && !trayPromotionStarted) PromoteTrayIcon();
         }
 
-        void ShowTrayMenu()
+        TrayMenu.Item[] TrayItems()
         {
-            TrayMenu.ShowAt(Forms.Cursor.Position, new[]
+            bool canStop = !busy && pendingOutcome == null && (Flag(Child(readinessReport, "capabilities"), "recover_session") || (!outcomeUnknown && stopAvailable));
+            return new[]
             {
                 new TrayMenu.Item { Text = "Открыть панель", Icon = SymbolRegular.Open20, Tint = Blue, Run = delegate { ShowPanel(false, "tray menu"); } },
-                new TrayMenu.Item { Text = "Выключить Windows", Icon = SymbolRegular.Power20, Tint = Red, Enabled = stopAvailable && !busy && !outcomeUnknown,
-                    Run = async delegate { ShowPanel(false, "tray: stop Windows"); if (stopAvailable) await RunAction("stop", false); } }
-            });
+                new TrayMenu.Item { Text = "Выключить Windows", Icon = SymbolRegular.Power20, Tint = Red, Enabled = canStop,
+                    Run = async delegate { ShowPanel(false, "tray: stop Windows"); await StopSessionAsync(false); } },
+                new TrayMenu.Item { Text = "Выключить Windows и выйти", Icon = SymbolRegular.Power20, Tint = Red, Enabled = canStop || SessionStopped,
+                    Run = async delegate { ShowPanel(false, "tray: stop Windows and exit"); await StopSessionAsync(true); } }
+            };
         }
+        void ShowTrayMenu() { TrayMenu.ShowAt(Forms.Cursor.Position, TrayItems()); }
 
         // Windows registers the icon a moment after it appears; retry briefly, then give up quietly.
         void PromoteTrayIcon()
@@ -872,6 +971,13 @@ namespace WindowsClaude.Launcher
                 trayIcon.ShowBalloonTip(5000, "Pocket Windows", "Windows требует внимания. Открой панель двойным щелчком по значку.", Forms.ToolTipIcon.Warning);
             }
         }
+        internal void ShowExistingPanel()
+        {
+            if (closing || updateHandedOff) return;
+            closeRequested = false; closeAfterUpdateCancel = false;
+            ShowPanel(false, "another Launcher startup");
+        }
+
         void ShowPanel(bool home, string why)
         {
             bool wasHidden = !IsVisible;
@@ -896,14 +1002,33 @@ namespace WindowsClaude.Launcher
             else UiLog("poll: " + reason + " x" + attentionPolls + (panelHiddenForSession ? ", panel stays in the tray" : ""));
         }
 
-        void OnClosing(object sender, CancelEventArgs e)
+        async void OnClosing(object sender, CancelEventArgs e)
         {
+            if (closing) return;
+            if (updateHandedOff) { FinishClosing(); return; }
             if (updating && !updateHandedOff)
             { e.Cancel = true; closeAfterUpdateCancel = true; if (updateCancel != null) updateCancel.Cancel(); return; }
             // While Windows runs the tray icon is its only handle, so the panel can hide but never quit.
-            if (runtimeActive || outcomeUnknown || (busy && activeOperationAction == "start"))
+            if (runtimeActive || outcomeUnknown || pendingOutcome != null || (busy && activeOperationAction != "save-settings"))
             { e.Cancel = true; panelDismissedByUser = true; HidePanelForSession("closed by the user while Windows runs"); return; }
-            closing = true; lifecycleTimer.Stop(); saveTimer.Stop();
+            e.Cancel = true;
+            closeRequested = true;
+            if (closePending) return;
+            closePending = true;
+            try
+            {
+                await Dispatcher.Yield(DispatcherPriority.Background);
+                if (!await CommitPendingSettingsAsync()) return;
+                if (!closeRequested || runtimeActive || outcomeUnknown || pendingOutcome != null || busy || (startAttempted && !SessionStopped)) return;
+                FinishClosing();
+                Close();
+            }
+            finally { closePending = false; closeRequested = false; }
+        }
+
+        void FinishClosing()
+        {
+            closing = true; lifecycleTimer.Stop(); saveTimer.Stop(); toastTimer.Stop();
             if (trayIcon != null) { trayIcon.Visible = false; trayIcon.Dispose(); trayIcon = null; }
         }
 
@@ -928,6 +1053,9 @@ namespace WindowsClaude.Launcher
                     || workState != Text(state, "work", "unknown") || gatewayState != Text(state, "gateway", "unknown")
                     || Bridge.Ok(report) != Bridge.Ok(readinessReport) || Flag(report, "network_verified") != Flag(readinessReport, "network_verified")
                     || DisplayState(report) != DisplayState(readinessReport) || FileSharingState(report) != FileSharingState(readinessReport)
+                    || new JavaScriptSerializer().Serialize(Child(report, "checks")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "checks"))
+                    || new JavaScriptSerializer().Serialize(Child(report, "capabilities")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "capabilities"))
+                    || new JavaScriptSerializer().Serialize(Child(report, "force_stop")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "force_stop"))
                     || Text(report, "message", "") != Text(readinessReport, "message", "") || (pendingOutcome != null && pendingOutcome.IsCompleted);
                 if (changed) { Display(report); Busy(false); }
                 Attention(AttentionPolicy.Classify(true, workState, gatewayState, outcomeUnknown));
@@ -1011,8 +1139,14 @@ namespace WindowsClaude.Launcher
             }
         }
 
-        void ScheduleSave() { if (applyingSettings || !settingsLoaded) return; UpdateWindowsSummary(); saveTimer.Stop(); saveTimer.Start(); }
-        void CommitPendingSettings() { if (saveTimer.IsEnabled) { saveTimer.Stop(); var task = SaveSettingsAsync(); } }
+        void ScheduleSave() { if (applyingSettings || !settingsLoaded) return; settingsDirty = true; settingsRevision++; UpdateWindowsSummary(); saveTimer.Stop(); saveTimer.Start(); }
+        async Task<bool> CommitPendingSettingsAsync()
+        {
+            Keyboard.ClearFocus(); saveTimer.Stop();
+            if (settingsSave != null && !settingsSave.IsCompleted && !await settingsSave) return false;
+            while (settingsDirty) if (!await SaveSettingsAsync()) return false;
+            return true;
+        }
         void OnSettingChanged(object sender, RoutedEventArgs e) { ScheduleSave(); }
         void OnSettingEdited(object sender, KeyboardFocusChangedEventArgs e) { ScheduleSave(); }
         void OnNumberKey(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { Keyboard.ClearFocus(); ScheduleSave(); } }
@@ -1077,30 +1211,37 @@ namespace WindowsClaude.Launcher
             return true;
         }
 
-        async Task<bool> SaveSettingsAsync()
+        Task<bool> SaveSettingsAsync()
+        {
+            if (settingsSave == null || settingsSave.IsCompleted) settingsSave = SaveSettingsCoreAsync();
+            return settingsSave;
+        }
+        async Task<bool> SaveSettingsCoreAsync()
         {
             Dictionary<string, object> value; string error;
             if (!settingsLoaded || runtimeActive) return false;
             if (!TryGetSettings(out value, out error)) { SettingsNote.Text = error; SettingsNote.Foreground = Red; return false; }
             SettingsNote.Foreground = Grey;
             if (!BeginOperation("save-settings")) { saveTimer.Start(); return false; }
+            int revision = settingsRevision;
             Dictionary<string, object> completed = null;
             try
             {
                 completed = await Run("save-settings", value);
                 if (closing) return false;
+                operationResult = completed;
                 if (Bridge.Ok(completed))
                 {
-                    settingsLoaded = false; LoadSettings(completed);
+                    if (revision == settingsRevision) { settingsDirty = false; settingsLoaded = false; LoadSettings(completed); }
                     SetOperation("");
                     var check = await Run("diagnose", null);
                     if (!closing) Display(check);
-                    SettingsNote.Text = "Сохранено. Применится при следующем запуске.";
+                    if (!settingsDirty) SettingsNote.Text = "Сохранено. Применится при следующем запуске.";
                 }
                 else { SettingsNote.Text = Bridge.Message(completed); SettingsNote.Foreground = Red; SetOperation(Bridge.Message(completed)); if (Flag(completed, "outcome_unknown")) TrackUnknownOutcome(completed); }
                 return Bridge.Ok(completed);
             }
-            catch (Exception) { FailedAction("save-settings", completed); return false; }
+            catch (Exception) { FailedAction("save-settings", completed); SettingsNote.Text = Bridge.Message(operationResult); SettingsNote.Foreground = Red; return false; }
             finally { if (!closing) Busy(false); }
         }
 

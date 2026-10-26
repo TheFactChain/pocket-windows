@@ -16,6 +16,17 @@ import gateway_package as package
 
 
 class GatewayPackageTests(unittest.TestCase):
+    def test_same_release_can_be_revalidated_without_staging_space(self):
+        source = self.archive('v1')
+        package.install_package(self.root, *source)
+        with mock.patch.object(package.shutil, 'disk_usage', return_value=mock.Mock(free=0)):
+            self.assertEqual(package.install_package(self.root, *source)['version'], 'v1')
+
+    def test_missing_release_still_requires_staging_space(self):
+        with mock.patch.object(package.shutil, 'disk_usage', return_value=mock.Mock(free=0)):
+            with self.assertRaisesRegex(ValueError, 'space'):
+                package.install_package(self.root, *self.archive('v1'))
+
     def test_inspection_reads_only_header_and_does_not_claim_checksum_verification(self):
         package.install_package(self.root, *self.archive('v1'))
         original = package.locked_read

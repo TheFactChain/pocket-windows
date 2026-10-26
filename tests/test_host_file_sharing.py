@@ -7,6 +7,7 @@ import unittest
 import shutil
 import os
 import subprocess
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import portable_app as app
@@ -14,6 +15,62 @@ import runtime_config
 
 
 class FileSharingTests(unittest.TestCase):
+    def test_unicode_medium_round_trips_through_guest_reader(self):
+        import file_share_carrier
+        root = Path(__file__).resolve().parents[1]
+        compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+        with tempfile.TemporaryDirectory(prefix='unicode-files-') as temporary:
+            output = Path(temporary)
+            executable = output / 'GuestFilesRegression.exe'
+            command = [str(compiler), '/nologo', '/target:exe', '/platform:x64', '/main:GuestFilesRegression',
+                       '/reference:System.Web.Extensions.dll', '/reference:System.Windows.Forms.dll',
+                       '/reference:Microsoft.CSharp.dll', '/out:' + str(executable),
+                       *map(str, [root / 'guest/files/GuestFiles.cs', root / 'guest/GuestEnvironment.cs',
+                                  root / 'guest/GuestClipboard.cs', root / 'tests/GuestFilesRegression.cs'])]
+            build = subprocess.run(command, capture_output=True, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
+            for label in ('Я' * 128, '📁' * 128):
+                config = {'schema': 1, 'session_nonce': 'c' * 32, 'username': 'WCP_session',
+                          'password': 'a' * 128, 'shares': [
+                              {'name': 'PC_' + str(index), 'label': label, 'preferred_letter': ''}
+                              for index in range(64)]}
+                with self.subTest(label=label[:1]):
+                    medium = file_share_carrier.Medium(config, b'MZfixture', base_directory=output / 'private')
+                    try:
+                        with medium.hold():
+                            path = medium.path / 'HOSTFILS.JSN'
+                            full = json.dumps(config, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                            if len(full) > 32768:
+                                self.assertLessEqual(path.stat().st_size, 32768)
+                                self.assertEqual(json.loads(path.read_bytes()), dict(config, shares=[]))
+                                self.assertEqual((medium.path / 'HOSTFIL2.JSN').read_bytes(), full)
+                                legacy = subprocess.run([str(executable), str(path), '--legacy'], capture_output=True, timeout=90,
+                                                        creationflags=subprocess.CREATE_NO_WINDOW)
+                                self.assertEqual(legacy.returncode, 0, (legacy.stdout + legacy.stderr).decode(errors='replace'))
+                            else:
+                                self.assertEqual(path.read_bytes(), full)
+                                self.assertFalse((medium.path / 'HOSTFIL2.JSN').exists())
+                            check = subprocess.run([str(executable), str(path)], capture_output=True, timeout=90,
+                                                   creationflags=subprocess.CREATE_NO_WINDOW)
+                            self.assertEqual(check.returncode, 0, (check.stdout + check.stderr).decode(errors='replace'))
+                    finally:
+                        medium.cleanup(guest_stopped=True)
+            oversized = output / 'oversized.json'
+            oversized.write_bytes(b' ' * 65537)
+            check = subprocess.run([str(executable), str(oversized), '--reject'], capture_output=True, timeout=90,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(check.returncode, 0, (check.stdout + check.stderr).decode(errors='replace'))
+
+    def test_oversized_medium_is_rejected_before_private_writes(self):
+        import file_share_carrier
+        config = {'session_nonce': 'c' * 32, 'shares': [], 'padding': 'я' * 32769}
+        with mock.patch.object(file_share_carrier.private, '_api') as api, \
+             mock.patch.object(file_share_carrier.private, '_private_base') as private_base:
+            with self.assertRaisesRegex(ValueError, 'too large'):
+                file_share_carrier.Medium(config, b'MZfixture', base_directory=Path(tempfile.gettempdir()) / 'unused-private')
+            api.assert_not_called()
+            private_base.assert_not_called()
+
     def test_native_protocol_store_and_guest_regressions(self):
         root = Path(__file__).resolve().parents[1]
         component = root / 'runtime/host-files'

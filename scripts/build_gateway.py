@@ -23,7 +23,7 @@ from file_snapshot import locked_read, QEMU_IMG_SHA256
 from profile_store import _pinned_directory, _plain
 import launch_runtime as runtime
 
-GATEWAY_VERSION = "2026.10.26.1"
+GATEWAY_VERSION = "2026.10.26.2"
 DELIVERY_NAMES = ("install.sh", "sing-box", "session.py", "gateway_profile.py",
                   "connection_profile.py", "wc-session.service")
 DEBIAN_NAME = "debian-13.7.0-amd64-netinst.iso"

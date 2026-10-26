@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -19,6 +20,40 @@ if SCRIPT.exists():
 
 
 class PortableAppTests(unittest.TestCase):
+    def test_stop_keeps_draining_until_child_finishes(self):
+        from concurrent.futures import ThreadPoolExecutor
+        reading, finish = threading.Event(), threading.Event()
+        process = mock.Mock(returncode=0)
+        def communicate(timeout=None):
+            reading.set()
+            if timeout is not None:
+                raise app.subprocess.TimeoutExpired('stop fixture', timeout)
+            if not finish.wait(5):
+                raise AssertionError('test did not release the child')
+            return '', ''
+        process.communicate.side_effect = communicate
+        with mock.patch.object(app.subprocess, 'Popen', return_value=process), \
+                mock.patch.object(app.runtime, 'engine_processes', return_value={}), ThreadPoolExecutor(1) as pool:
+            result = pool.submit(app.stop_runtime, Path('fixture'))
+            try:
+                self.assertTrue(reading.wait(5))
+                self.assertFalse(result.done(), 'A live stop child must stay pending in the bridge')
+            finally:
+                finish.set()
+            self.assertEqual(result.result(timeout=5)['code'], 'stopped')
+
+    def test_recovery_refusal_keeps_the_concrete_reason_in_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for action, method in (('recover-session', 'recover_session'), ('force-stop', 'force_stop')):
+                output = io.StringIO()
+                with self.subTest(action=action), \
+                        mock.patch.object(sys, 'argv', ['app', '--root', temporary, '--action', action]), \
+                        mock.patch.object(app, 'read_request', return_value={}), \
+                        mock.patch.object(app.runtime, method, side_effect=RuntimeError('Windows process identity changed')), \
+                        contextlib.redirect_stdout(output):
+                    self.assertEqual(app.main(), 1)
+                    self.assertEqual(json.loads(output.getvalue())['detail'], 'Windows process identity changed')
+
     def test_diagnose_busy_initial_check_returns_valid_json(self):
         import package_integrity
         with tempfile.TemporaryDirectory() as temporary:
@@ -235,6 +270,24 @@ class PortableAppTests(unittest.TestCase):
             self.assertFalse(report['capabilities']['recover_session'])
             self.assertNotEqual(report['checks']['runtime_state']['action'],'recover_session')
 
+    def test_terminal_supervisor_draining_gateway_does_not_hide_safe_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            supervisor = {'pid':501, 'created_filetime':134000000000000000,
+                          'image':str(root/'runtime/python-3.12.14/python.exe')}
+            for phase in ('error', 'stopped'):
+                with self.subTest(phase=phase), \
+                        mock.patch.object(app.runtime, 'discover_guests', return_value={'gateway':{'state':'gateway'}}), \
+                        mock.patch.object(app.runtime, 'read_json', return_value={'status':'running'}), \
+                        mock.patch.object(app.runtime, 'controller_live', return_value=True), \
+                        mock.patch.object(app.runtime, 'gateway_ready', return_value=True), \
+                        mock.patch.object(app.runtime, 'recovery_snapshot', return_value={'available':True}), \
+                        mock.patch.object(app.runtime, 'active_receipt', return_value=(root/'receipt.json', {'phase':phase,'supervisor':supervisor})), \
+                        mock.patch.object(app.runtime, 'process_identity', return_value=supervisor):
+                    report = app.preflight(root, host=self.facts())
+                self.assertTrue(report['capabilities']['recover_session'])
+                self.assertEqual(report['checks']['runtime_state']['action'], 'recover_session')
+
     def test_owned_failed_or_test_guest_is_stoppable_but_blocks_new_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             for state in ({'status': 'connection-failed'}, {'status': 'running', 'test_only': True}):
@@ -300,9 +353,11 @@ class PortableAppTests(unittest.TestCase):
             with mock.patch('profile_store._unprotect', side_effect=app.SecretsUnavailable('private failure')):
                 report = app.preflight(root, host=self.facts())
             self.assertFalse(report['checks']['connection']['passed'])
+            self.assertFalse(report['checks']['connection'].get('setup_required', False))
             self.assertTrue(report['connection']['selected_profile']['needs_credentials'])
             blocker = next(item for item in report['blockers'] if item['code'] == 'connection')
             self.assertEqual(blocker['action'], 'connection')
+            self.assertFalse(blocker.get('setup_required', False))
             self.assertIn('заново', blocker['detail'])
             self.assertEqual(report['connection']['selected_profile']['name'], 'Test proxy')
             self.assertEqual(report['connection']['selected_profile']['revision_id'], view['revision_id'])
@@ -311,6 +366,33 @@ class PortableAppTests(unittest.TestCase):
             self.assertIsNone(report['connection']['applied_revision_id'])
             self.assertEqual(report['runtime']['work'], 'stopped')
             self.assertNotIn('never-in-diagnostics', json.dumps(report))
+
+    def test_missing_connection_is_setup_and_still_blocks_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = app.preflight(Path(temporary), host=self.facts())
+            connection = report['checks']['connection']
+            self.assertFalse(report['ok'])
+            self.assertFalse(connection['passed'])
+            self.assertTrue(connection.get('setup_required', False))
+            blocker = next(item for item in report['blockers'] if item['code'] == 'connection')
+            self.assertTrue(blocker.get('setup_required', False))
+            self.assertEqual(blocker['action'], 'connection')
+            self.assertEqual(blocker['action_label'], 'Добавить подключение')
+            self.assertFalse(report['checks']['guest_files']['passed'])
+            self.assertFalse(report['checks']['guest_files'].get('setup_required', False))
+
+    def test_unreadable_connection_store_is_an_error_not_initial_setup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'profiles').mkdir()
+            (root / 'profiles/profiles.json').write_text('{', encoding='utf-8')
+            report = app.preflight(root, host=self.facts())
+            self.assertFalse(report['ok'])
+            self.assertFalse(report['checks']['connection']['passed'])
+            self.assertFalse(report['checks']['connection'].get('setup_required', False))
+            blocker = next(item for item in report['blockers'] if item['code'] == 'connection')
+            self.assertFalse(blocker.get('setup_required', False))
+            self.assertIn('Не удалось прочитать', blocker['detail'])
 
     def test_settings_roundtrip_at_a_root_with_spaces(self):
         with tempfile.TemporaryDirectory(prefix='portable app ') as temporary:

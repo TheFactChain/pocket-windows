@@ -49,7 +49,7 @@ class AppUpdateTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                for value in ('valid', 'corrupt', 'size', 'cancel', 'unavailable'):
+                for value in ('valid', 'corrupt', 'size', 'cancel', 'unavailable', 'recovery'):
                     mode[0] = value
                     with self.subTest(value=value):
                         result = subprocess.run([str(executable), 'http://127.0.0.1:' + str(server.server_port), value],

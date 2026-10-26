@@ -297,35 +297,43 @@ def main():
             try:
                 health(probe_deadline)
                 remaining(probe_deadline)
+                if stopping:
+                    break
+                if not connected:
+                    failure_code = 'NFT_RULES_FAILED'
+                    try:
+                        apply_rules(firewall(session))
+                    except Exception as error:
+                        raise RuntimeError('Firewall application failed') from error
+                    connected = True
+                    if stopping:
+                        break
+                    failure_code = 'CONNECTION_LOST' if ever_ready else 'CONNECTION_FAILED'
+                    remaining(probe_deadline)
+                    ever_ready, retry = True, 2
+                    emit('READY', session)
+                else:
+                    emit('HEALTHY', session)
             except ssl.SSLCertVerificationError:
                 raise
             except (OSError, ValueError):
                 if stopping:
                     break
+                if connected or ever_ready:
+                    failure_code = 'NFT_RULES_FAILED'
+                    apply_rules(firewall(session, connected=False))
+                    connected = False
+                failure_code = 'CONNECTION_LOST' if ever_ready else 'CONNECTION_FAILED'
                 if not ever_ready:
                     if time.monotonic() >= deadline:
                         raise ValueError('Initial connection failed') from None
                 else:
-                    failure_code = 'NFT_RULES_FAILED'
-                    apply_rules(firewall(session, connected=False))
-                    connected = False
                     emit('RECONNECTING', session, 'CONNECTION_LOST')
                 if not wait_delay(retry, lambda: stopping):
                     break
                 if ever_ready:
                     retry = min(15, retry * 2)
                 continue
-            if stopping:
-                break
-            remaining(probe_deadline)
-            if not connected:
-                failure_code = 'NFT_RULES_FAILED'
-                apply_rules(firewall(session))
-                remaining(probe_deadline)
-                connected, ever_ready, retry = True, True, 2
-                emit('READY', session)
-            else:
-                emit('HEALTHY', session)
             if not wait_delay(10, lambda: stopping or any(child.poll() is not None for child in children)) and stopping:
                 break
     except Exception:
