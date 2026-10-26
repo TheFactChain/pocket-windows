@@ -19,7 +19,7 @@ namespace WindowsClaude.Launcher
         const string GitHubApi = "https://api.github.com/repos/nekontritce11123-lab/pocket-windows/releases/latest";
         const string AssetPrefix = "https://github.com/nekontritce11123-lab/pocket-windows/releases/download/";
         const long MaxPackage = 8L * 1024 * 1024 * 1024;
-        internal sealed class Offer { public string Id, ZipUrl, ShaUrl; public long Bytes; }
+        internal sealed class Offer { public string Id, ZipUrl, ShaUrl, IndexUrl, IndexShaUrl; public long Bytes; }
         internal sealed class CheckResult { public Offer Offer; public string Title, Message; }
         internal sealed class Package { public string Zip, Sha, Id, Work, Tools, Root; }
 
@@ -92,6 +92,29 @@ namespace WindowsClaude.Launcher
             }
         }
 
+        static async Task<byte[]> ReadBytes(string url, int maximum, CancellationToken cancel)
+        {
+            var request = Open(url);
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel))
+            using (var output = new MemoryStream())
+            {
+                deadline.CancelAfter(TimeSpan.FromSeconds(30));
+                using (deadline.Token.Register(request.Abort))
+                using (var response = await request.GetResponseAsync().ConfigureAwait(false))
+                using (var input = response.GetResponseStream())
+                {
+                    if (response.ContentLength > maximum) throw new InvalidDataException("Индекс обновления слишком большой.");
+                    byte[] buffer = new byte[4096]; int read;
+                    while ((read = await input.ReadAsync(buffer, 0, buffer.Length, deadline.Token).ConfigureAwait(false)) > 0)
+                    {
+                        if (output.Length + read > maximum) throw new InvalidDataException("Индекс обновления слишком большой.");
+                        output.Write(buffer, 0, read);
+                    }
+                }
+                return output.ToArray();
+            }
+        }
+
         internal static async Task<CheckResult> CheckAsync(string currentId)
         {
             if (Parts(currentId) == null) return new CheckResult { Title = "Версия не определена", Message = "У этой копии не указана версия выпуска. Обновление доступно в готовом комплекте." };
@@ -116,10 +139,23 @@ namespace WindowsClaude.Launcher
             string shaUrl = sha.ContainsKey("browser_download_url") ? Convert.ToString(sha["browser_download_url"]) : "";
             if (!zip.ContainsKey("size") || !Int64.TryParse(Convert.ToString(zip["size"]), out bytes) || bytes <= 0 || bytes > MaxPackage || !AssetUrl(zipUrl) || !AssetUrl(shaUrl))
                 throw new InvalidDataException("Ссылки или размер пакета обновления не прошли проверку.");
-            return new CheckResult { Offer = new Offer { Id = id, ZipUrl = zipUrl, ShaUrl = shaUrl, Bytes = bytes }, Title = "Доступно обновление", Message = "Можно установить новую версию. Личные данные сохранятся." };
+            var offer = new Offer { Id = id, ZipUrl = zipUrl, ShaUrl = shaUrl, Bytes = bytes };
+            string indexName = "Pocket-Windows-" + id + "-update.json";
+            var index = items.SingleOrDefault(item => item.ContainsKey("name") && Convert.ToString(item["name"]) == indexName);
+            var indexSha = items.SingleOrDefault(item => item.ContainsKey("name") && Convert.ToString(item["name"]) == indexName + ".sha256");
+            if (index != null && indexSha != null)
+            {
+                offer.IndexUrl = index.ContainsKey("browser_download_url") ? Convert.ToString(index["browser_download_url"]) : "";
+                offer.IndexShaUrl = indexSha.ContainsKey("browser_download_url") ? Convert.ToString(indexSha["browser_download_url"]) : "";
+                long indexBytes;
+                if (!AssetUrl(offer.IndexUrl) || !AssetUrl(offer.IndexShaUrl) || !index.ContainsKey("size")
+                    || !Int64.TryParse(Convert.ToString(index["size"]), out indexBytes) || indexBytes <= 0 || indexBytes > 16 * 1024 * 1024)
+                    throw new InvalidDataException("Индекс обновления не прошёл проверку.");
+            }
+            return new CheckResult { Offer = offer, Title = "Доступно обновление", Message = "Можно установить новую версию. Личные данные сохранятся." };
         }
 
-        internal static async Task<Package> DownloadAsync(Offer offer, Action<int> progress, CancellationToken cancel)
+        internal static async Task<Package> DownloadAsync(Offer offer, Action<int> progress, CancellationToken cancel, string root = null)
         {
             Package package = null;
             try
@@ -131,6 +167,12 @@ namespace WindowsClaude.Launcher
                 string work = Path.Combine(Path.GetTempPath(), "pocket-windows-updater-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(work);
                 package = new Package { Work = work, Zip = Path.Combine(work, "app.zip"), Sha = sha.ToLowerInvariant(), Id = offer.Id };
+                if (offer.IndexUrl != null)
+                {
+                    await DownloadChangesAsync(root ?? Bridge.Root, package, offer, progress, cancel).ConfigureAwait(false);
+                    cancel.ThrowIfCancellationRequested();
+                    return package;
+                }
                 var request = Open(offer.ZipUrl);
                 using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel))
                 using (timeout.Token.Register(request.Abort))
@@ -169,6 +211,111 @@ namespace WindowsClaude.Launcher
             }
         }
 
+        static async Task DownloadChangesAsync(string root, Package package, Offer offer, Action<int> progress, CancellationToken cancel)
+        {
+            if (!AssetUrl(offer.IndexUrl) || !AssetUrl(offer.IndexShaUrl)) throw new InvalidDataException("Ссылка на индекс обновления повреждена.");
+            string expected = (await ReadText(offer.IndexShaUrl, 4096, cancel).ConfigureAwait(false)).Trim().Split((char[])null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (expected == null || !Regex.IsMatch(expected, @"\A[a-fA-F0-9]{64}\z")) throw new InvalidDataException("Контрольная сумма индекса повреждена.");
+            byte[] bytes = await ReadBytes(offer.IndexUrl, 16 * 1024 * 1024, cancel).ConfigureAwait(false);
+            using (var hash = SHA256.Create())
+                if (!String.Equals(BitConverter.ToString(hash.ComputeHash(bytes)).Replace("-", ""), expected, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Индекс обновления повреждён. Программа не изменена.");
+            var value = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 }.DeserializeObject(new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF')) as Dictionary<string, object>;
+            object releaseValue, archiveValue, id, url, size, archiveSha;
+            var release = value != null && value.TryGetValue("release", out releaseValue) ? releaseValue as Dictionary<string, object> : null;
+            var archive = value != null && value.TryGetValue("archive", out archiveValue) ? archiveValue as Dictionary<string, object> : null;
+            long count;
+            if (release == null || archive == null || !release.TryGetValue("release_id", out id) || !Object.Equals(id, offer.Id)
+                || !archive.TryGetValue("url", out url) || !Object.Equals(url, offer.ZipUrl)
+                || !archive.TryGetValue("bytes", out size) || !Int64.TryParse(Convert.ToString(size), out count) || count != offer.Bytes
+                || !archive.TryGetValue("sha256", out archiveSha) || !Object.Equals(archiveSha, package.Sha))
+                throw new InvalidDataException("Индекс не соответствует выбранному выпуску.");
+            string indexPath = Path.Combine(package.Work, "update.json");
+            File.WriteAllBytes(indexPath, bytes);
+            root = Path.GetFullPath(root);
+            string python = Path.Combine(root, "runtime", "python-3.12.14", "python.exe");
+            string helper = Path.Combine(root, "scripts", "app_download.py");
+            foreach (string path in new[] { python, helper })
+                if (!File.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Не найден компонент выборочного обновления. Восстанови файлы программы.");
+            var args = new[] { "-X", "utf8", "-I", "-B", helper, "--index", indexPath, "--index-sha256", expected.ToLowerInvariant(), "--target", root, "--output", package.Zip };
+            var info = new ProcessStartInfo(python, String.Join(" ", args.Select(Bridge.Quote)))
+                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = package.Work, RedirectStandardOutput = true, RedirectStandardError = true };
+            using (var process = Process.Start(info))
+            {
+                var output = ReadDownloadOutput(process.StandardOutput, progress);
+                var error = ReadHelperError(process.StandardError);
+                try
+                {
+                    while (!process.HasExited)
+                    {
+                        cancel.ThrowIfCancellationRequested();
+                        if (output.IsFaulted) await output.ConfigureAwait(false);
+                        if (error.IsFaulted) await error.ConfigureAwait(false);
+                        await Task.Delay(100, cancel).ConfigureAwait(false);
+                    }
+                    cancel.ThrowIfCancellationRequested();
+                    var result = await output.ConfigureAwait(false);
+                    await error.ConfigureAwait(false);
+                    object digest, length;
+                    long total;
+                    if (process.ExitCode != 0 || result == null || !result.TryGetValue("sha256", out digest) || !(digest is string)
+                        || !Regex.IsMatch((string)digest, @"\A[a-f0-9]{64}\z") || !result.TryGetValue("bytes", out length)
+                        || !Int64.TryParse(Convert.ToString(length), out total) || total <= 0 || total > MaxPackage
+                        || !File.Exists(package.Zip) || (File.GetAttributes(package.Zip) & FileAttributes.ReparsePoint) != 0
+                        || new FileInfo(package.Zip).Length != total)
+                        throw new InvalidDataException("Не удалось загрузить изменённые файлы. Программа не изменена.");
+                    using (var stream = File.OpenRead(package.Zip))
+                    using (var hash = SHA256.Create())
+                        if (!String.Equals(BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", ""), (string)digest, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("Загруженное обновление повреждено.");
+                    package.Sha = (string)digest;
+                }
+                finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(); } }
+            }
+        }
+
+        static async Task<Dictionary<string, object>> ReadDownloadOutput(StreamReader reader, Action<int> progress)
+        {
+            var line = new StringBuilder(); var buffer = new char[1024]; int read, total = 0;
+            Dictionary<string, object> result = null;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+            {
+                total += read;
+                if (total > 1024 * 1024) throw new InvalidDataException("Ответ загрузчика слишком большой.");
+                for (int index = 0; index < read; index++)
+                {
+                    char character = buffer[index];
+                    if (character == '\r') continue;
+                    if (character != '\n')
+                    {
+                        if (line.Length >= 8192) throw new InvalidDataException("Ответ загрузчика слишком большой.");
+                        line.Append(character); continue;
+                    }
+                    if (line.Length == 0) continue;
+                    var value = new JavaScriptSerializer { MaxJsonLength = 8192 }.Deserialize<Dictionary<string, object>>(line.ToString());
+                    line.Clear();
+                    object percent;
+                    if (value == null || result != null) throw new InvalidDataException("Ответ загрузчика повреждён.");
+                    if (value.TryGetValue("progress", out percent))
+                    {
+                        if (!(percent is int) || (int)percent < 0 || (int)percent > 100) throw new InvalidDataException("Неверный ход загрузки.");
+                        progress((int)percent);
+                    }
+                    else result = value;
+                }
+            }
+            if (line.Length != 0) throw new InvalidDataException("Ответ загрузчика не завершён.");
+            return result;
+        }
+
+        static async Task ReadHelperError(StreamReader reader)
+        {
+            char[] buffer = new char[1024]; int read, total = 0;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                if ((total += read) > 65536) throw new InvalidDataException("Ответ загрузчика слишком большой.");
+        }
+
         internal static async Task PrepareAsync(string root, Package package, CancellationToken cancel)
         {
             package.Root = Path.GetFullPath(root).TrimEnd('\\');
@@ -178,7 +325,7 @@ namespace WindowsClaude.Launcher
                 Copy(Path.Combine(root, "runtime", "python-3.12.14"), Path.Combine(package.Tools, "py"), cancel);
                 Copy(Path.Combine(root, "scripts"), Path.Combine(package.Tools, "scripts"), cancel);
             }, cancel).ConfigureAwait(false);
-            var info = Command(package.Tools, "check-app", "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id);
+            var info = Command(package.Tools, "check-app", "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id, "--target", root);
             info.RedirectStandardOutput = true; info.RedirectStandardError = true;
             using (var process = Process.Start(info))
             {

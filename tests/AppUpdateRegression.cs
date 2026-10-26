@@ -56,17 +56,20 @@ internal static class AppUpdateRegression
             var result = AppUpdate.CheckAsync("2026.10.24.13").GetAwaiter().GetResult();
             if (args[1] == "unavailable") { Assert(result.Offer == null && result.Message.Contains("пакет"), "Missing asset must be explained"); return 0; }
             Assert(result.Offer != null && result.Offer.Id == "2026.10.25.1", "Expected complete update offer");
+            bool indexed = args[1].StartsWith("indexed-", StringComparison.Ordinal);
+            Assert((result.Offer.IndexUrl != null) == indexed, "Index assets must be offered as a complete pair");
             var cancel = new CancellationTokenSource();
             if (args[1] == "cancel") cancel.Cancel();
+            if (args[1] == "indexed-cancel") cancel.CancelAfter(500);
             try
             {
-                var package = AppUpdate.DownloadAsync(result.Offer, delegate(int percent) { Assert(percent >= 0 && percent <= 100, "progress range"); }, cancel.Token).GetAwaiter().GetResult();
-                Assert(args[1] == "valid", "Bad/cancelled download must not succeed");
+                var package = AppUpdate.DownloadAsync(result.Offer, delegate(int percent) { Assert(percent >= 0 && percent <= 100, "progress range"); }, cancel.Token, args.Length > 2 ? args[2] : null).GetAwaiter().GetResult();
+                Assert(args[1] == "valid" || args[1] == "index-missing" || args[1] == "indexed-valid", "Bad/cancelled download must not succeed");
                 Assert(File.ReadAllText(package.Zip) == "test package", "Downloaded bytes");
                 AppUpdate.Discard(package);
             }
-            catch (OperationCanceledException) { Assert(args[1] == "cancel", "Unexpected cancellation"); }
-            catch (InvalidDataException) { Assert(args[1] == "corrupt" || args[1] == "size", "Unexpected validation failure"); }
+            catch (OperationCanceledException) { Assert(args[1] == "cancel" || args[1] == "indexed-cancel", "Unexpected cancellation"); }
+            catch (InvalidDataException) { Assert(args[1] == "corrupt" || args[1] == "size" || indexed && args[1] != "indexed-valid", "Unexpected validation failure"); }
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }

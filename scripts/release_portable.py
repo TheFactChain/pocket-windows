@@ -771,7 +771,8 @@ def package_app(release, base=None):
     light = dict(manifest, artifacts={}, omitted=omitted, manual_acceptance=None)
     name = 'Pocket-Windows-' + manifest['release_id'] + '-app.zip'
     archive = release / name
-    if archive.exists():
+    index = release / ('Pocket-Windows-' + manifest['release_id'] + '-update.json')
+    if archive.exists() or (base is None and any(path.exists() for path in (index, index.with_suffix('.json.sha256')))):
         raise FileExistsError('Light package already exists')
     with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
         bundle.writestr('RELEASE.json', json_bytes(light))
@@ -782,7 +783,48 @@ def package_app(release, base=None):
     (release / (name + '.sha256')).write_text(digest + '  ' + name + '\n', encoding='ascii')
     # Old launchers need a bridge release before packages that introduce new paths.
     added = sorted(row['path'] for row in manifest['common_files'] if known and row['path'] not in known and not row['path'].startswith(pack.RUNTIME_PREFIXES))
-    return {'package': str(archive), 'bytes': archive.stat().st_size, 'sha256': digest, 'omitted': len(omitted), 'new_application_files': added}
+    result = {'package': str(archive), 'bytes': archive.stat().st_size, 'sha256': digest, 'omitted': len(omitted), 'new_application_files': added}
+    if base is None:
+        atomic_json(index, app_update_index(archive, light, digest))
+        index_digest = _sha256_file(index)
+        index.with_suffix('.json.sha256').write_text(index_digest + '  ' + index.name + '\n', encoding='ascii')
+        result.update(index=str(index), index_sha256=index_digest, index_bytes=index.stat().st_size)
+    return result
+
+
+def app_update_index(archive, manifest, digest):
+    """Locate raw compressed members so clients can fetch only files they need."""
+    archive = absolute(archive)
+    rows = validate_common_records(manifest['common_files'])
+    if manifest.get('omitted'):
+        raise ValueError('An update index requires a complete application package')
+    files = []
+    with _pinned_directory(archive.parent, create=False), locked_read(archive) as incoming:
+        size = os.fstat(incoming.fileno()).st_size
+        with zipfile.ZipFile(incoming) as bundle:
+            entries = bundle.infolist()
+            expected = {'RELEASE.json', *('app/' + row['path'] for row in rows)}
+            if len(entries) != len(expected) or {entry.filename for entry in entries} != expected:
+                raise ValueError('Update ZIP differs from its application inventory')
+            for row in rows:
+                entry = bundle.getinfo('app/' + row['path'])
+                if entry.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) or entry.flag_bits & 1:
+                    raise ValueError('Unsupported indexed ZIP member')
+                incoming.seek(entry.header_offset)
+                header = incoming.read(30)
+                if len(header) != 30 or header[:4] != b'PK\x03\x04':
+                    raise ValueError('Invalid indexed ZIP local header')
+                # ZIP64 changes the extra data, not the fixed name/extra length fields.
+                offset = entry.header_offset + 30 + int.from_bytes(header[26:28], 'little') + int.from_bytes(header[28:30], 'little')
+                if entry.file_size != row['bytes'] or offset + entry.compress_size > size:
+                    raise ValueError('Indexed ZIP member differs from inventory')
+                files.append({'path': row['path'], 'offset': offset,
+                              'compressed_bytes': entry.compress_size, 'method': entry.compress_type})
+    release_id = manifest['release_id']
+    return {'schema': 1, 'release': manifest,
+            'archive': {'url': 'https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v'
+                        + release_id + '/Pocket-Windows-' + release_id + '-app.zip',
+                        'bytes': size, 'sha256': digest}, 'files': files}
 
 
 def _sha256_file(path):
@@ -845,14 +887,27 @@ def unpack_app(archive, sha256, stage):
     return verify_release(stage)
 
 
-def check_app(archive, sha256, release_id):
+def check_app(archive, sha256, release_id, target=None):
     stage = Path(tempfile.mkdtemp(prefix='pocket-windows-check-', dir=absolute(archive).parent))
     try:
         manifest = unpack_app(archive, sha256, stage)
         if manifest['release_id'] != release_id:
             raise ValueError('Downloaded release differs from the offered version')
         if manifest.get('omitted'):
-            raise ValueError('Automatic updates require a complete application package')
+            if target is None:
+                raise ValueError('Automatic updates require a complete application package or a verified target')
+            target = absolute(target)
+            omitted = set(manifest['omitted'])
+            with _pinned_directory(target, create=False):
+                for row in manifest['common_files']:
+                    if row['path'] not in omitted:
+                        continue
+                    try:
+                        actual = file_record(pack.file_under(target, row['path']), row['path'])
+                    except (OSError, ValueError):
+                        raise RuntimeError('An omitted update file is missing or unsafe: ' + row['path']) from None
+                    if actual != row:
+                        raise RuntimeError('An omitted update file differs from the new release: ' + row['path'])
         return {'release_id': manifest['release_id'], 'checked': True}
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -894,7 +949,7 @@ def run_app_update(target, pid, created, archive=None, sha256=None, release_id=N
             rollback_update(target)
             result.update(status='rolled_back', message='Предыдущая версия восстановлена. Можно повторить обновление.')
         else:
-            check_app(archive, sha256, release_id)
+            check_app(archive, sha256, release_id, target=target)
             installed = install_app(archive, sha256, target)
             if installed['release_id'] != release_id:
                 raise RuntimeError('Installed version differs from the offered release')
@@ -950,6 +1005,7 @@ def main():
     check.add_argument('--zip', type=Path, required=True)
     check.add_argument('--sha256', required=True)
     check.add_argument('--release-id', required=True)
+    check.add_argument('--target', type=Path)
     runner = commands.add_parser('run-app-update')
     runner.add_argument('--target', type=Path, required=True)
     runner.add_argument('--wait-pid', type=int, required=True)
@@ -976,7 +1032,7 @@ def main():
     elif args.command == 'install-app':
         result = install_app(args.zip, args.sha256, args.target)
     elif args.command == 'check-app':
-        result = check_app(args.zip, args.sha256, args.release_id)
+        result = check_app(args.zip, args.sha256, args.release_id, target=args.target)
     elif args.command == 'run-app-update':
         result = run_app_update(args.target, args.wait_pid, args.wait_created,
                                 args.zip, args.sha256, args.release_id, args.recover)

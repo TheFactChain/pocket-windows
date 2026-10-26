@@ -828,7 +828,7 @@ namespace WindowsClaude.Launcher
             CheckUpdatesButton.IsEnabled = !checkingUpdate && !updating && !updateHandedOff;
             InstallUpdateButton.Content = updating ? "Отменить" : "Обновить";
             InstallUpdateButton.IsEnabled = !checkingUpdate && !updateHandedOff && (updating || (!busy && !runtimeActive && !outcomeUnknown));
-            if (offered) UpdatePackageText.Text = "Пакет " + updateOffer.Id + ", " + Math.Ceiling(updateOffer.Bytes / 1048576.0).ToString("0") + " МБ";
+            if (offered) UpdatePackageText.Text = updateOffer.IndexUrl != null ? "Загружаются только изменённые файлы" : "Пакет " + updateOffer.Id + ", " + Math.Ceiling(updateOffer.Bytes / 1048576.0).ToString("0") + " МБ";
         }
 
         async void OnUpdate(object sender, RoutedEventArgs e)

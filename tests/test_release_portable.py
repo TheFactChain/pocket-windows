@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('release_portable', ROOT / 'scripts/release_portable.py')
@@ -533,6 +534,89 @@ class ReleaseTests(unittest.TestCase):
             release.check_app(result['package'], result['sha256'], '2026.10.23.1')
         with self.assertRaisesRegex(ValueError, 'complete'):
             release.check_app(result['package'], result['sha256'], '2026.10.23.2')
+
+    def test_full_app_index_describes_the_published_archive(self):
+        result = release.package_app(self.bundle)
+        index_path = Path(result['index'])
+        index = release.read_json(index_path)
+        self.assertEqual(index_path.name, 'Pocket-Windows-' + self.info['release_id'] + '-update.json')
+        self.assertEqual(index['schema'], 1)
+        self.assertEqual(index['release']['common_files'], self.manifest['common_files'])
+        self.assertEqual(index['release']['omitted'], [])
+        self.assertEqual(index['archive'], {
+            'url': 'https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v'
+                   + self.info['release_id'] + '/' + Path(result['package']).name,
+            'bytes': result['bytes'], 'sha256': result['sha256']})
+        self.assertEqual({row['path'] for row in index['files']},
+                         {row['path'] for row in self.manifest['common_files']})
+        self.assertNotIn('RELEASE.json', {row['path'] for row in index['files']})
+        self.assertEqual(result['index_sha256'], release._sha256_file(index_path))
+        self.assertEqual(result['index_bytes'], index_path.stat().st_size)
+        self.assertEqual(index_path.with_suffix('.json.sha256').read_text(encoding='ascii'),
+                         result['index_sha256'] + '  ' + index_path.name + '\n')
+        self.assertEqual(release.read_json(self.bundle / 'RELEASE.json'), self.manifest)
+
+    def test_app_index_offsets_roundtrip_stored_deflate_and_zip64_local_headers(self):
+        path = self.base / 'offset-fixture.zip'
+        files = {'scripts/stored.py': b'stored data', 'scripts/deflated.py': b'compress me ' * 50}
+        light = dict(self.manifest, common_files=[record(name, data) for name, data in files.items()],
+                     artifacts={}, omitted=[])
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('RELEASE.json', release.json_bytes(light))
+            archive.writestr('app/scripts/stored.py', files['scripts/stored.py'])
+            entry = zipfile.ZipInfo('app/scripts/deflated.py')
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            with archive.open(entry, 'w', force_zip64=True) as stream:
+                stream.write(files['scripts/deflated.py'])
+        index = release.app_update_index(path, light, release._sha256_file(path))
+        self.assertEqual({row['method'] for row in index['files']}, {0, 8})
+        data = path.read_bytes()
+        for row in index['files']:
+            payload = data[row['offset']:row['offset'] + row['compressed_bytes']]
+            if row['method'] == 8:
+                payload = zlib.decompress(payload, -15)
+            self.assertEqual(payload, files[row['path']])
+
+    def test_app_index_refuses_unknown_or_missing_archive_files(self):
+        light = dict(self.manifest, common_files=[record('scripts/example.py', b'expected')],
+                     artifacts={}, omitted=[])
+        for name in ('scripts/unknown.py', None):
+            with self.subTest(name=name):
+                path = self.base / ('unknown.zip' if name else 'missing.zip')
+                with zipfile.ZipFile(path, 'w') as archive:
+                    archive.writestr('RELEASE.json', release.json_bytes(light))
+                    if name:
+                        archive.writestr('app/' + name, b'unknown')
+                with self.assertRaises(ValueError):
+                    release.app_update_index(path, light, release._sha256_file(path))
+
+    def test_delta_check_requires_a_matching_target_for_every_omitted_file(self):
+        result = release.package_app(self.bundle, self.next_release())
+        self.assertNotIn('index', result)
+        self.assertFalse(list(self.bundle.glob('*-update.json*')))
+        self.assertTrue(release.check_app(result['package'], result['sha256'], self.info['release_id'],
+                                          target=self.target)['checked'])
+        omitted = release.pack.APP_FILES[1]
+        path = self.target / omitted
+        before = path.read_bytes()
+        for data in (b'corrupted', None):
+            with self.subTest(data=data):
+                if data is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(data)
+                with self.assertRaises(RuntimeError):
+                    release.check_app(result['package'], result['sha256'], self.info['release_id'], target=self.target)
+                path.write_bytes(before)
+        self.unchanged_private()
+
+    def test_runner_checks_delta_against_its_target(self):
+        result = release.package_app(self.bundle, self.next_release())
+        with mock.patch.object(release, 'wait_for_launcher'), mock.patch.object(release.subprocess, 'Popen'):
+            outcome = release.run_app_update(self.target, 123, 456, result['package'], result['sha256'], self.info['release_id'])
+        self.assertEqual(outcome['status'], 'committed')
+        self.assertEqual((self.target / release.pack.APP_FILES[0]).read_bytes(), b'newer code')
+        self.unchanged_private()
 
     def test_runner_records_confirmed_success_and_waits_before_apply(self):
         result = release.package_app(self.bundle)

@@ -31,7 +31,7 @@ DOCUMENT_FILES = ('НАЧАТЬ.txt', 'third-party.md')
 APP_FILES = tuple('scripts/' + name for name in (
     'portable_app.py', 'package_integrity.py', 'pack_existing_runtime.py', 'launch_runtime.py', 'control_guest_install.py',
     'runtime_network_plan.py', 'runtime_config.py', 'windows_hardware.py', 'connection_profile.py',
-    'profile_store.py', 'gateway_controller.py', 'gateway_package.py', 'host_network.py',
+    'profile_store.py', 'gateway_controller.py', 'gateway_package.py', 'host_network.py', 'app_download.py',
     'gateway_profile.py', 'session_carrier.py', 'file_snapshot.py', 'runtime_logs.py', 'windows_guest_settings.py',
     'host_file_sharing.py', 'file_share_carrier.py', 'clipboard_bridge.py', 'window_branding.py',
     'release_portable.py', 'prepare_runtime_bundle.py',
