@@ -26,16 +26,17 @@ class GatewayControllerTests(unittest.TestCase):
         self.assertFalse(self.status.healthy(1))
         qmp = mock.Mock()
         with self.assertRaises(RuntimeError):
-            controller.attach_network(qmp, self.status, 31861)
+            controller.attach_network(qmp, self.status, 31861, 4)
         qmp.command.assert_not_called()
 
     def test_firewall_ack_precedes_nics_then_fresh_ready_and_health(self):
         self.assertEqual(self.status.accept(self.event('FIREWALL_READY'), 1), 'FIREWALL_READY')
         qmp = mock.Mock()
-        controller.attach_network(qmp, self.status, 31861)
+        controller.attach_network(qmp, self.status, 31861, 4)
         calls = qmp.command.call_args_list
         self.assertEqual([call.args[0] for call in calls], ['netdev_add', 'netdev_add', 'device_add', 'device_add'])
         self.assertEqual(calls[0].args[1]['addr']['host'], '127.0.0.1')
+        self.assertEqual(calls[1].args[1]['x-wcp-outbound-if'], 4)
         self.assertNotIn('hostfwd', json.dumps([c.args for c in calls]))
         self.assertEqual(self.status.accept(self.event('READY'), 2), 'READY')
         self.assertTrue(self.status.healthy(30))
@@ -46,12 +47,31 @@ class GatewayControllerTests(unittest.TestCase):
         self.assertFalse(self.status.healthy(50))
         self.assertIsNone(self.status.accept(self.event('READY'), 51))
 
+    def test_invalid_direct_interface_never_attaches_network(self):
+        self.status.accept(self.event('FIREWALL_READY'), 0)
+        for index in (True, 0, -1, 2**24, '4'):
+            qmp = mock.Mock()
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                controller.attach_network(qmp, self.status, 31861, index)
+            qmp.command.assert_not_called()
+
+    def test_only_explicit_host_local_proxy_uses_host_network(self):
+        with mock.patch.object(controller, 'select_physical_ipv4', return_value={'interface_index': 4}) as physical:
+            for endpoint in ('10.0.2.2', '127.0.0.1'):
+                self.assertIsNone(controller.select_uplink(endpoint)['interface_index'])
+            physical.assert_not_called()
+            self.assertEqual(controller.select_uplink('203.0.113.7')['interface_index'], 4)
+        self.status.accept(self.event('FIREWALL_READY'), 0)
+        qmp = mock.Mock()
+        controller.attach_network(qmp, self.status, 31861, None)
+        self.assertNotIn('x-wcp-outbound-if', qmp.command.call_args_list[1].args[1])
+
     def test_failed_or_partial_hotplug_does_not_ack_network(self):
         self.status.accept(self.event('FIREWALL_READY'), 0)
         qmp = mock.Mock()
         qmp.command.side_effect = [None, RuntimeError('occupied port')]
         with self.assertRaises(RuntimeError):
-            controller.attach_network(qmp, self.status, 31861)
+            controller.attach_network(qmp, self.status, 31861, 4)
         self.assertFalse(self.status.network_attached)
         self.assertIsNone(self.status.accept(self.event('READY'), 1))
 
@@ -157,7 +177,7 @@ class GatewayControllerTests(unittest.TestCase):
     def test_outage_revokes_readiness_then_matching_recovery_is_accepted(self):
         self.assertIsNone(self.status.accept(self.event('RECONNECTING'), 0))
         self.status.accept(self.event('FIREWALL_READY'), 1)
-        controller.attach_network(mock.Mock(), self.status, 31861)
+        controller.attach_network(mock.Mock(), self.status, 31861, 4)
         self.status.accept(self.event('READY'), 2)
         self.assertEqual(self.status.accept(self.event('RECONNECTING', code='CONNECTION_LOST'), 4),
                          'RECONNECTING')

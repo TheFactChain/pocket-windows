@@ -23,6 +23,7 @@ from profile_store import ProfileStore, _exclusive_file, _pinned_directory, _pla
 from runtime_config import load_settings
 from runtime_logs import CappedWriter, start_capped_drain
 from session_carrier import create_carrier
+from host_network import select_physical_ipv4
 
 START_TIMEOUT = 180
 HEALTH_TIMEOUT = 45
@@ -118,16 +119,26 @@ def arguments(root, directory, media, settings):
             '-boot', 'order=c,strict=on', '-no-reboot']
 
 
-def attach_network(qmp, status, port):
+def select_uplink(endpoint):
+    if endpoint == '10.0.2.2' or ipaddress.IPv4Address(endpoint).is_loopback:
+        return {'interface_index': None, 'mode': 'host-local-proxy'}
+    return select_physical_ipv4()
+
+
+def attach_network(qmp, status, port, interface_index):
     if not status.firewall_ready or status.network_attached or status.failed:
         raise RuntimeError('Current firewall acknowledgement is required before attaching NICs')
     if type(port) is not int or not 1024 <= port <= 65535:
         raise ValueError('Invalid local LAN port')
+    if interface_index is not None and (type(interface_index) is not int or not 1 <= interface_index < 2**24):
+        raise ValueError('Invalid physical interface index')
     qmp.command('netdev_add', {'type': 'stream', 'id': 'wclan', 'server': True,
         'addr': {'type': 'inet', 'host': '127.0.0.1', 'port': str(port),
                  'numeric': True, 'ipv4': True, 'ipv6': False}})
-    qmp.command('netdev_add', {'type': 'user', 'id': 'wcwan', 'ipv6': False,
-                             'net': '10.0.2.0/24', 'host': '10.0.2.2'})
+    wan = {'type': 'user', 'id': 'wcwan', 'ipv6': False, 'net': '10.0.2.0/24', 'host': '10.0.2.2'}
+    if interface_index is not None:
+        wan['x-wcp-outbound-if'] = interface_index
+    qmp.command('netdev_add', wan)
     for name, network, mac in (('wcnicwan', 'wcwan', '52:54:00:77:00:01'),
                                ('wcniclan', 'wclan', '52:54:00:77:00:02')):
         qmp.command('device_add', {'driver': 'virtio-net-pci', 'id': name, 'netdev': network, 'mac': mac,
@@ -296,6 +307,14 @@ def run(root, profile_id=None, test_only=False, *, store=None, stop_after_ready=
                 for name in ('wcniclan', 'wcnicwan'):
                     qmp.command('set_link', {'name': name, 'up': False})
 
+        try:
+            uplink = select_uplink(session['endpoint_ipv4'])
+        except RuntimeError:
+            remove_owned_file(disk, disk_identity)
+            report.update(status='exited', error='DIRECT_NETWORK_UNAVAILABLE', overlay_removed=True)
+            save()
+            return 1
+        report['direct_network'] = uplink
         carrier = create_carrier(session)
         report['carrier'] = str(carrier.path)
         # The only remaining sensitive copy is the protected carrier attached readonly.
@@ -336,7 +355,7 @@ def run(root, profile_id=None, test_only=False, *, store=None, stop_after_ready=
                                     continue
                                 event = status.accept(value, time.monotonic())
                                 if event == 'FIREWALL_READY':
-                                    attach_network(qmp, status, settings['lan_port'])
+                                    attach_network(qmp, status, settings['lan_port'], uplink['interface_index'])
                                 elif event in ('READY', 'HEALTHY'):
                                     if lan_blocked:
                                         qmp.command('set_link', {'name': 'wcniclan', 'up': True})

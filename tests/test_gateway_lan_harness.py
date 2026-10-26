@@ -88,7 +88,7 @@ class GatewayLanHarnessTests(unittest.TestCase):
     def test_capture_is_installed_before_any_guest_nic_is_added(self):
         qmp, status = mock.Mock(), mock.Mock(firewall_ready=True, network_attached=False, failed=False)
         path = harness.ROOT / 'logs/gateway-lan-fixture/wan.pcap'
-        harness.attach_capture(harness.gateway_controller.attach_network, qmp, status, 33861, path)
+        harness.attach_capture(harness.gateway_controller.attach_network, qmp, status, 33861, path, 4)
         calls = qmp.command.call_args_list
         capture = next(index for index, call in enumerate(calls)
                        if call.args[0] == 'object-add' and call.args[1]['netdev'] == 'wcwan')

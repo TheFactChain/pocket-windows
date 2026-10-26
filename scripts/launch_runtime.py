@@ -778,6 +778,10 @@ def launch_guest(root, role, report, save, cancelled, startup_deadline=None):
                     continue
                 path = safe_state_path(root, event['state'])
                 state = read_json(path)
+                if (role == 'gateway' and state.get('status') == 'exited'
+                        and state.get('error') == 'DIRECT_NETWORK_UNAVAILABLE'
+                        and same_identity(controller_identity or {}, state.get('controller'))):
+                    raise RuntimeError('Не найдено прямое подключение к интернету. Подключи Ethernet или Wi-Fi.')
                 identity = process_identity(state['pid'])
                 record = state_record(path, state, identity)
                 if (identity and state_matches(root, path, state, identity)

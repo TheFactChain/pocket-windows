@@ -1,0 +1,124 @@
+--- a/net/slirp.c
++++ b/net/slirp.c
+@@ -91,6 +91,7 @@
+     NetClientState nc;
+     QTAILQ_ENTRY(SlirpState) entry;
+     Slirp *slirp;
++    uint32_t outbound_if;
+     Notifier poll_notifier;
+     Notifier exit_notifier;
+ #if defined(CONFIG_SMBD_COMMAND)
+@@ -255,11 +256,47 @@
+ # define unregister_poll_socket unregister_poll_fd
+ #endif
+ 
++#ifdef WIN32
++/* libslirp supplies native SOCKETs, not QEMU CRT socket descriptors. */
++#pragma push_macro("getsockopt")
++#pragma push_macro("setsockopt")
++#undef getsockopt
++#undef setsockopt
++static bool net_slirp_bind_interface(slirp_os_socket fd, uint32_t ifindex)
++{
++    WSAPROTOCOL_INFOA info;
++    int length = sizeof(info);
++    DWORD value = htonl(ifindex);
++
++    if (!ifindex) {
++        return true;
++    }
++    if (getsockopt(fd, SOL_SOCKET, SO_PROTOCOL_INFOA,
++                   (char *)&info, &length) == SOCKET_ERROR ||
++        info.iAddressFamily != AF_INET) {
++        return false;
++    }
++    return setsockopt(fd, IPPROTO_IP, IP_UNICAST_IF,
++                      (char *)&value, sizeof(value)) == 0;
++}
++#pragma pop_macro("setsockopt")
++#pragma pop_macro("getsockopt")
++
++#endif
++
+ static void net_slirp_register_poll_sock(slirp_os_socket fd, void *opaque)
+ {
+ #ifdef WIN32
+     AioContext *ctxt = qemu_get_aio_context();
+     g_autofree char *msg = NULL;
++
++    SlirpState *s = opaque;
++
++    /* libslirp registers outbound TCP/UDP sockets before connect/sendto. */
++    if (!net_slirp_bind_interface(fd, s->outbound_if)) {
++        error_report("DIRECT_NETWORK_BIND_FAILED");
++        exit(EXIT_FAILURE);
++    }
+ 
+     if (WSAEventSelect(fd, event_notifier_get_handle(&ctxt->notifier),
+                        FD_READ | FD_ACCEPT | FD_CLOSE |
+@@ -440,7 +477,7 @@
+                           const char *smb_export, const char *vsmbserver,
+                           const char **dnssearch, const char *vdomainname,
+                           const char *tftp_server_name,
+-                          Error **errp)
++                          uint32_t outbound_if, Error **errp)
+ {
+     /* default settings according to historic slirp */
+     struct in_addr net  = { .s_addr = htonl(0x0a000200) }; /* 10.0.2.0 */
+@@ -641,6 +678,7 @@
+                       restricted ? "on" : "off");
+ 
+     s = DO_UPCAST(SlirpState, nc, nc);
++    s->outbound_if = outbound_if;
+ 
+     cfg.version =
+          SLIRP_CHECK_VERSION(4, 9, 0) ? 6 :
+@@ -1293,6 +1331,18 @@
+         ipv6 = 0;
+     }
+ 
++    if (user->has_x_wcp_outbound_if) {
++#ifndef WIN32
++        error_setg(errp, "Direct interface binding requires Windows");
++        return -1;
++#endif
++        if (!user->x_wcp_outbound_if || user->x_wcp_outbound_if > 0xffffff ||
++            ipv6 || !ipv4 || user->hostfwd || user->guestfwd || user->smb) {
++            error_setg(errp, "Direct interface requires IPv4 without forwarding");
++            return -1;
++        }
++    }
++
+     vnet = user->net ? g_strdup(user->net) :
+            user->ip  ? g_strdup_printf("%s/24", user->ip) :
+            NULL;
+@@ -1311,7 +1361,7 @@
+                          user->bootfile, user->dhcpstart,
+                          user->dns, user->ipv6_dns, user->smb,
+                          user->smbserver, dnssearch, user->domainname,
+-                         user->tftp_server_name, errp);
++                         user->tftp_server_name, user->x_wcp_outbound_if, errp);
+ 
+     while (slirp_configs) {
+         config = slirp_configs;
+--- a/qapi/net.json
++++ b/qapi/net.json
+@@ -358,6 +358,10 @@
+ #
+ # @guestfwd: forward guest TCP connections
+ #
++# @x-wcp-outbound-if: Windows IPv4 interface index; no forwarding or
++#     IPv6 allowed.  Bind sockets before sending; fail closed.
++#     (Since 11.1)
++#
+ # @tftp-server-name: RFC2132 "TFTP server name" string (Since 3.1)
+ #
+ # Since: 1.2
+@@ -365,6 +369,7 @@
+ { 'struct': 'NetdevUserOptions',
+   'data': {
+     '*hostname':  'str',
++    '*x-wcp-outbound-if': 'uint32',
+     '*restrict':  'bool',
+     '*ipv4':      'bool',
+     '*ipv6':      'bool',

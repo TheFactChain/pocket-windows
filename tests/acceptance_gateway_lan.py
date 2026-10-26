@@ -198,7 +198,7 @@ def stop_peer(process, qmp, identity, finished, observed):
         process.wait(timeout=20)
 
 
-def attach_capture(attach, qmp, status, port, path):
+def attach_capture(attach, qmp, status, port, path, interface_index):
     class CapturingCommands:
         def command(self, name, parameters=None):
             result = qmp.command(name, parameters)
@@ -208,7 +208,7 @@ def attach_capture(attach, qmp, status, port, path):
                 qmp.command('object-add', {'qom-type': 'filter-dump', 'id': 'wcacceptancecapture' + network,
                     'netdev': network, 'file': capture.relative_to(ROOT).as_posix()})
             return result
-    attach(CapturingCommands(), status, port)
+    attach(CapturingCommands(), status, port, interface_index)
 
 
 def run_peer(directory, disk, nonce, port, proxy, observed, finished):
@@ -335,7 +335,7 @@ def main():
                 before = set((ROOT / 'logs').glob('guest-gateway-boot-*'))
                 finished = threading.Event()
                 attach = gateway_controller.attach_network
-                def attach_with_capture(qmp, status, port):
+                def attach_with_capture(qmp, status, port, interface_index):
                     get = qmp.messages.get
                     def observe_reply(*args, **kwargs):
                         reply = get(*args, **kwargs)
@@ -345,7 +345,7 @@ def main():
                         return reply
                     qmp.messages.get = observe_reply
                     try:
-                        attach_capture(attach, qmp, status, port, operation / 'wan.pcap')
+                        attach_capture(attach, qmp, status, port, operation / 'wan.pcap', interface_index)
                         observed['capture_before_nics'] = True
                     finally:
                         qmp.messages.get = get

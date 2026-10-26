@@ -22,7 +22,7 @@ import windows_guest_settings as windows_settings
 import windows_hardware
 import host_file_sharing as file_sharing
 
-ENGINE_SHA256 = '808aceefc5fd8553cb03e3514e042f2a8a2854c8b1407dfc48895618ff2454e6'
+ENGINE_SHA256 = '63dc4e2f5fc131afe5ad2416c2d9627f26ae764eec3a03a86acb41eae71b2b2a'
 
 def sha(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()

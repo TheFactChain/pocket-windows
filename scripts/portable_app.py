@@ -23,7 +23,7 @@ from connection_profile import import_profile_uri
 from profile_store import ProfileStore, StoreBusy, StoreError, SecretsUnavailable, _pinned_directory, _plain
 from gateway_package import inspect_current
 
-ENGINE_SHA256 = '808aceefc5fd8553cb03e3514e042f2a8a2854c8b1407dfc48895618ff2454e6'
+ENGINE_SHA256 = '63dc4e2f5fc131afe5ad2416c2d9627f26ae764eec3a03a86acb41eae71b2b2a'
 RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
                  'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd',
@@ -31,7 +31,7 @@ RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'scripts/runtime_network_plan.py', 'scripts/runtime_config.py',
                  'scripts/Start-Runtime.ps1', 'scripts/connection_profile.py',
                  'scripts/profile_store.py', 'scripts/gateway_controller.py',
-                 'scripts/gateway_package.py', 'scripts/gateway_profile.py',
+                 'scripts/gateway_package.py', 'scripts/gateway_profile.py', 'scripts/host_network.py',
                  'scripts/session_carrier.py', 'scripts/file_snapshot.py', 'scripts/runtime_logs.py',
                  'scripts/windows_guest_settings.py',
                  'scripts/windows_hardware.py',
@@ -513,6 +513,7 @@ CONNECTION_ERRORS = {
     'CONNECTION_LOST': 'Подключение оборвалось. Прямой выход Windows в интернет остаётся закрыт.',
     'HEALTH_TIMEOUT': 'Шлюз перестал подтверждать соединение. Прямой выход закрыт.',
     'STARTUP_TIMEOUT': 'Шлюз не подтвердил готовность вовремя.',
+    'DIRECT_NETWORK_UNAVAILABLE': 'Не найдено прямое подключение к интернету. Подключи Ethernet или Wi-Fi и повтори запуск.',
 }
 
 

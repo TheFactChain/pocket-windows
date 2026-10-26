@@ -661,6 +661,24 @@ class RuntimeTests(unittest.TestCase):
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
 
+    def test_missing_physical_network_reports_reason_before_guest_pid_exists(self):
+        record, state = self.gateway2()
+        state.pop('pid', None)
+        state.update(status='exited', error='DIRECT_NETWORK_UNAVAILABLE')
+        Path(record['state']).write_text(json.dumps(state))
+        receipt = self.root / 'logs/runtime-launch-test/receipt.json'
+        receipt.parent.mkdir(parents=True)
+        child = mock.Mock(pid=901)
+        child.stdout = io.BytesIO((json.dumps({'state': record['state']}) + '\n').encode())
+        child.stderr = io.BytesIO()
+        child.poll.return_value = None
+        with mock.patch.object(runtime.subprocess, 'Popen', return_value=child), \
+             mock.patch.object(runtime, 'process_identity', return_value=record['controller']):
+            with self.assertRaisesRegex(RuntimeError, 'прямое подключение'):
+                runtime.launch_guest(self.root, 'gateway', {'receipt': str(receipt)}, lambda: None, lambda: False)
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+
     def test_early_controller_failure_reports_logs_without_killing_it(self):
         receipt = self.root / 'logs/runtime-launch-test/receipt.json'
         receipt.parent.mkdir(parents=True)
