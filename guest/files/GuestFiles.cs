@@ -443,24 +443,26 @@ namespace WindowsClaude.GuestFiles
             {
                 try{ParseConfig(FindConfig());ConfigureNic(new WindowsNic(),Elevated());return 0;}catch{return 2;}
             }
-            if(args.Length!=1||(args[0]!="--install"&&args[0]!="--apply"))return 64;
-            Config config=null;Outcome outcome=new Outcome();bool installed=false;Thread clipboard=null;
+            bool handoff=args.Length==3&&args[0]=="--apply"&&args[1]=="--handoff"&&Matches(args[2],"[a-f0-9]{32}");
+            if(!handoff&&(args.Length!=1||(args[0]!="--install"&&args[0]!="--apply")))return 64;
+            Config config=null;Outcome outcome=new Outcome();bool installed=false,acceptedHandoff=false;Thread clipboard=null;
             try
             {
                 config=ParseConfig(FindConfig());
                 if(Elevated())throw new InvalidOperationException("ORDINARY_TOKEN_REQUIRED");
                 if(!Environment.UserInteractive||Process.GetCurrentProcess().SessionId==0)throw new InvalidOperationException("INTERACTIVE_USER_REQUIRED");
                 // The panel ships each new helper on its medium: switch to it at logon, nothing to click.
-                if(args[0]=="--apply"&&UpdateFromMedium())return 0;
-                // The shared clipboard runs beside everything below, so a file-sharing notice never delays it.
-                if(args[0]=="--apply")clipboard=GuestClipboard.StartBackground(config.Nonce);
-                // The desktop takes the panel's standard size (saved, so later starts boot into it) and reports it.
-                string displaySettings=ReadDisplaySettings();FitDisplay(RequestedSize(displaySettings));ReportDisplay(displaySettings);
+                if(!handoff&&args[0]=="--apply"&&UpdateFromMedium())return 0;
                 using(var mutex=new Mutex(false,@"Local\WindowsClaude.HostFiles."+WindowsIdentity.GetCurrent().User.Value))
                 {
                     bool held;try{held=mutex.WaitOne(0);}catch(AbandonedMutexException){held=true;}if(!held)throw new InvalidOperationException("APPLY_ALREADY_RUNNING");
                     try
                     {
+                        // No user-visible changes until the old helper has committed this exact process.
+                        if(handoff){if(!ConfirmHandoff(args[2]))return 2;acceptedHandoff=true;}
+                        // The shared clipboard runs beside everything below, so a file-sharing notice never delays it.
+                        if(args[0]=="--apply")clipboard=GuestClipboard.StartBackground(config.Nonce);
+                        string displaySettings=ReadDisplaySettings();FitDisplay(RequestedSize(displaySettings));ReportDisplay(displaySettings);
                         if(config.Shares.Count>0)
                         {
                             // The host keeps the file NIC unplugged until asked, so it is asked only for a static adapter.
@@ -481,6 +483,7 @@ namespace WindowsClaude.GuestFiles
                 }
             }
             catch(Exception error){outcome.Code=error is InvalidOperationException&&Matches(error.Message,"[A-Z_]{1,64}")?error.Message:error is FormatException?"CONFIG_INVALID":"APPLY_FAILED";}
+            if(handoff&&!acceptedHandoff)return 2;
             bool sent=true;try{SendReceipt(Receipt(config,outcome));}catch{sent=false;}
             string detail=outcome.Code=="NIC_NOT_READY"&&nicDetail!=null?Environment.NewLine+Environment.NewLine+"Состояние сети папок ПК: "+nicDetail+".":"";
             if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code)+detail,"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
@@ -585,15 +588,84 @@ namespace WindowsClaude.GuestFiles
             }
             catch(Exception){}  // Cosmetic: without it the panel shows the display as unconfirmed.
         }
+        public static string HandoffReceipt(string nonce,string hash,int pid,long started)
+        {
+            return String.Join("|","1",nonce,hash,pid.ToString(CultureInfo.InvariantCulture),started.ToString(CultureInfo.InvariantCulture));
+        }
+        public static bool HandoffMatches(string receipt,string nonce,string hash,int pid,long started)
+        {
+            return receipt==HandoffReceipt(nonce,hash,pid,started);
+        }
+        public static bool Handover(Func<bool> start,Func<bool> ready,Action commit,Action stop,Action wait,int attempts)
+        {
+            bool started=false;
+            try
+            {
+                started=start();if(!started)return false;
+                for(int attempt=0;attempt<attempts;attempt++)
+                {
+                    if(ready()){commit();return true;}
+                    if(attempt+1<attempts)wait();
+                }
+            }
+            catch(Exception){} // Failed updates leave the installed helper responsible for this session.
+            if(started)stop();
+            return false;
+        }
+        static string HandoffPath(string nonce){return Path.Combine(DirectoryPath(),"handoff-"+nonce+".ready");}
+        static string HandoffEvent(string nonce){return @"Local\WindowsClaude.HostFiles.Handoff."+nonce;}
+        static bool ConfirmHandoff(string nonce)
+        {
+            string current=Assembly.GetExecutingAssembly().Location;
+            if(!StartupTargetMatches(current,"--apply",DirectoryPath()))return false;
+            using(var accepted=EventWaitHandle.OpenExisting(HandoffEvent(nonce)))
+            using(var process=Process.GetCurrentProcess())
+            {
+                string path=HandoffPath(nonce);NoReparse(path);
+                byte[] receipt=Encoding.UTF8.GetBytes(HandoffReceipt(nonce,Hash(current).Replace("-",""),process.Id,process.StartTime.ToUniversalTime().Ticks));
+                using(var stream=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read))stream.Write(receipt,0,receipt.Length);
+                return accepted.WaitOne(15000);
+            }
+        }
         static bool UpdateFromMedium()
         {
-            if(mediumRoot==null)return false;
-            string current=Assembly.GetExecutingAssembly().Location,medium=Path.Combine(mediumRoot,"HOSTFILS.EXE");
-            if(!File.Exists(medium)||Hash(medium)==Hash(current))return false;
-            string directory=DirectoryPath(),startup=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup),"WindowsClaude Host Files.lnk"),staged=null;
-            StageHelper(medium,directory,destination=>{StartupShortcut(startup,destination,directory);staged=destination;});
-            using(Process.Start(new ProcessStartInfo(staged,"--apply"){UseShellExecute=false})){}
-            return true;
+            Process child=null;string receipt=null;long started=0;bool committed=false,ownsContext=false;
+            try
+            {
+                if(mediumRoot==null)return false;
+                string current=Assembly.GetExecutingAssembly().Location,medium=Path.Combine(mediumRoot,"HOSTFILS.EXE");
+                if(!File.Exists(medium)||Hash(medium)==Hash(current))return false;
+                string directory=DirectoryPath(),startup=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup),"WindowsClaude Host Files.lnk"),staged=null;
+                StageHelper(medium,directory,destination=>staged=destination);
+                string nonce=Guid.NewGuid().ToString("N"),hash=Hash(staged).Replace("-","");receipt=HandoffPath(nonce);NoReparse(receipt);
+                bool created;
+                using(var accepted=new EventWaitHandle(false,EventResetMode.ManualReset,HandoffEvent(nonce),out created))
+                {
+                    if(!created||File.Exists(receipt))return false;
+                    ownsContext=true;
+                    committed=Handover(
+                        ()=>{child=Process.Start(new ProcessStartInfo(staged,"--apply --handoff "+nonce){UseShellExecute=false});if(child==null)return false;started=child.StartTime.ToUniversalTime().Ticks;return true;},
+                        ()=>
+                        {
+                            if(child.HasExited)return false;
+                            try{NoReparse(receipt);return HandoffMatches(ReadBounded(receipt),nonce,hash,child.Id,started)&&!child.HasExited;}
+                            catch(IOException){return false;}
+                        },
+                        ()=>{StartupShortcut(startup,staged,directory);accepted.Set();},
+                        ()=>StopHandoff(child,started),()=>Thread.Sleep(100),100);
+                    return committed;
+                }
+            }
+            catch(Exception){return false;}
+            finally
+            {
+                if(child!=null){if(!committed)StopHandoff(child,started);child.Dispose();}
+                try{if(ownsContext){NoReparse(receipt);if(File.Exists(receipt))File.Delete(receipt);}}catch(Exception){}
+            }
+        }
+        static void StopHandoff(Process child,long started)
+        {
+            try{if(child!=null&&started!=0&&!child.HasExited&&child.StartTime.ToUniversalTime().Ticks==started){child.Kill();child.WaitForExit(3000);}}catch(Exception){}
         }
         [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
         struct DevMode

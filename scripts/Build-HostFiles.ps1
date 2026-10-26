@@ -7,6 +7,16 @@ Add-Type -Path (Join-Path $PSHOME 'Microsoft.CodeAnalysis.dll')
 Add-Type -Path (Join-Path $PSHOME 'Microsoft.CodeAnalysis.CSharp.dll')
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $root=Split-Path -Parent $PSScriptRoot
+$localNames=@('guest/files/GuestFiles.cs','guest/GuestEnvironment.cs','guest/GuestClipboard.cs','ui/app.manifest','scripts/Build-GuestFiles.ps1','scripts/Build-HostFiles.ps1')
+$localNames+=@(Get-ChildItem -LiteralPath (Join-Path $root 'host\files') -Filter '*.cs' -File | Sort-Object Name | ForEach-Object { 'host/files/'+$_.Name })
+$localNames+='host/files/dependency-patches/SMBServer.Signatures.cs'
+function Get-LocalSources {
+    @($localNames | ForEach-Object {
+        $item=Get-Item -LiteralPath (Join-Path $root $_)
+        [ordered]@{path=$_;bytes=$item.Length;sha256=(Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
+    })
+}
+$localSources=Get-LocalSources
 $archive=[IO.Path]::GetFullPath($SourceArchive)
 if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne '2240C49F69AAFFA5225E8316D5A5440AB2F20BC577BD3161091905F05B94D318'){throw 'Source archive hash mismatch'}
 $output=[IO.Path]::GetFullPath($OutputDirectory)
@@ -132,9 +142,10 @@ NTLMv1 is disabled. SMB1 is disabled in HostFiles.exe.
 Corresponding modified source and upstream license are included beside the DLLs.
 Build procedure: scripts/Build-HostFiles.ps1 in the Windows Claude source tree.
 '@ | Set-Content -LiteralPath (Join-Path $output 'NOTICE.txt') -Encoding utf8
-$files=@(Get-ChildItem -LiteralPath $output -File | Sort-Object Name | ForEach-Object {
+if(($localSources | ConvertTo-Json -Depth 5 -Compress) -ne ((Get-LocalSources) | ConvertTo-Json -Depth 5 -Compress)){throw 'Local build source changed during compilation.'}
+$files=@(Get-ChildItem -LiteralPath $output -File | Where-Object Name -ne 'build-manifest.json' | Sort-Object Name | ForEach-Object {
     [ordered]@{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 })
-$report=[ordered]@{schema=1;component='host-files';upstream_commit='2edbcf3161084b51dbe11b8a960b0bc7c224b851';source_archive_sha256='2240c49f69aaffa5225e8316d5a5440ab2f20bc577bd3161091905f05b94d318';files=$files}
+$report=[ordered]@{schema=1;component='host-files';upstream_commit='2edbcf3161084b51dbe11b8a960b0bc7c224b851';source_archive_sha256='2240c49f69aaffa5225e8316d5a5440ab2f20bc577bd3161091905f05b94d318';local_sources=$localSources;files=$files}
 $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'build-manifest.json') -Encoding utf8
 $report | ConvertTo-Json -Depth 5

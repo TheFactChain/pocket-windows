@@ -291,12 +291,14 @@
                                 <StackPanel>
                                     <TextBlock x:Name="UpdateStatusTitle" Text="Проверить новую версию" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource Ink}" />
                                     <TextBlock x:Name="UpdateStatusText" Text="Проверка выполняется автоматически. Её также можно запустить вручную." Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,5,0,0" />
-                                    <TextBlock x:Name="UpdatePackageText" Style="{StaticResource Caption}" Margin="0,6,0,0" Visibility="Collapsed" />
+                                    <TextBlock x:Name="UpdatePackageText" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed" />
                                     <ProgressBar x:Name="UpdateProgress" Height="5" Margin="0,12,0,0" Minimum="0" Maximum="100" Foreground="#3390EC" Background="#E9F2FD" Visibility="Collapsed" />
-                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <WrapPanel Margin="0,12,0,0">
                                         <Button x:Name="CheckUpdatesButton" Style="{StaticResource SoftPill}" Content="Проверить" Click="OnCheckUpdates" Height="36" FontSize="13.5" />
                                         <Button x:Name="InstallUpdateButton" Style="{StaticResource Pill}" Content="Обновить" Click="OnUpdate" Height="36" FontSize="13.5" Margin="8,0,0,0" Visibility="Collapsed" />
-                                    </StackPanel>
+                                        <Button x:Name="FullUpdateButton" Style="{StaticResource SoftPill}" Content="Полный пакет" Click="OnFullUpdate" Height="36" FontSize="13.5" Margin="8,0,0,0" Visibility="Collapsed" />
+                                        <Button x:Name="OfflineRepairButton" Style="{StaticResource SoftPill}" Content="Восстановить без интернета" Click="OnOfflineRepair" Height="36" FontSize="13.5" Margin="0,8,0,0" />
+                                    </WrapPanel>
                                 </StackPanel>
                             </Border>
                             <TextBlock Style="{StaticResource Caption}" Margin="4,0" TextWrapping="Wrap" Text="Перед установкой выключи Windows. Программы и личные файлы внутри неё сохранятся." />

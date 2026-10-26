@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
@@ -19,9 +20,9 @@ namespace WindowsClaude.Launcher
         const string GitHubApi = "https://api.github.com/repos/nekontritce11123-lab/pocket-windows/releases/latest";
         const string AssetPrefix = "https://github.com/nekontritce11123-lab/pocket-windows/releases/download/";
         const long MaxPackage = 8L * 1024 * 1024 * 1024;
-        internal sealed class Offer { public string Id, ZipUrl, ShaUrl, IndexUrl, IndexShaUrl; public long Bytes; }
+        internal sealed class Offer { public string Id, ZipUrl, ShaUrl, IndexUrl, IndexShaUrl, ToolkitUrl, ToolkitShaUrl; public long Bytes, ToolkitBytes; public bool V2, Repair; }
         internal sealed class CheckResult { public Offer Offer; public string Title, Message; }
-        internal sealed class Package { public string Zip, Sha, Id, Work, Tools, Root; }
+        internal sealed class Package { public string Zip, Sha, Id, Work, Tools, Root, Index, IndexSha, Stage; public long DownloadBytes, RequiredFreeBytes; public bool Offline, PreserveTools; }
 
         static string Api
         {
@@ -124,7 +125,7 @@ namespace WindowsClaude.Launcher
                 throw new InvalidDataException("Сервер вернул непонятные сведения о выпуске.");
             string id = Convert.ToString(release["tag_name"]).TrimStart('v');
             if (Parts(id) == null) throw new InvalidDataException("Номер выпуска на сервере повреждён.");
-            if (!Newer(id, currentId)) return new CheckResult { Title = "Установлена последняя версия", Message = "Версия " + currentId + ". Новых обновлений пока нет." };
+            if (!Newer(id, currentId) && id != currentId) return new CheckResult { Title = "Установлена последняя версия", Message = "Версия " + currentId + ". Новых обновлений пока нет." };
             if ((release.ContainsKey("draft") && Object.Equals(release["draft"], true)) || (release.ContainsKey("prerelease") && Object.Equals(release["prerelease"], true)))
                 return new CheckResult { Title = "Выпуск готовится", Message = "Новый выпуск ещё проходит проверку." };
             var assets = release["assets"] as IEnumerable;
@@ -152,7 +153,22 @@ namespace WindowsClaude.Launcher
                     || !Int64.TryParse(Convert.ToString(index["size"]), out indexBytes) || indexBytes <= 0 || indexBytes > 16 * 1024 * 1024)
                     throw new InvalidDataException("Индекс обновления не прошёл проверку.");
             }
-            return new CheckResult { Offer = offer, Title = "Доступно обновление", Message = "Можно установить новую версию. Личные данные сохранятся." };
+            string v2Name = "Pocket-Windows-" + id + "-update-v2.json", kitName = "Pocket-Windows-" + id + "-updater.zip";
+            var v2 = items.SingleOrDefault(item => Object.Equals(item.ContainsKey("name") ? item["name"] : null, v2Name));
+            var v2Sha = items.SingleOrDefault(item => Object.Equals(item.ContainsKey("name") ? item["name"] : null, v2Name + ".sha256"));
+            var kit = items.SingleOrDefault(item => Object.Equals(item.ContainsKey("name") ? item["name"] : null, kitName));
+            var kitSha = items.SingleOrDefault(item => Object.Equals(item.ContainsKey("name") ? item["name"] : null, kitName + ".sha256"));
+            if (v2 != null && v2Sha != null && kit != null && kitSha != null)
+            {
+                offer.IndexUrl = Convert.ToString(v2["browser_download_url"]); offer.IndexShaUrl = Convert.ToString(v2Sha["browser_download_url"]);
+                offer.ToolkitUrl = Convert.ToString(kit["browser_download_url"]); offer.ToolkitShaUrl = Convert.ToString(kitSha["browser_download_url"]);
+                if (!AssetUrl(offer.IndexUrl) || !AssetUrl(offer.IndexShaUrl) || !AssetUrl(offer.ToolkitUrl) || !AssetUrl(offer.ToolkitShaUrl)
+                    || !Int64.TryParse(Convert.ToString(kit["size"]), out offer.ToolkitBytes) || offer.ToolkitBytes <= 0 || offer.ToolkitBytes > 256L * 1024 * 1024)
+                    throw new InvalidDataException("Комплект обновлятора повреждён.");
+                offer.V2 = true;
+            }
+            offer.Repair = id == currentId;
+            return new CheckResult { Offer = offer, Title = offer.Repair ? "Установлена последняя версия" : "Доступно обновление", Message = offer.Repair ? "Можно проверить и восстановить файлы программы. Личные данные сохранятся." : "Можно установить новую версию. Личные данные сохранятся." };
         }
 
         internal static async Task<Package> DownloadAsync(Offer offer, Action<int> progress, CancellationToken cancel, string root = null)
@@ -164,13 +180,18 @@ namespace WindowsClaude.Launcher
                 if (!AssetUrl(offer.ZipUrl) || !AssetUrl(offer.ShaUrl) || offer.Bytes <= 0 || offer.Bytes > MaxPackage) throw new InvalidDataException("Пакет не прошёл проверку.");
                 string sha = (await ReadText(offer.ShaUrl, 4096, cancel).ConfigureAwait(false)).Trim().Split((char[])null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
                 if (sha == null || !Regex.IsMatch(sha, @"\A[a-fA-F0-9]{64}\z")) throw new InvalidDataException("Контрольная сумма обновления повреждена.");
-                string work = Path.Combine(Path.GetTempPath(), "pocket-windows-updater-" + Guid.NewGuid().ToString("N"));
+                string targetRoot = CheckedRoot(root ?? Bridge.Root);
+                string state = Path.Combine(targetRoot, "state"); Directory.CreateDirectory(state);
+                if ((File.GetAttributes(targetRoot) & FileAttributes.ReparsePoint) != 0 || (File.GetAttributes(state) & FileAttributes.ReparsePoint) != 0) throw new IOException("Папка обновления оказалась ссылкой.");
+                string work = Path.Combine(state, "app-updater-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(work);
-                package = new Package { Work = work, Zip = Path.Combine(work, "app.zip"), Sha = sha.ToLowerInvariant(), Id = offer.Id };
+                package = new Package { Root = targetRoot, Work = work, Zip = Path.Combine(work, "app.zip"), Sha = sha.ToLowerInvariant(), Id = offer.Id };
+                AtomicJson(Path.Combine(work, "download.json"), new Dictionary<string, object> { { "schema", 1 }, { "release_id", package.Id }, { "sha256", package.Sha } });
                 if (offer.IndexUrl != null)
                 {
                     await DownloadChangesAsync(root ?? Bridge.Root, package, offer, progress, cancel).ConfigureAwait(false);
                     cancel.ThrowIfCancellationRequested();
+                    AtomicJson(Path.Combine(work, "download.json"), new Dictionary<string, object> { { "schema", 1 }, { "release_id", package.Id }, { "sha256", package.Sha } });
                     return package;
                 }
                 var request = Open(offer.ZipUrl);
@@ -232,7 +253,7 @@ namespace WindowsClaude.Launcher
                 throw new InvalidDataException("Индекс не соответствует выбранному выпуску.");
             string indexPath = Path.Combine(package.Work, "update.json");
             File.WriteAllBytes(indexPath, bytes);
-            root = Path.GetFullPath(root);
+            root = CheckedRoot(root);
             string python = Path.Combine(root, "runtime", "python-3.12.14", "python.exe");
             string helper = Path.Combine(root, "scripts", "app_download.py");
             foreach (string path in new[] { python, helper })
@@ -316,15 +337,395 @@ namespace WindowsClaude.Launcher
                 if ((total += read) > 65536) throw new InvalidDataException("Ответ загрузчика слишком большой.");
         }
 
+        static async Task<string> DigestAsync(string url, CancellationToken cancel)
+        {
+            string value = (await ReadText(url, 4096, cancel).ConfigureAwait(false)).Trim().Split((char[])null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (value == null || !Regex.IsMatch(value, @"\A[a-fA-F0-9]{64}\z")) throw new InvalidDataException("Контрольная сумма повреждена.");
+            return value.ToLowerInvariant();
+        }
+
+        internal static Offer FullOffer(Offer offer)
+        { return new Offer { Id = offer.Id, ZipUrl = offer.ZipUrl, ShaUrl = offer.ShaUrl, Bytes = offer.Bytes, Repair = offer.Repair }; }
+
+        internal static async Task<Package> PlanV2Async(string root, Offer offer, Action<Dictionary<string, object>> progress, CancellationToken cancel)
+        {
+            var package = await BootstrapV2Async(root, offer, progress, cancel).ConfigureAwait(false);
+            try
+            {
+                var result = await RunV2Async(package, "plan", progress, cancel).ConfigureAwait(false);
+                package.DownloadBytes = Number(result, "download_bytes"); package.RequiredFreeBytes = Number(result, "required_free_bytes");
+                return package;
+            }
+            catch { Discard(package); throw; }
+        }
+
+        internal static async Task<Package> BootstrapV2Async(string root, Offer offer, Action<Dictionary<string, object>> progress, CancellationToken cancel)
+        {
+            if (!offer.V2) throw new InvalidOperationException("Индекс v2 отсутствует.");
+            root = CheckedRoot(root);
+            string state = Path.Combine(root, "state");
+            Directory.CreateDirectory(state);
+            foreach (string path in new[] { root, state }) if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) throw new IOException("Папка обновления оказалась ссылкой.");
+            var package = new Package { Root = root, Id = offer.Id, Tools = Path.Combine(state, "app-updater-" + Guid.NewGuid().ToString("N")) };
+            package.Work = package.Tools;
+            try
+            {
+                Directory.CreateDirectory(package.Tools);
+                package.IndexSha = await DigestAsync(offer.IndexShaUrl, cancel).ConfigureAwait(false);
+                byte[] bytes = await ReadBytes(offer.IndexUrl, 16 * 1024 * 1024, cancel).ConfigureAwait(false);
+                using (var hash = SHA256.Create()) if (BitConverter.ToString(hash.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant() != package.IndexSha) throw new InvalidDataException("Индекс обновления повреждён.");
+                package.Index = Path.Combine(package.Tools, "index.json"); File.WriteAllBytes(package.Index, bytes);
+                var index = JsonFile(package.Index, 16 * 1024 * 1024); var release = Dict(index, "release"); var archive = Dict(index, "archive"); var toolkit = Dict(index, "toolkit");
+                if (Number(index, "schema") != 2 || Number(index, "min_updater") != 2 || release == null || Number(release, "schema") != 1
+                    || Str(release, "release_id") != offer.Id || !Regex.IsMatch(Str(release, "source_commit") ?? "", @"\A[a-f0-9]{40}\z")
+                    || archive == null || !AssetUrl(Str(archive, "url")) || Number(archive, "bytes") <= 0 || Number(archive, "bytes") > MaxPackage
+                    || Str(archive, "url") != offer.ZipUrl.Substring(0, offer.ZipUrl.LastIndexOf('/') + 1) + "Pocket-Windows-" + offer.Id + "-chunks.zip"
+                    || !Regex.IsMatch(Str(archive, "sha256") ?? "", @"\A[a-f0-9]{64}\z")
+                    || toolkit == null || Str(toolkit, "url") != offer.ToolkitUrl || Number(toolkit, "bytes") != offer.ToolkitBytes
+                    || !Regex.IsMatch(Str(toolkit, "sha256") ?? "", @"\A[a-f0-9]{64}\z")
+                    || !index.ContainsKey("files") || !index.ContainsKey("chunks") || !index.ContainsKey("gateway")) throw new InvalidDataException("Индекс не соответствует выпуску.");
+                string kitSha = await DigestAsync(offer.ToolkitShaUrl, cancel).ConfigureAwait(false);
+                if (kitSha != Str(toolkit, "sha256")) throw new InvalidDataException("Контрольные суммы обновлятора не совпали.");
+                var kitOffer = new Offer { Id = offer.Id, ZipUrl = offer.ToolkitUrl, ShaUrl = offer.ToolkitShaUrl, Bytes = offer.ToolkitBytes };
+                Package download = null;
+                try
+                {
+                    download = await DownloadAsync(kitOffer, percent => progress(new Dictionary<string, object> { { "phase", "bootstrap" }, { "done_bytes", offer.ToolkitBytes * percent / 100 }, { "total_bytes", offer.ToolkitBytes } }), cancel, root).ConfigureAwait(false);
+                    if (download.Sha != kitSha) throw new InvalidDataException("Обновлятор не соответствует индексу.");
+                    ExtractToolkit(download.Zip, package.Tools, cancel);
+                }
+                finally { Discard(download); }
+                return package;
+            }
+            catch { Discard(package); cancel.ThrowIfCancellationRequested(); throw; }
+        }
+
+        internal static void ExtractToolkit(string zip, string target, CancellationToken cancel)
+        {
+            using (var archive = ZipFile.OpenRead(zip))
+            {
+                if (archive.Entries.Count > 15002) throw new InvalidDataException("Слишком много файлов обновлятора.");
+                foreach (var entry in archive.Entries)
+                    if (!entry.FullName.EndsWith("/", StringComparison.Ordinal)) CheckUpdatePath(Path.Combine(target, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
+                long total = 0; var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in archive.Entries)
+                {
+                    cancel.ThrowIfCancellationRequested();
+                    string name = entry.FullName;
+                    if (name.EndsWith("/", StringComparison.Ordinal)) continue;
+                    if (name.Contains("\\") || name.Contains(":") || name.StartsWith("/", StringComparison.Ordinal) || name.Split('/').Any(part => part == "." || part == ".." || part.Length == 0 || part.EndsWith(".") || part.EndsWith(" "))
+                        || !ToolkitName(name)
+                        || !names.Add(name) || ((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000 || entry.Length > 256L * 1024 * 1024 || (total += entry.Length) > 512L * 1024 * 1024)
+                        throw new InvalidDataException("Небезопасный файл обновлятора.");
+                    string path = Path.GetFullPath(Path.Combine(target, name.Replace('/', Path.DirectorySeparatorChar)));
+                    if (!path.StartsWith(Path.GetFullPath(target).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Небезопасный путь обновлятора.");
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    using (var input = entry.Open()) using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        byte[] buffer = new byte[65536]; int read; long done = 0;
+                        while ((read = input.Read(buffer, 0, buffer.Length)) > 0) { cancel.ThrowIfCancellationRequested(); if ((done += read) > entry.Length) throw new InvalidDataException("Размер файла обновлятора неверен."); output.Write(buffer, 0, read); }
+                        if (done != entry.Length) throw new InvalidDataException("Файл обновлятора обрезан.");
+                    }
+                }
+                foreach (string name in new[] { "py/python.exe", "scripts/app_update_v2.py", "scripts/release_portable.py" })
+                    if (!names.Contains(name)) throw new InvalidDataException("Неполный комплект обновлятора.");
+            }
+        }
+
+        static bool ToolkitName(string name)
+        { return name == "toolkit-manifest.json" || name == "docs/third-party.md" || name.StartsWith("py/", StringComparison.Ordinal) || name.StartsWith("scripts/", StringComparison.Ordinal) && name.EndsWith(".py", StringComparison.Ordinal); }
+
+        static void VerifyToolkit(string tools, Dictionary<string, object> release, CancellationToken cancel)
+        {
+            var manifest = JsonFile(Path.Combine(tools, "toolkit-manifest.json"), 16 * 1024 * 1024);
+            object rows;
+            if (Number(manifest, "schema") != 1 || Str(manifest, "release_id") != Str(release, "release_id") || Str(manifest, "source_commit") != Str(release, "source_commit")
+                || !manifest.TryGetValue("files", out rows) || !(rows is object[]) || ((object[])rows).Length > 15000) throw new InvalidDataException("Сохранённый обновлятор не соответствует выпуску. Подготовь обновление через интернет.");
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (object item in (object[])rows)
+            {
+                cancel.ThrowIfCancellationRequested(); var row = item as Dictionary<string, object>;
+                string name = row == null ? null : Str(row, "path");
+                if (name == null || !ToolkitName(name) || name.Contains("\\") || name.Contains(":") || name.Split('/').Any(part => part.Length == 0 || part == "." || part == "..") || !names.Add(name)) throw new InvalidDataException("Повреждён список файлов обновлятора.");
+                string path = Path.GetFullPath(Path.Combine(tools, name.Replace('/', Path.DirectorySeparatorChar)));
+                if (!path.StartsWith(tools.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Небезопасный путь обновлятора.");
+                for (var parent = new DirectoryInfo(Path.GetDirectoryName(path)); parent != null && parent.FullName.StartsWith(tools, StringComparison.OrdinalIgnoreCase); parent = parent.Parent)
+                    if ((parent.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Папка обновлятора оказалась ссылкой.");
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length != Number(row, "bytes")) throw new InvalidDataException("Сохранённый обновлятор повреждён. Подготовь обновление через интернет.");
+                using (var input = File.OpenRead(path)) using (var hash = SHA256.Create())
+                    if (BitConverter.ToString(hash.ComputeHash(input)).Replace("-", "").ToLowerInvariant() != Str(row, "sha256")) throw new InvalidDataException("Сохранённый обновлятор повреждён. Подготовь обновление через интернет.");
+            }
+            foreach (string name in new[] { "py/python.exe", "scripts/app_update_v2.py", "scripts/release_portable.py" }) if (!names.Contains(name)) throw new InvalidDataException("Сохранённый обновлятор неполон.");
+        }
+
+        internal static async Task<Package> PlanOfflineAsync(string root, Action<Dictionary<string, object>> progress, CancellationToken cancel)
+        {
+            root = CheckedRoot(root);
+            var pointer = JsonFile(Path.Combine(root, "state", "components", "current.json"), 8192);
+            string sha = Str(pointer, "sha256");
+            if (Number(pointer, "schema") != 2 || !Regex.IsMatch(sha ?? "", @"\A[a-f0-9]{64}\z") || Str(pointer, "catalog") != sha + ".json") throw new InvalidDataException("Нет сохранённого каталога восстановления. Проверь обновления через интернет.");
+            string source = Path.Combine(root, "state", "components", "catalogs", sha + ".json");
+            var index = JsonFile(source, 16 * 1024 * 1024); byte[] bytes = File.ReadAllBytes(source);
+            using (var hash = SHA256.Create()) if (BitConverter.ToString(hash.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant() != sha) throw new InvalidDataException("Сохранённый каталог повреждён. Проверь обновления через интернет.");
+            var release = Dict(index, "release");
+            if (Number(index, "schema") != 2 || release == null || Str(release, "release_id") != Str(pointer, "release_id")) throw new InvalidDataException("Неверный каталог восстановления.");
+            string tools = await Task.Run(() => FindToolkit(root, release, cancel), cancel).ConfigureAwait(false);
+            var package = new Package { Root = root, Id = Str(release, "release_id"), Tools = tools, IndexSha = sha, Offline = true, PreserveTools = true, Work = Path.Combine(root, "state", "app-updater-" + Guid.NewGuid().ToString("N")) };
+            try
+            {
+                Directory.CreateDirectory(package.Work); package.Index = Path.Combine(package.Work, "index.json"); File.WriteAllBytes(package.Index, bytes);
+                var result = await RunV2Async(package, "plan", progress, cancel).ConfigureAwait(false);
+                package.DownloadBytes = Number(result, "download_bytes"); package.RequiredFreeBytes = Number(result, "required_free_bytes");
+                if (package.DownloadBytes != 0) throw new InvalidDataException("Сохранённых частей недостаточно для восстановления без интернета. Проверь обновления и явно выбери загрузку.");
+                return package;
+            }
+            catch { Discard(package); throw; }
+        }
+
+        static string FindToolkit(string root, Dictionary<string, object> release, CancellationToken cancel)
+        {
+            string state = Path.Combine(root, "state");
+            foreach (string path in new[] { root, state }) if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Папка восстановления оказалась ссылкой.");
+            var candidates = new List<string>();
+            try { candidates.Add(RecoveryWork(root)); } catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { }
+            foreach (string path in Directory.EnumerateDirectories(state).Take(1024))
+                if (Regex.IsMatch(Path.GetFileName(path), @"\Aapp-updater-[a-f0-9]{32}\z") && !candidates.Contains(path) && candidates.Count < 128) candidates.Add(path);
+            foreach (string tools in candidates)
+            {
+                cancel.ThrowIfCancellationRequested();
+                try
+                {
+                    if ((File.GetAttributes(tools) & FileAttributes.ReparsePoint) != 0) continue;
+                    var manifest = JsonFile(Path.Combine(tools, "toolkit-manifest.json"), 16 * 1024 * 1024);
+                    if (Str(manifest, "release_id") != Str(release, "release_id") || Str(manifest, "source_commit") != Str(release, "source_commit")) continue;
+                    VerifyToolkit(tools, release, cancel);
+                    return tools;
+                }
+                catch (IOException) { } catch (UnauthorizedAccessException) { } catch (ArgumentException) { } catch (InvalidOperationException) { }
+            }
+            throw new InvalidDataException("Сохранённый обновлятор отсутствует или повреждён. Подготовь обновление через интернет.");
+        }
+
+        internal static async Task PrepareV2Async(Package package, Action<Dictionary<string, object>> progress, CancellationToken cancel)
+        {
+            package.Stage = NewStage(package.Root);
+            var result = await RunV2Async(package, "prepare", progress, cancel).ConfigureAwait(false);
+            if (Str(result, "index_sha256") != package.IndexSha || !String.Equals(Path.GetFullPath(Str(result, "stage")), package.Stage, StringComparison.OrdinalIgnoreCase)
+                || !File.Exists(Path.Combine(package.Stage, "index.json")) || !File.Exists(Path.Combine(package.Stage, "prepared.json"))) throw new InvalidDataException("Подготовленный пакет не подтверждён.");
+        }
+
+        internal static string NewStage(string root)
+        { return Path.Combine(CheckedRoot(root), "state", Guid.NewGuid().ToString("N")); }
+
+        const string LongPathMessage = "Путь к папке программы слишком длинный для безопасного обновления. Перенеси папку Pocket Windows ближе к корню диска и повтори попытку. Файлы программы не изменены.";
+
+        static void CheckUpdatePath(string path)
+        {
+            try
+            {
+                string full = Path.GetFullPath(path);
+                if (full.Length >= 260 || Path.GetDirectoryName(full).Length >= 248) throw new PathTooLongException();
+            }
+            catch (PathTooLongException error) { throw new InvalidDataException(LongPathMessage, error); }
+        }
+
+        static string CheckedRoot(string root)
+        {
+            CheckUpdatePath(Path.Combine(root, "state", "app-updater-" + new string('0', 32), "toolkit-manifest.json"));
+            return Path.GetFullPath(root);
+        }
+
+        internal static bool HasV2Catalog(string root)
+        {
+            try { return Number(JsonFile(Path.Combine(root, "state", "components", "current.json"), 8192), "schema") == 2; }
+            catch (FileNotFoundException) { return false; }
+            catch (DirectoryNotFoundException) { return false; }
+        }
+
+        static async Task<Dictionary<string, object>> RunV2Async(Package package, string action, Action<Dictionary<string, object>> progress, CancellationToken cancel)
+        {
+            var args = new List<string> { "-X", "utf8", "-I", "-B", Path.Combine(package.Tools, "scripts", "app_update_v2.py"), action, "--index", package.Index, "--index-sha256", package.IndexSha, "--target", package.Root };
+            if (action == "prepare") args.AddRange(new[] { "--stage", package.Stage });
+            if (action == "prepare" && package.Offline) args.Add("--offline");
+            var info = new ProcessStartInfo(Path.Combine(package.Tools, "py", "python.exe"), String.Join(" ", args.Select(Bridge.Quote)))
+                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = package.Work, RedirectStandardOutput = true, RedirectStandardError = true };
+            using (var process = Process.Start(info))
+            {
+                var output = ReadV2Output(process.StandardOutput, progress); var error = ReadHelperError(process.StandardError);
+                try
+                {
+                    while (!process.HasExited) { cancel.ThrowIfCancellationRequested(); if (output.IsFaulted) await output.ConfigureAwait(false); if (error.IsFaulted) await error.ConfigureAwait(false); await Task.Delay(100, cancel).ConfigureAwait(false); }
+                    cancel.ThrowIfCancellationRequested(); var result = await output.ConfigureAwait(false); await error.ConfigureAwait(false);
+                    if (process.ExitCode != 0 || result == null || Str(result, "phase") != (action == "plan" ? "planned" : "prepared")) throw new InvalidDataException("Не удалось " + (action == "plan" ? "оценить" : "подготовить") + " обновление. Можно повторить или выбрать полный пакет.");
+                    return result;
+                }
+                finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(); } }
+            }
+        }
+
+        static async Task<Dictionary<string, object>> ReadV2Output(StreamReader reader, Action<Dictionary<string, object>> progress)
+        {
+            var line = new StringBuilder(); char[] buffer = new char[2048]; int read; Dictionary<string, object> last = null;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                for (int i = 0; i < read; i++)
+                {
+                    if (buffer[i] == '\n') { last = ParseProgress(line.ToString()); progress(last); line.Clear(); }
+                    else if (buffer[i] != '\r') { line.Append(buffer[i]); if (line.Length > 65536) throw new InvalidDataException("Ответ обновлятора слишком большой."); }
+                }
+            if (line.Length > 0) throw new InvalidDataException("Ответ обновлятора не завершён.");
+            return last;
+        }
+
+        static Dictionary<string, object> JsonFile(string path, int maximum = 1048576)
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length > maximum) throw new InvalidDataException("Повреждена запись обновления.");
+            var value = new JavaScriptSerializer { MaxJsonLength = maximum }.DeserializeObject(File.ReadAllText(path)) as Dictionary<string, object>;
+            if (value == null) throw new InvalidDataException("Повреждена запись обновления.");
+            return value;
+        }
+
+        static Dictionary<string, object> Dict(Dictionary<string, object> value, string key)
+        { object child; return value.TryGetValue(key, out child) ? child as Dictionary<string, object> : null; }
+        static string Str(Dictionary<string, object> value, string key)
+        { object child; return value != null && value.TryGetValue(key, out child) && child is string ? (string)child : null; }
+        static long Number(Dictionary<string, object> value, string key)
+        {
+            object child; long number;
+            if (!value.TryGetValue(key, out child) || !(child is int || child is long) || !Int64.TryParse(Convert.ToString(child), out number) || number < 0)
+                throw new InvalidDataException("Неверное число байтов обновления.");
+            return number;
+        }
+
+        internal static Dictionary<string, object> ParseProgress(string line)
+        {
+            if (line.Length > 65536) throw new InvalidDataException("Ответ обновлятора слишком большой.");
+            var value = new JavaScriptSerializer().DeserializeObject(line) as Dictionary<string, object>;
+            if (value == null || String.IsNullOrEmpty(Str(value, "phase"))) throw new InvalidDataException("Неверный этап обновления.");
+            foreach (string key in new[] { "done_bytes", "total_bytes", "downloaded_bytes", "download_bytes", "required_free_bytes" })
+                if (value.ContainsKey(key)) Number(value, key);
+            if (value.ContainsKey("done_bytes") && value.ContainsKey("total_bytes") && Number(value, "done_bytes") > Number(value, "total_bytes"))
+                throw new InvalidDataException("Ход обновления превышает размер этапа.");
+            return value;
+        }
+
+        internal static void AtomicJson(string path, object value)
+        {
+            CheckUpdatePath(path);
+            string temporary = Path.Combine(Path.GetDirectoryName(path), ".wcp-" + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                byte[] bytes = new UTF8Encoding(false).GetBytes(new JavaScriptSerializer().Serialize(value));
+                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { stream.Write(bytes, 0, bytes.Length); stream.Flush(true); }
+                if (File.Exists(path)) File.Replace(temporary, path, null); else File.Move(temporary, path);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+
+        internal static bool ValidProbe(string root, string nonce)
+        {
+            try
+            {
+                if (nonce == null || !Regex.IsMatch(nonce, @"\A[a-f0-9]{32}\z")) return false;
+                foreach (string path in new[] { root, Path.Combine(root, "state") }) if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
+                var journal = JsonFile(Path.Combine(root, "state", "app-update.json"));
+                var probe = Dict(journal, "probe"); var release = Dict(journal, "release");
+                var installed = JsonFile(Path.Combine(root, "release-info.json"), 4096);
+                using (var current = Process.GetCurrentProcess())
+                    return Number(journal, "schema") == 3 && Str(journal, "phase") == "awaiting_probe"
+                        && String.Equals(Path.GetFullPath(Str(journal, "target")).TrimEnd('\\'), Path.GetFullPath(root).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)
+                        && probe != null && Str(probe, "nonce") == nonce && Number(probe, "pid") == current.Id
+                        && Str(probe, "created") == current.StartTime.ToUniversalTime().ToFileTimeUtc().ToString()
+                        && release != null && Number(release, "schema") == 1 && Number(installed, "schema") == 1
+                        && Regex.IsMatch(Str(release, "release_id") ?? "", @"\A[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]{0,8}\z") && Str(release, "release_id") == Str(installed, "release_id")
+                        && Regex.IsMatch(Str(release, "source_commit") ?? "", @"\A[a-f0-9]{40}\z") && Str(release, "source_commit") == Str(installed, "source_commit");
+            }
+            catch (Exception) { return false; }
+        }
+
+        internal static async Task ProbeHealthAsync(string root, string nonce)
+        {
+            if (!ValidProbe(root, nonce)) throw new InvalidDataException("Пробный запуск не подтверждён журналом.");
+            var info = new ProcessStartInfo(Path.Combine(root, "runtime", "python-3.12.14", "python.exe"), String.Join(" ", new[] { "-X", "utf8", "-I", "-B", Path.Combine(root, "scripts", "release_portable.py"), "probe-app", "--target", root, "--nonce", nonce }.Select(Bridge.Quote)))
+                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root, RedirectStandardOutput = true, RedirectStandardError = true };
+            using (var process = Process.Start(info))
+            using (var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(110)))
+            {
+                var output = ReadBoundedOutput(process.StandardOutput); var errors = ReadHelperError(process.StandardError);
+                try
+                {
+                    while (!process.HasExited) { if (output.IsFaulted) await output.ConfigureAwait(false); if (errors.IsFaulted) await errors.ConfigureAwait(false); await Task.Delay(100, cancel.Token).ConfigureAwait(false); }
+                    string text = await output.ConfigureAwait(false); await errors.ConfigureAwait(false);
+                    if (text.Length > 65536) throw new InvalidDataException("Ответ проверки слишком большой.");
+                    var value = new JavaScriptSerializer().DeserializeObject(text) as Dictionary<string, object>;
+                    var installed = JsonFile(Path.Combine(root, "release-info.json"), 4096);
+                    if (process.ExitCode != 0 || value == null || Number(value, "schema") != 1 || !Object.Equals(value.ContainsKey("ok") ? value["ok"] : null, true)
+                        || Str(value, "release_id") != Str(installed, "release_id") || Str(value, "source_commit") != Str(installed, "source_commit") || !ValidProbe(root, nonce))
+                        throw new InvalidDataException("Новая программа не прошла проверку запуска.");
+                }
+                finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(); } }
+            }
+        }
+
+        static async Task<string> ReadBoundedOutput(StreamReader reader)
+        {
+            var result = new StringBuilder(); char[] buffer = new char[2048]; int read;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+            { if (result.Length + read > 65536) throw new InvalidDataException("Ответ проверки слишком большой."); result.Append(buffer, 0, read); }
+            return result.ToString();
+        }
+
+        internal static void AckProbe(string root, string nonce)
+        {
+            if (!ValidProbe(root, nonce)) throw new InvalidDataException("Пробный запуск не подтверждён.");
+            var release = JsonFile(Path.Combine(root, "release-info.json"), 4096);
+            using (var current = Process.GetCurrentProcess()) AtomicJson(Path.Combine(root, "state", "update-probe.json"), new Dictionary<string, object>
+                { { "schema", 1 }, { "nonce", nonce }, { "release_id", Str(release, "release_id") }, { "source_commit", Str(release, "source_commit") }, { "root", Path.GetFullPath(root) }, { "pid", current.Id }, { "created", current.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() }, { "ok", true } });
+        }
+
+        internal static bool ProbeCommitted(string root, string nonce)
+        {
+            try
+            {
+                if (!JournalAbsent(root)) return false;
+                var result = JsonFile(Path.Combine(root, "state", "update-accepted.json"), 8192);
+                var release = JsonFile(Path.Combine(root, "release-info.json"), 4096);
+                return Number(result, "schema") == 1 && Object.Equals(result.ContainsKey("committed") ? result["committed"] : null, true)
+                    && Str(result, "nonce") == nonce && String.Equals(Str(result, "root"), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase)
+                    && Str(result, "release_id") == Str(release, "release_id") && Str(result, "source_commit") == Str(release, "source_commit");
+            }
+            catch (Exception) { return false; }
+        }
+
+        internal static async Task WaitForProbeCommitAsync(string root, string nonce, CancellationToken cancel)
+        {
+            while (true)
+            {
+                cancel.ThrowIfCancellationRequested();
+                if (ProbeCommitted(root, nonce)) return;
+                await Task.Delay(200, cancel).ConfigureAwait(false);
+            }
+        }
+
+        static bool JournalAbsent(string root)
+        {
+            try { File.GetAttributes(Path.Combine(root, "state", "app-update.json")); return false; }
+            catch (FileNotFoundException) { return true; }
+            catch (DirectoryNotFoundException) { return true; }
+        }
+
         internal static async Task PrepareAsync(string root, Package package, CancellationToken cancel)
         {
             package.Root = Path.GetFullPath(root).TrimEnd('\\');
+            if (package.Tools == null)
+            {
             package.Tools = Path.Combine(package.Root, "state", "app-updater-" + Guid.NewGuid().ToString("N"));
             await Task.Run(delegate
             {
                 Copy(Path.Combine(root, "runtime", "python-3.12.14"), Path.Combine(package.Tools, "py"), cancel);
                 Copy(Path.Combine(root, "scripts"), Path.Combine(package.Tools, "scripts"), cancel);
             }, cancel).ConfigureAwait(false);
+            }
+            else if (!IsTools(package.Root, package.Tools)) throw new InvalidDataException("Папка независимого обновлятора не прошла проверку.");
             var info = Command(package.Tools, "check-app", "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id, "--target", root);
             info.RedirectStandardOutput = true; info.RedirectStandardError = true;
             using (var process = Process.Start(info))
@@ -355,8 +756,16 @@ namespace WindowsClaude.Launcher
         internal static void Launch(string root, Package package)
         {
             string state = Path.Combine(root, "state"); Directory.CreateDirectory(state);
-            File.WriteAllText(Path.Combine(state, "update-recovery.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "schema", 2 }, { "work", Path.GetFileName(package.Tools) } }), Encoding.UTF8);
-            RunInstaller(root, package.Tools, new[] { "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id });
+            AtomicJson(Path.Combine(state, "update-recovery.json"), new Dictionary<string, object> { { "schema", 2 }, { "work", Path.GetFileName(package.Tools) } });
+            RunInstaller(root, package.Tools, InstallerArguments(package));
+        }
+
+        internal static string[] InstallerArguments(Package package)
+        {
+            if (package.Stage != null) return new[] { "--prepared", package.Stage, "--index-sha256", package.IndexSha, "--release-id", package.Id, "--probe" };
+            var args = new List<string> { "--zip", package.Zip, "--sha256", package.Sha, "--release-id", package.Id, "--probe" };
+            if (package.Index != null) args.AddRange(new[] { "--catalog", package.Index, "--index-sha256", package.IndexSha });
+            return args.ToArray();
         }
 
         internal static void Recover(string root)
@@ -437,9 +846,11 @@ namespace WindowsClaude.Launcher
         internal static void Discard(Package package)
         {
             if (package == null) return;
-            try { if (Directory.Exists(package.Work) && IsWork(package.Work)) Directory.Delete(package.Work, true); }
+            try { if (package.Root != null && !JournalAbsent(package.Root)) return; }
+            catch (IOException) { return; } catch (UnauthorizedAccessException) { return; }
+            try { if (Directory.Exists(package.Work) && (IsWork(package.Work) || package.Root != null && IsTools(package.Root, package.Work))) Directory.Delete(package.Work, true); }
             catch (IOException) { } catch (UnauthorizedAccessException) { }
-            try { if (package.Tools != null && Directory.Exists(package.Tools) && IsTools(package.Root, package.Tools)) Directory.Delete(package.Tools, true); }
+            try { if (!package.PreserveTools && package.Tools != null && Directory.Exists(package.Tools) && IsTools(package.Root, package.Tools)) Directory.Delete(package.Tools, true); }
             catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
 

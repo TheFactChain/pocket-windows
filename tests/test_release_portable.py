@@ -340,6 +340,7 @@ class ReleaseTests(unittest.TestCase):
             self.write(output, 'app/Launcher.exe', (self.app / 'Launcher.exe').read_bytes())
         with mock.patch.object(release, 'source_commit', return_value=self.info['source_commit']), \
                 mock.patch.object(release, 'validate_build_inputs'), \
+                mock.patch('update_toolkit.validate_host_build'), \
                 mock.patch.object(release, 'master_files'), \
                 mock.patch.object(release.bundle, 'inventory', return_value={'files': rows}), \
                 mock.patch.object(release, 'run_logged', side_effect=build):

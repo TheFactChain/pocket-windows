@@ -73,7 +73,8 @@ print(json.dumps({'progress': 50}), flush=True)
 print(json.dumps({'sha256': '0' * 64 if mode == 'indexed-package-corrupt' else hashlib.sha256(data).hexdigest(), 'bytes': len(data)}), flush=True)
 ''', encoding='utf-8')
             build = subprocess.run([str(compiler), '/nologo', '/target:exe', '/platform:x64',
-                                    '/reference:System.Web.Extensions.dll', '/out:' + str(executable),
+                                    '/reference:System.Web.Extensions.dll', '/reference:System.IO.Compression.dll',
+                                    '/reference:System.IO.Compression.FileSystem.dll', '/out:' + str(executable),
                                     str(ROOT / 'launcher-wpf/AppUpdate.cs'), str(ROOT / 'launcher-wpf/Bridge.cs'),
                                     str(ROOT / 'tests/AppUpdateRegression.cs')], capture_output=True, timeout=45)
             self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
@@ -100,6 +101,8 @@ print(json.dumps({'sha256': '0' * 64 if mode == 'indexed-package-corrupt' else h
                             self.assertNotIn('/app.zip', requests, 'Indexed failure must never silently download the full package')
                         if value in ('indexed-corrupt', 'indexed-version'):
                             self.assertFalse(marker.exists(), 'Unverified index must not reach the helper')
+                bootstrap = subprocess.run([str(executable), 'v2-bootstrap'], capture_output=True, timeout=45)
+                self.assertEqual(bootstrap.returncode, 0, (bootstrap.stdout + bootstrap.stderr).decode(errors='replace'))
             finally:
                 server.shutdown()
                 server.server_close()

@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import uuid
 import zipfile
@@ -119,7 +120,8 @@ def common_name(name):
 
 def transaction_name(name):
     return common_name(name) or (pack.safe_name(name) and (name in (INVENTORY,
-        'gateway/packages/current.json', 'gateway/packages/update.json')
+        'gateway/packages/current.json', 'gateway/packages/update.json', 'state/components/current.json')
+        or bool(re.fullmatch(r'state/components/catalogs/[a-f0-9]{64}\.json', name))
         or bool(re.fullmatch(r'gateway/packages/releases/[a-z0-9][a-z0-9._-]{0,63}/(manifest.json|gateway.qcow2)', name))))
 
 
@@ -253,17 +255,25 @@ def project_processes(root):
 
 def _journal(target):
     value = read_json(pack.file_under(target, JOURNAL), JSON_LIMIT)
-    if (type(value) is not dict or type(value.get('schema')) is not int or value['schema'] not in (1, 2)
+    if (type(value) is not dict or type(value.get('schema')) is not int or value['schema'] not in (1, 2, 3)
             or not isinstance(value.get('target'), str) or not os.path.isabs(value['target'])
             or not isinstance(value.get('transaction'), str)
             or not re.fullmatch('app-update-[a-f0-9]{32}', value['transaction'])
             or type(value.get('files')) is not list or not 1 <= len(value['files']) <= 40000):
         raise ValueError('Invalid update journal; retain it for inspection')
-    if value['schema'] == 2:
+    if value['schema'] >= 2:
         owned = value.get('target_id')
         if (type(owned) is not dict or set(owned) != {'device', 'file_id'}
                 or any(type(owned[key]) is not int for key in owned) or owned != identity(target)):
             raise ValueError('Update target directory identity changed; retain it for inspection')
+    if value['schema'] == 3:
+        validate_release_info(value.get('release'))
+        probe = value.get('probe')
+        if (type(probe) is not dict or set(probe) != {'nonce', 'pid', 'created'}
+                or not isinstance(probe['nonce'], str) or not re.fullmatch('[a-f0-9]{32}', probe['nonce'])
+                or type(probe['pid']) is not int or probe['pid'] < 0
+                or not isinstance(probe['created'], str) or not re.fullmatch('[0-9]{1,20}', probe['created'])):
+            raise ValueError('Invalid update probe identity')
     seen = set()
     for row in value['files']:
         if (type(row) is not dict or not {'path', 'new', 'old', 'new_id', 'phase'} <= row.keys()
@@ -438,11 +448,141 @@ def stage_gateway(app, target, generated, reserved=0):
     return [file_record(generated / name, name) for name in names]
 
 
-def apply_update(release, target):
+def _stop_probe(process, target, journal):
+    if process is None or process.poll() is not None:
+        return
+    actual = runtime.process_identity(process.pid)
+    expected = journal['probe']
+    if (not actual or actual['pid'] != expected['pid']
+            or str(actual['created_filetime']) != expected['created']
+            or os.path.normcase(actual['image']) != os.path.normcase(str(target / 'Launcher.exe'))):
+        raise RuntimeError('Probe process identity changed; recovery retained')
+    process.terminate()
+    process.wait(timeout=15)
+
+
+def confirm_probe(target, journal):
+    """Only this launched panel may acknowledge the provisional installation."""
+    receipt = target / 'state/update-probe.json'
+    _plain(receipt)
+    if receipt.exists():
+        remove_owned_file(receipt, identity(receipt))
+    process = subprocess.Popen([str(target / 'Launcher.exe'), '--update-probe', journal['probe']['nonce']],
+                               cwd=target, creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        actual = runtime.process_identity(process.pid)
+        if not actual or os.path.normcase(actual['image']) != os.path.normcase(str(target / 'Launcher.exe')):
+            raise RuntimeError('New launcher did not start')
+        journal['probe'].update(pid=process.pid, created=str(actual['created_filetime']))
+        atomic_json(target / JOURNAL, journal)
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError('New launcher exited before confirming the update')
+            if receipt.exists():
+                value = read_json(receipt, 4096)
+                expected = dict(schema=1, nonce=journal['probe']['nonce'], ok=True, root=str(target),
+                                pid=process.pid, created=journal['probe']['created'],
+                                release_id=journal['release']['release_id'],
+                                source_commit=journal['release']['source_commit'])
+                if value != expected or runtime.process_identity(process.pid) != actual:
+                    raise ValueError('New launcher confirmation identity differs')
+                return process
+            time.sleep(.1)
+        raise TimeoutError('New launcher did not confirm within 120 seconds')
+    except BaseException:
+        _stop_probe(process, target, journal)
+        raise
+
+
+def probe_app(target, nonce):
+    target = absolute(target)
+    journal = _journal(target)
+    probe = journal.get('probe', {})
+    if journal['schema'] != 3 or journal.get('phase') != 'awaiting_probe' or probe.get('nonce') != nonce:
+        raise ValueError('No matching provisional update')
+    current = runtime.process_identity(probe['pid'])
+    if (not current or str(current['created_filetime']) != probe['created']
+            or os.path.normcase(current['image']) != os.path.normcase(str(target / 'Launcher.exe'))):
+        raise ValueError('Provisional launcher identity differs')
+    info = validate_release_info(read_json(pack.file_under(target, INFO), 4096))
+    if info != journal['release']:
+        raise ValueError('Provisional application version differs')
+    inventory = read_json(pack.file_under(target, INVENTORY))
+    records = validate_common_records(inventory.get('files'), transaction=inventory.get('schema') == 2)
+    names = {row['path'] for row in records}
+    if not {'Launcher.exe', INFO, *REQUIRED_RUNTIME} <= names:
+        raise ValueError('Provisional runtime is incomplete')
+    for row in records:
+        if file_record(pack.file_under(target, row['path']), row['path']) != row:
+            raise ValueError('Provisional file differs: ' + row['path'])
+    for name in REQUIRED_RUNTIME[1:3]:
+        check = subprocess.run([str(pack.file_under(target, name)), '--version'], cwd=target,
+                               capture_output=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+        if check.returncode:
+            raise RuntimeError('Provisional runtime check failed: ' + name)
+    return dict(info, ok=True)
+
+
+def prepared_release(stage, digest, target):
+    import app_update_v2 as parts
+    stage, target = absolute(stage), absolute(target)
+    # Prepared payloads are disposable files in this copy, never a release directory.
+    if stage.parent != target / 'state' or not re.fullmatch('[a-f0-9]{32}', stage.name):
+        raise ValueError('Prepared files must belong to this copy disposable update stage')
+    index = parts.read_index(stage / 'index.json', digest)
+    prepared = read_json(pack.file_under(stage, 'prepared.json'))
+    names = {row['path'] for row in index['files']}
+    if (type(prepared) is not dict or set(prepared) != {'schema', 'index_sha256', 'omitted'}
+            or type(prepared['schema']) is not int or prepared['schema'] != 2
+            or prepared['index_sha256'] != digest or type(prepared['omitted']) is not list
+            or any(type(name) is not str for name in prepared['omitted'])
+            or len(set(prepared['omitted'])) != len(prepared['omitted']) or not set(prepared['omitted']) <= names):
+        raise ValueError('Invalid prepared update identity')
+    required = {'Launcher.exe', INFO, pack.COMPONENT_FILES[0], *REQUIRED_RUNTIME,
+                'scripts/release_portable.py', 'scripts/portable_app.py', 'scripts/launch_runtime.py'}
+    if not required <= names:
+        raise ValueError('Incomplete prepared application/runtime')
+    omitted = set(prepared['omitted'])
+    rows = [{key: row[key] for key in ('path', 'bytes', 'sha256')} for row in index['files']]
+    validate_common_records(rows, transaction=True)
+    for row in rows:
+        root = target if row['path'] in omitted else stage / 'app'
+        if file_record(pack.file_under(root, row['path']), row['path']) != row:
+            raise ValueError('Prepared or reused file differs: ' + row['path'])
+    info_root = target if INFO in omitted else stage / 'app'
+    if read_json(pack.file_under(info_root, INFO), 4096) != index['release']:
+        raise ValueError('Prepared provenance differs')
+    parts.verify_cache(index, target)
+    return dict(index['release'], common_files=rows, omitted=prepared['omitted'], artifacts={},
+                payload_schema=2, index_sha256=digest)
+
+
+def consume_prepared(stage, target, destination, row):
+    """Move only an owned disposable stage, never files from a release artifact."""
+    stage, target, destination = map(absolute, (stage, target, destination))
+    if (stage.parent != target / 'state' or not re.fullmatch('[a-f0-9]{32}', stage.name)
+            or not destination.is_relative_to(target / 'state')
+            or not re.fullmatch('app-update-[a-f0-9]{32}', destination.relative_to(target / 'state').parts[0])):
+        raise ValueError('Prepared file move is outside this disposable transaction')
+    with _pinned_directory(stage, create=False), _pinned_directory(target, create=False):
+        source = pack.file_under(stage / 'app', row['path'])
+        if file_record(source, row['path']) != row:
+            raise ValueError('Prepared file changed before handoff')
+        directory(destination.parent)
+        _plain(destination)
+        if destination.exists():
+            raise ValueError('Prepared destination already exists')
+        with _pinned_directory(source.parent, create=False), _pinned_directory(destination.parent, create=False):
+            os.replace(source, destination)
+
+
+def apply_update(release, target, probe=False, prepared_sha256=None, _local_stage=False):
     release, target = absolute(release), absolute(target)
-    if release == target or release.is_relative_to(target) or target.is_relative_to(release):
+    local_stage = (_local_stage and release.parent == target / 'state' and bool(re.fullmatch('[a-f0-9]{32}', release.name)))
+    if release == target or (prepared_sha256 is None and not local_stage and release.is_relative_to(target)) or target.is_relative_to(release):
         raise ValueError('Release and installed application must be separate directories')
-    manifest = verify_release(release)
+    manifest = prepared_release(release, prepared_sha256, target) if prepared_sha256 else verify_release(release)
     with _pinned_directory(target, create=False):
         if project_processes(target):
             raise RuntimeError('Close Launcher and shut down Windows and gateway before updating')
@@ -478,15 +618,22 @@ def apply_update(release, target):
             _plain(inventory_path)
             if inventory_path.exists():
                 previous = read_json(inventory_path)
-                if type(previous) is not dict or previous.get('schema') != 1:
+                if type(previous) is not dict or type(previous.get('schema')) is not int or previous['schema'] not in (1, 2):
                     raise ValueError('Invalid installed application inventory')
                 names = {row['path'].casefold() for row in manifest['common_files']}
-                for row in validate_common_records(previous.get('files')):
+                for row in validate_common_records(previous.get('files'), transaction=previous['schema'] == 2):
                     path = target / row['path']
+                    if row['path'].startswith('gateway/packages/releases/'):
+                        continue  # Versioned gateway bases remain available to the retained rollback.
                     if row['path'].casefold() not in names and path.exists():
                         if file_record(pack.file_under(target, row['path']), row['path']) != row:
                             raise RuntimeError('Obsolete application file changed; preserve it before updating: ' + row['path'])
                         obsolete.append(row)
+            if not prepared_sha256:
+                catalog_pointer = target / 'state/components/current.json'
+                _plain(catalog_pointer)
+                if catalog_pointer.exists():
+                    obsolete.append(file_record(catalog_pointer, 'state/components/current.json'))
             previous_bytes = 0
             for row in rows + obsolete:
                 path = target / row['path']
@@ -505,16 +652,52 @@ def apply_update(release, target):
             pins.enter_context(_pinned_directory(transaction, create=False))
             journal = {'schema': 2, 'target': str(target), 'target_id': identity(target), 'transaction': transaction.name,
                        'release_id': manifest['release_id'], 'phase': 'prepared', 'files': []}
+            if probe:
+                journal.update(schema=3, release={key: manifest[key] for key in ('schema', 'release_id', 'source_commit')},
+                               probe={'nonce': uuid.uuid4().hex, 'pid': 0, 'created': '0'})
+                if prepared_sha256:
+                    journal['prepared'] = release.name
+                tools = absolute(sys.executable).parent.parent
+                if tools.parent == target / 'state' and re.fullmatch('app-updater-[a-f0-9]{32}', tools.name):
+                    journal['tools'] = tools.name
             generated = transaction / 'generated'
             directory(generated / 'state')
-            atomic_json(generated / INVENTORY, {'schema': 1, 'files': manifest['common_files']})
+            atomic_json(generated / INVENTORY, {'schema': 2 if prepared_sha256 else 1, 'files': manifest['common_files']})
             inventory = file_record(generated / INVENTORY, INVENTORY)
             # Delta releases must carry the pair when the gateway changes.
-            gateway_rows = stage_gateway(release / 'app', target, generated, needed)
+            if prepared_sha256:
+                import app_update_v2 as parts
+                import update_storage as storage
+                index = parts.read_index(release / 'index.json', prepared_sha256)
+                gateway_rows = storage.build_catalog(release / 'index.json', prepared_sha256, target, generated)
+                if index['gateway']:
+                    gateway = pack.gateway_package
+                    version = index['gateway']['version']
+                    current_path = target / 'gateway/packages/current.json'
+                    current = gateway._pointer(read_json(current_path, 65536)) if current_path.exists() else None
+                    for operation in ('update.json', 'repair.json'):
+                        path = current_path.parent / operation
+                        if path.exists() and read_json(path, 65536).get('phase') == 'prepared':
+                            raise RuntimeError('Finish the interrupted gateway operation first')
+                    prefix = 'gateway/packages/releases/' + version + '/'
+                    disk_root = target if prefix + 'gateway.qcow2' in omitted else release / 'app'
+                    with locked_read(pack.file_under(disk_root, prefix + 'gateway.qcow2')) as stream:
+                        gateway._check_disk(stream, index['gateway'])
+                    pointer = dict(schema=1, current=version, previous=current['current'] if current and current['current'] != version else (current or {}).get('previous'))
+                    for name, value in (('current.json', pointer), ('update.json', dict(schema=1, phase='committed', old=current, new=pointer))):
+                        path = generated / 'gateway/packages' / name
+                        directory(path.parent)
+                        atomic_json(path, value)
+                        gateway_rows.append(file_record(path, 'gateway/packages/' + name))
+            else:
+                gateway_rows = stage_gateway(release / 'app', target, generated, needed)
             for row in rows:
                 path = target / row['path']
                 staged = transaction / 'new' / row['path']
-                copy_record(release / 'app' / row['path'], staged, row)
+                if prepared_sha256:
+                    consume_prepared(release, target, staged, row)
+                else:
+                    copy_record(release / 'app' / row['path'], staged, row)
                 old = file_record(path, row['path']) if path.exists() else None
                 if old is not None:
                     copy_record(path, transaction / 'old' / row['path'], old)
@@ -547,6 +730,7 @@ def apply_update(release, target):
             json_bytes(dict(journal, phase='rolled_back',
                             files=[dict(row, phase='replacing') for row in journal['files']]))
             atomic_json(target / JOURNAL, journal)
+            probe_process = None
             try:
                 if project_processes(target):
                     raise RuntimeError('Another process opened this copy while the update was being prepared')
@@ -571,16 +755,26 @@ def apply_update(release, target):
                     path = target / row['path']
                     if (file_record(path, row['path']) if path.exists() else None) != row['new']:
                         raise ValueError('Installed file verification failed')
+                if probe:
+                    journal['phase'] = 'awaiting_probe'
+                    atomic_json(target / JOURNAL, journal)
+                    probe_process = confirm_probe(target, journal)
+                    atomic_json(target / 'state/update-accepted.json', dict(schema=1, committed=True,
+                                nonce=journal['probe']['nonce'], root=str(target),
+                                transaction=transaction.name, pid=journal['probe']['pid'], created=journal['probe']['created'],
+                                release_id=manifest['release_id'], source_commit=manifest['source_commit']))
                 journal['phase'] = 'committed'
                 atomic_json(transaction / 'journal.json', journal)
                 remove_owned_file(target / JOURNAL, identity(target / JOURNAL))
             except BaseException:
                 try:
+                    _stop_probe(probe_process, target, journal) if probe else None
                     _rollback(target, journal)
                 except BaseException as error:
                     raise RuntimeError('Update recovery is required; journal and backups retained') from error
                 raise
-    return {'release_id': manifest['release_id'], 'source_commit': manifest['source_commit'], 'backup': str(transaction)}
+    return {'release_id': manifest['release_id'], 'source_commit': manifest['source_commit'], 'backup': str(transaction),
+            'probe': journal.get('probe')}
 
 
 def _git(source, *args):
@@ -600,7 +794,10 @@ def validate_build_inputs(source, commit):
     paths += sorted(path for pattern in ('*.cs', '*.xaml', '*.csproj', 'app.manifest')
                     for path in (source / 'launcher-wpf').glob(pattern))
     paths += [source / name for name in ('ui/app.manifest', 'ui/AppIcon.ico',
-              'scripts/Build-Launcher.ps1', 'docs/third-party.md', *pack.APP_FILES)]
+              'scripts/Build-Launcher.ps1', 'scripts/Build-GuestFiles.ps1', 'scripts/Build-HostFiles.ps1',
+              'scripts/update_toolkit.py', 'docs/third-party.md', *pack.APP_FILES)]
+    paths += sorted((source / 'guest').glob('*.cs')) + sorted((source / 'guest/files').glob('*.cs'))
+    paths += sorted((source / 'host/files').glob('*.cs')) + sorted((source / 'host/files/dependency-patches').glob('*.cs'))
     for path in paths:
         name = path.relative_to(source).as_posix()
         _plain(path)
@@ -633,15 +830,23 @@ def master_files(master):
     return rows
 
 
-def prepare_release(source, output, master, release_id):
+def prepare_release(source, output, master, release_id, components=None, bridge=None):
+    import update_toolkit
     source, output = absolute(source), absolute(output)
     commit = source_commit(source)
     validate_build_inputs(source, commit)
     info = validate_release_info({'schema': 1, 'release_id': release_id, 'source_commit': commit})
+    if bridge and components:
+        raise ValueError('A bridge must preserve its base components')
+    frozen = verify_release(bridge) if bridge else None
+    component_source = absolute(bridge) / 'app' if bridge else source
+    components = absolute(components) if components else component_source / 'runtime/host-files'
+    if not frozen:
+        update_toolkit.validate_host_build(source, components)
     if output.exists() or output.is_relative_to(source) or source.is_relative_to(output):
         raise ValueError('Release output must be a new directory outside the source checkout')
     master_files(master)
-    inventory = bundle.inventory(source)
+    inventory = bundle.inventory(component_source)
     engine = next(row for row in inventory['files'] if row['path'] == REQUIRED_RUNTIME[1])
     for name in ('portable_app.py', 'control_guest_install.py', 'reference_vm.py', 'patch_qemu_engine.py'):
         tree = ast.parse((source / 'scripts' / name).read_text(encoding='utf-8-sig'))
@@ -657,13 +862,18 @@ def prepare_release(source, output, master, release_id):
     app = output / 'app'
     names = [*pack.APP_FILES, *pack.COMPONENT_FILES]
     for group in (pack.GATEWAY_RECOVERY, pack.FILE_COMPONENT_FILES):
-        present = [(source / name).is_file() for name in group]
+        present = [(components / Path(name).name).is_file() if group == pack.FILE_COMPONENT_FILES
+                   else (component_source / name).is_file() for name in group]
         if not all(present):
             raise ValueError('Complete recovery and file-sharing components are required for this release')
         names.extend(group)
     names.extend(row['path'] for row in inventory['files'])
     for name in names:
-        path = pack.file_under(source, name)
+        if name in pack.FILE_COMPONENT_FILES:
+            path = pack.file_under(components, name.removeprefix('runtime/host-files/'))
+        else:
+            root = component_source if pack.runtime_path(name) or name in (*pack.COMPONENT_FILES, *pack.GATEWAY_RECOVERY) else source
+            path = pack.file_under(root, name)
         copy_record(path, app / name, file_record(path, name))
     atomic_json(app / INFO, info)
     if source_commit(source) != commit:
@@ -672,6 +882,13 @@ def prepare_release(source, output, master, release_id):
     manifest = dict(info, created_utc=datetime.now(timezone.utc).isoformat(), common_files=common_records(app),
                     artifacts={},
                     master=dict(MASTER_HASHES), manual_acceptance=None)
+    if frozen:
+        manifest['bridge_base'] = {key: frozen[key] for key in ('release_id', 'source_commit')}
+        manifest['bridge_base']['components'] = [row for row in frozen['common_files'] if pack.runtime_path(row['path'])
+            or row['path'] in (*pack.COMPONENT_FILES, *pack.GATEWAY_RECOVERY, *pack.FILE_COMPONENT_FILES)]
+        actual = {row['path']: row for row in manifest['common_files']}
+        if any(actual.get(row['path']) != row for row in manifest['bridge_base']['components']):
+            raise ValueError('Bridge components differ from the verified base')
     atomic_json(output / 'RELEASE.json', manifest)
     verify_release(output)
     return manifest
@@ -835,12 +1052,23 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def install_app(archive, sha256, target):
+def install_app(archive, sha256, target, probe=False, catalog=None, index_sha256=None):
     """Verify a downloaded light package, unpack it outside the target and apply it as a normal update."""
-    stage = Path(tempfile.mkdtemp(prefix='pocket-windows-update-', dir=absolute(archive).parent))
+    target = absolute(target)
+    local_stage = absolute(archive).is_relative_to(target)
+    stage = directory(target / 'state' / uuid.uuid4().hex) if local_stage else Path(tempfile.mkdtemp(prefix='pocket-windows-update-', dir=absolute(archive).parent))
     try:
-        unpack_app(archive, sha256, stage)
-        return apply_update(stage, target)
+        manifest = unpack_app(archive, sha256, stage)
+        if catalog is not None:
+            import app_update_v2 as parts
+            index = parts.read_index(absolute(catalog), index_sha256)
+            if any(manifest[key] != index['release'][key] for key in ('schema', 'release_id', 'source_commit')):
+                raise ValueError('Full package and chunk catalog provenance differ')
+            parts.seed_cache(index, stage / 'app', absolute(target))
+            prepared = absolute(target) / 'state' / uuid.uuid4().hex
+            parts.prepare(catalog, index_sha256, target, prepared, offline=True)
+            return apply_update(prepared, target, probe=True, prepared_sha256=index_sha256)
+        return apply_update(stage, target, probe=probe, _local_stage=local_stage)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
@@ -939,9 +1167,30 @@ def wait_for_launcher(target, pid, created):
         kernel.CloseHandle(handle)
 
 
-def run_app_update(target, pid, created, archive=None, sha256=None, release_id=None, recover=False):
+def cleanup_download(target, archive, digest, release_id):
+    """Remove a completed download only with its matching ownership receipt."""
+    target, downloaded = absolute(target), absolute(archive)
+    folder = downloaded.parent
+    if (downloaded.name != 'app.zip' or folder.parent != target / 'state'
+            or not re.fullmatch('app-updater-[a-f0-9]{32}', folder.name) or (target / JOURNAL).exists()):
+        return
+    with _pinned_directory(folder, create=False):
+        marker = read_json(pack.file_under(folder, 'download.json'), 4096)
+        if marker != dict(schema=1, release_id=release_id, sha256=digest):
+            return
+        if {path.name for path in folder.iterdir()} - {'app.zip', 'download.json', 'update.json'}:
+            return
+        if file_record(pack.file_under(folder, 'app.zip'), 'app.zip')['sha256'] != digest:
+            return
+        owned = [(path, identity(pack.file_under(folder, path.name))) for path in folder.iterdir()]
+        for path, expected in owned:
+            remove_owned_file(path, expected)
+    folder.rmdir()
+
+
+def run_app_update(target, pid, created, archive=None, sha256=None, release_id=None, recover=False,
+                   prepared=None, index_sha256=None, probe=False, catalog=None):
     target = absolute(target)
-    directory(target / 'logs')
     result = {'schema': 1, 'status': 'failed'}
     try:
         wait_for_launcher(target, pid, created)
@@ -949,20 +1198,45 @@ def run_app_update(target, pid, created, archive=None, sha256=None, release_id=N
             rollback_update(target)
             result.update(status='rolled_back', message='Предыдущая версия восстановлена. Можно повторить обновление.')
         else:
-            check_app(archive, sha256, release_id, target=target)
-            installed = install_app(archive, sha256, target)
+            if prepared is not None:
+                manifest = prepared_release(absolute(prepared), index_sha256, target)
+                if manifest['release_id'] != release_id:
+                    raise ValueError('Prepared release differs from the offer')
+                installed = apply_update(prepared, target, probe=True, prepared_sha256=index_sha256)
+            else:
+                check_app(archive, sha256, release_id, target=target)
+                installed = install_app(archive, sha256, target, probe=probe, catalog=catalog, index_sha256=index_sha256)
             if installed['release_id'] != release_id:
                 raise RuntimeError('Installed version differs from the offered release')
-            result.update(status='committed', release_id=release_id, message='Обновлено до версии ' + release_id)
+            result.update(status='committed', release_id=release_id, source_commit=installed['source_commit'],
+                          message='Обновлено до версии ' + release_id)
+            if probe or prepared is not None:
+                try:
+                    import update_storage
+                    result['cleanup'] = update_storage.cleanup(target, installed['backup'], allowed_probe=installed.get('probe'))
+                except (OSError, ValueError, RuntimeError):
+                    result['cleanup_pending'] = True
     except Exception:
-        with (target / 'logs/update-details.txt').open('w', encoding='utf-8') as log:
-            traceback.print_exc(file=log)
+        try:
+            directory(target / 'logs')
+            with (target / 'logs/update-details.txt').open('w', encoding='utf-8') as log:
+                traceback.print_exc(file=log)
+        except (OSError, ValueError):
+            pass
         if (target / JOURNAL).exists():
             result.update(status='recovery_required', message='Обновление прервано. Нужен откат из сохранённой копии.')
         else:
             result['message'] = 'Обновление не установлено. Прежние файлы сохранены. Подробности: logs/update-details.txt.'
-    atomic_json(target / 'logs/update-result.json', result)
+    try:
+        directory(target / 'logs')
+        atomic_json(target / 'logs/update-result.json', result)
+    except (OSError, ValueError):
+        pass  # Diagnostic output must never prevent recovery or restart.
     if archive is not None:
+        try:
+            cleanup_download(target, archive, sha256, release_id)
+        except (OSError, ValueError):
+            result['download_cleanup_pending'] = True
         downloaded = absolute(archive)
         folder = downloaded.parent
         if (downloaded.name == 'app.zip' and folder.parent == Path(tempfile.gettempdir())
@@ -986,6 +1260,8 @@ def main():
     for name in ('source', 'output', 'master'):
         prepare.add_argument('--' + name, type=Path, required=True)
     prepare.add_argument('--release-id', required=True)
+    prepare.add_argument('--components', type=Path, help='Fresh source-accounted Build-HostFiles output')
+    prepare.add_argument('--bridge', type=Path, help='Verified release whose immutable components this bridge preserves')
     package = commands.add_parser('package')
     for name in ('release', 'source', 'master'):
         package.add_argument('--' + name, type=Path, required=True)
@@ -997,6 +1273,9 @@ def main():
     light = commands.add_parser('app-package')
     light.add_argument('--release', type=Path, required=True)
     light.add_argument('--base', type=Path, help='RELEASE.json of the previous release: files it shipped unchanged are left out')
+    v2 = commands.add_parser('v2-package')
+    v2.add_argument('--release', type=Path, required=True)
+    v2.add_argument('--source', type=Path, required=True)
     install = commands.add_parser('install-app')
     install.add_argument('--zip', type=Path, required=True)
     install.add_argument('--sha256', required=True)
@@ -1014,6 +1293,13 @@ def main():
     runner.add_argument('--sha256')
     runner.add_argument('--release-id')
     runner.add_argument('--recover', action='store_true')
+    runner.add_argument('--prepared', type=Path)
+    runner.add_argument('--catalog', type=Path)
+    runner.add_argument('--index-sha256')
+    runner.add_argument('--probe', action='store_true')
+    health = commands.add_parser('probe-app')
+    health.add_argument('--target', type=Path, required=True)
+    health.add_argument('--nonce', required=True)
     rollback = commands.add_parser('rollback')
     rollback.add_argument('--target', type=Path, required=True)
     publish = commands.add_parser('publish')
@@ -1022,20 +1308,31 @@ def main():
     publish.add_argument('--owner-accepted', action='store_true', help='Use only after explicit human Launcher and VM acceptance')
     args = parser.parse_args()
     if args.command == 'prepare':
-        result = prepare_release(args.source, args.output, args.master, args.release_id)
+        result = prepare_release(args.source, args.output, args.master, args.release_id, args.components, args.bridge)
     elif args.command == 'package':
         result = package_release(args.release, args.source, args.master)
     elif args.command == 'update':
         result = apply_update(args.release, args.target)
     elif args.command == 'app-package':
         result = package_app(args.release, args.base)
+    elif args.command == 'v2-package':
+        import app_update_v2
+        import update_toolkit
+        manifest = verify_release(args.release)
+        if source_commit(absolute(args.source)) != manifest['source_commit']:
+            raise ValueError('Toolkit source differs from this release')
+        toolkit = update_toolkit.build(args.source, args.release, manifest['release_id'])
+        result = app_update_v2.build(args.release, toolkit['path'])
     elif args.command == 'install-app':
         result = install_app(args.zip, args.sha256, args.target)
     elif args.command == 'check-app':
         result = check_app(args.zip, args.sha256, args.release_id, target=args.target)
+    elif args.command == 'probe-app':
+        result = probe_app(args.target, args.nonce)
     elif args.command == 'run-app-update':
         result = run_app_update(args.target, args.wait_pid, args.wait_created,
-                                args.zip, args.sha256, args.release_id, args.recover)
+                                args.zip, args.sha256, args.release_id, args.recover,
+                                args.prepared, args.index_sha256, args.probe, args.catalog)
     elif args.command == 'rollback':
         result = rollback_update(args.target)
     elif args.command == 'publish':
@@ -1047,7 +1344,7 @@ def main():
         result = publish_release(args.release, args.target)
     else:
         result = verify_release(args.release)
-    print(json.dumps(result, ensure_ascii=True, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2, default=str))
 
 
 if __name__ == '__main__':

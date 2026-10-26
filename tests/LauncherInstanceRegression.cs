@@ -17,7 +17,7 @@ internal static class ReleaseInfo
         return null;
     }
 }
-internal static class AppUpdate { internal static void Recover(string root) { throw new Exception("not used"); } }
+internal static class AppUpdate { internal static void Recover(string root) { throw new Exception("not used"); } internal static bool ValidProbe(string root, string nonce) { return false; } }
 
 namespace WindowsClaude.Launcher
 {

@@ -120,6 +120,21 @@ internal static class GuestFilesRegression
     }
     static Outcome Apply(Config config,List<Mapping> old,FakeNet net,Func<bool> ready=null,bool elevated=false,bool interactive=true)
     {return Program.ApplyMappings(config,old,net,ready??(()=>true),()=>{},elevated,interactive,owned=>{});}
+    static void HandoverRegression()
+    {
+        var steps=new List<string>();int reads=0;
+        Assert(Program.Handover(()=>{steps.Add("start");return true;},()=>++reads==2,()=>steps.Add("commit"),()=>steps.Add("stop"),()=>steps.Add("wait"),3),"Confirmed child must take over");
+        Assert(String.Join(",",steps)=="start,wait,commit","Startup must change only after ACK");
+        steps.Clear();Assert(!Program.Handover(()=>false,()=>true,()=>steps.Add("commit"),()=>steps.Add("stop"),()=>{},3)&&steps.Count==0,"Failed start must preserve startup without stopping another process");
+        Assert(!Program.Handover(()=>{throw new IOException("start failed");},()=>true,()=>steps.Add("commit"),()=>steps.Add("stop"),()=>{},3)&&steps.Count==0,"Throwing start must preserve the old helper");
+        steps.Clear();Assert(!Program.Handover(()=>true,()=>false,()=>steps.Add("commit"),()=>steps.Add("stop"),()=>{},3)&&String.Join(",",steps)=="stop","No ACK must preserve startup and stop only the child");
+        steps.Clear();Assert(!Program.Handover(()=>true,()=>true,()=>{throw new IOException("shortcut failed");},()=>steps.Add("stop"),()=>{},3)&&String.Join(",",steps)=="stop","Failed shortcut replacement must stop the waiting child");
+        string nonce=new string('a',32),hash=new string('B',64),receipt=Program.HandoffReceipt(nonce,hash,42,1234);
+        Assert(Program.HandoffMatches(receipt,nonce,hash,42,1234),"Current child identity must confirm");
+        Assert(!Program.HandoffMatches(receipt,new string('c',32),hash,42,1234)&&!Program.HandoffMatches(receipt,nonce,new string('C',64),42,1234),"Wrong nonce or SHA must never confirm");
+        Assert(!Program.HandoffMatches(receipt,nonce,hash,43,1234)&&!Program.HandoffMatches(receipt,nonce,hash,42,1235)&&!Program.HandoffMatches(null,nonce,hash,42,1234),"Stale receipt and reused PID must never confirm");
+        steps.Clear();Assert(!Program.Handover(()=>true,()=>Program.HandoffMatches(receipt,new string('c',32),hash,42,1234),()=>steps.Add("commit"),()=>steps.Add("stop"),()=>{},3)&&String.Join(",",steps)=="stop","Wrong-nonce ACK must time out without switching startup");
+    }
     static void ExplorerLabelRegression()
     {
         Config config=Program.ParseConfig(ConfigText());
@@ -177,6 +192,7 @@ internal static class GuestFilesRegression
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.16"},Masks=new[]{"255.255.255.0"}}),"Bootstrap must require the exact static guest address, not any address in the subnet");
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15","192.168.234.16"},Masks=new[]{"255.255.255.0","255.255.255.0"}}),"Extra IPv4 addresses must fail exact bootstrap validation");
             BootstrapRegression();
+            HandoverRegression();
             LinkRegression();
             DisplayReceiptRegression();
             var modes=new List<int[]>{new[]{1280,800,32,60},new[]{1864,1048,32,60},new[]{1864,1048,16,75},new[]{1864,1048,32,75},new[]{800,600,32,60}};

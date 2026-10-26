@@ -11,7 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using WindowsClaude.Launcher;
 
-namespace WindowsClaude.Launcher { public partial class App : Application { } }
+namespace WindowsClaude.Launcher { public partial class App : Application { internal static bool UpdateProbePending; internal static string UpdateProbeNonce; } }
 
 internal static class Bridge
 {
@@ -80,7 +80,19 @@ internal static class LauncherLifecycleRegression
         try
         {
             var app = new App(); app.InitializeComponent();
+            App.UpdateProbePending = true;
+            Bridge.Calls.Clear();
+            var gated = (Task<Dictionary<string, object>>)typeof(MainWindow).GetMethod("Run", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { "start", null });
+            Assert(!Bridge.Ok(gated.Result) && Bridge.Calls.Count == 0, "Probe blocks every ordinary backend command");
+            var probeWindow = new MainWindow();
+            var probeClosing = new CancelEventArgs(); Call(probeWindow, "OnClosing", probeWindow, probeClosing);
+            Assert(!probeClosing.Cancel && (bool)Field(probeWindow, "closing") && Bridge.Calls.Count == 0, "Probe exits without settings or VM actions");
+            App.UpdateProbePending = false;
             var window = Window();
+            Set(window, "updateOffer", new AppUpdate.Offer { Id = "2026.10.27.1", Repair = true });
+            Call(window, "ShowUpdateOffer");
+            Assert(((Border)Field(window, "UpdatePill")).Visibility == Visibility.Collapsed && ((Button)Field(window, "InstallUpdateButton")).Visibility == Visibility.Visible, "Current-version repair is available without a new-version notification");
+            Set(window, "updateOffer", null); Call(window, "ShowUpdateOffer");
             Call(window, "Busy", true);
             Assert(!((StackPanel)Field(window, "SettingsBody")).IsEnabled, "settings disabled while saving/busy");
             Call(window, "Busy", false);

@@ -1,5 +1,5 @@
 """Offline, hash-pinned gateway packages. Never accesses Windows or profile data."""
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, nullcontext
 import hashlib
 import json
 import os
@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import struct
+import tempfile
 import uuid
 import zipfile
 from file_snapshot import locked_read
@@ -212,6 +213,66 @@ def repair_package(root, source, expected_sha256):
     return _install(root, source, expected_sha256, repair=True)
 
 
+def repair_cached(root, index_path, expected_sha256):
+    """Recover only the gateway from the installed, fully verified offline catalog."""
+    import app_update_v2 as chunks
+    import update_storage as storage
+    root, index_path = Path(root).absolute(), Path(index_path).absolute()
+    _digest(expected_sha256)
+    with _pinned_directory(root, create=False), _pinned_directory(root / 'state'), ExitStack() as held:
+        _plain(root / 'state/runtime.lock')
+        acquired = held.enter_context(runtime.ProjectLock(root))
+        if not acquired or runtime.engine_processes(root):
+            raise RuntimeError('Stop the portable virtual machines before updating the gateway')
+        catalog_path, catalog_sha, index = storage.current_index(root)
+        if catalog_path != index_path or catalog_sha != expected_sha256:
+            raise ValueError('Repair requires the current installed component catalog')
+        if chunks.release.validate_release_info(_read(root / 'release-info.json')) != index['release']:
+            raise ValueError('Component catalog differs from the installed release identity')
+        manifest = _manifest(index['gateway'])
+        chunks.verify_cache(index, root)
+        for directory in (root / 'gateway', root / 'gateway/packages', root / 'gateway/packages/releases'):
+            held.enter_context(_pinned_directory(directory))
+        base = root / 'gateway/packages'
+        pointer_path = base / 'current.json'
+        _plain(pointer_path)
+        current = _pointer(_read(pointer_path)) if pointer_path.exists() else None
+        pending = _repair_journal(base)
+        if shutil.disk_usage(root / 'state').free < 2 * manifest['bytes'] + 64 * 1024**2:
+            raise ValueError('Insufficient free space for the gateway repair')
+        prefix = 'gateway/packages/releases/' + manifest['version'] + '/'
+        rows = {row['path']: row for row in index['files']}
+        inventory = {row['sha256']: row for row in index['chunks']}
+        cache = root / 'state/update-cache/chunks'
+        with tempfile.TemporaryDirectory(prefix='gateway-cache-', dir=root / 'state') as temporary:
+            incoming = Path(temporary)
+            with _pinned_directory(incoming, create=False):
+                for name in ('manifest.json', 'gateway.qcow2'):
+                    row = rows[prefix + name]
+                    if name == 'manifest.json' and row['bytes'] > 65536:
+                        raise ValueError('Gateway metadata exceeds 64 KiB')
+                    destination = incoming / name
+                    with destination.open('xb') as output:
+                        digest, size = hashlib.sha256(), 0
+                        for sha in row['chunks']:
+                            raw = chunks._cache_read(cache, inventory[sha])
+                            if raw is None:
+                                raise ValueError('Verified cache chunk disappeared or changed')
+                            digest.update(raw)
+                            size += len(raw)
+                            output.write(raw)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    if size != row['bytes'] or digest.hexdigest() != row['sha256']:
+                        raise ValueError('Assembled gateway file checksum mismatch')
+                if _manifest(_read(incoming / 'manifest.json')) != manifest:
+                    raise ValueError('Gateway manifest differs from component catalog')
+                with locked_read(incoming / 'gateway.qcow2') as reader:
+                    _check_disk(reader, manifest)
+                return _repair_locked(base, None, expected_sha256, current, pending,
+                                      cached=(manifest, incoming / 'gateway.qcow2'))
+
+
 def _archive_manifest(archive):
     entries = archive.infolist()
     if len(entries) != 2 or {entry.filename for entry in entries} != {'manifest.json', 'gateway.qcow2'}:
@@ -231,14 +292,14 @@ def _archive_manifest(archive):
     return manifest
 
 
-def _stage_archive(base, archive, manifest):
+def _stage_archive(base, archive, manifest, disk_source=None):
     if shutil.disk_usage(base).free < manifest['bytes'] + 64 * 1024**2:
         raise ValueError('Insufficient free space for the gateway update')
     staging = base / 'releases' / ('.staging-' + uuid.uuid4().hex)
     staging.mkdir()
     with _pinned_directory(staging, create=False):
         disk = staging / 'gateway.qcow2'
-        with archive.open('gateway.qcow2') as stream, disk.open('xb') as output:
+        with (archive.open('gateway.qcow2') if disk_source is None else locked_read(disk_source)) as stream, disk.open('xb') as output:
             copied = 0
             while chunk := stream.read(1024**2):
                 copied += len(chunk)
@@ -284,10 +345,10 @@ def _repair_journal(base):
     return journal
 
 
-def _repair_locked(base, reader, expected_sha256, current, pending):
+def _repair_locked(base, reader, expected_sha256, current, pending, cached=None):
     with _pinned_directory(base / 'quarantine'):
-        with zipfile.ZipFile(reader) as archive:
-            manifest = _archive_manifest(archive)
+        with (zipfile.ZipFile(reader) if cached is None else nullcontext(None)) as archive:
+            manifest = _archive_manifest(archive) if cached is None else cached[0]
             version = manifest['version']
             if pending and pending['phase'] == 'prepared':
                 if pending['package_sha256'] != expected_sha256 or pending['new']['current'] != version:
@@ -298,7 +359,7 @@ def _repair_locked(base, reader, expected_sha256, current, pending):
                 staging = base / 'releases' / journal['staging']
                 _plain(staging)
                 # Recheck the original incoming bytes even when resuming an existing staging directory.
-                with archive.open('gateway.qcow2') as stream:
+                with (archive.open('gateway.qcow2') if cached is None else locked_read(cached[1])) as stream:
                     _check_disk(stream, manifest)
             else:
                 # Reconcile only a structurally known update journal, without trusting damaged disks.
@@ -321,11 +382,11 @@ def _repair_locked(base, reader, expected_sha256, current, pending):
                     raise ValueError('Cannot replace a valid gateway with different content under the same version')
                 previous = next((candidate for candidate in valid if candidate != version), None)
                 if version in valid:
-                    with archive.open('gateway.qcow2') as stream:
+                    with (archive.open('gateway.qcow2') if cached is None else locked_read(cached[1])) as stream:
                         _check_disk(stream, manifest)
                     staging = base / 'releases' / ('.staging-' + uuid.uuid4().hex)
                 else:
-                    staging = _stage_archive(base, archive, manifest)
+                    staging = _stage_archive(base, archive, manifest, None if cached is None else cached[1])
                 journal = {'schema': 1, 'phase': 'prepared', 'package_sha256': expected_sha256,
                            'old': current, 'new': {'schema': 1, 'current': version, 'previous': previous},
                            'staging': staging.name, 'quarantines': bad}

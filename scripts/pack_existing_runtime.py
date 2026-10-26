@@ -34,7 +34,7 @@ APP_FILES = tuple('scripts/' + name for name in (
     'profile_store.py', 'gateway_controller.py', 'gateway_package.py', 'host_network.py', 'app_download.py',
     'gateway_profile.py', 'session_carrier.py', 'file_snapshot.py', 'runtime_logs.py', 'windows_guest_settings.py',
     'host_file_sharing.py', 'file_share_carrier.py', 'clipboard_bridge.py', 'window_branding.py',
-    'release_portable.py', 'prepare_runtime_bundle.py',
+    'release_portable.py', 'prepare_runtime_bundle.py', 'app_update_v2.py', 'update_storage.py',
     'Start-Runtime.ps1', 'Stop-Runtime.ps1', 'Prepare-Dependencies.ps1', 'Prepare-Host.ps1'))
 COMPONENT_FILES = ('runtime/components-manifest.json', 'runtime/components-recovery.zip')
 GATEWAY_RECOVERY = ('runtime/gateway-recovery.json', 'runtime/gateway-recovery.zip')

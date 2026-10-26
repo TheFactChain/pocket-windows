@@ -125,6 +125,7 @@ class GatewaySourceTests(unittest.TestCase):
                 original = path.read_bytes()
                 path.write_bytes(b'corrupt')
                 with mock.patch.object(builder, 'ROOT', self.folder), \
+                     mock.patch.object(builder.shutil, 'disk_usage', return_value=mock.Mock(free=16 * 1024**3)), \
                      mock.patch.object(builder.runtime, 'ProjectLock') as lock, \
                      mock.patch.object(builder.runtime, 'engine_processes', return_value=[]), \
                      mock.patch.object(builder.runtime, 'engine_path', return_value=engine), \

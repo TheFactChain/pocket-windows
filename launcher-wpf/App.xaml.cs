@@ -12,16 +12,29 @@ namespace WindowsClaude.Launcher
 {
     public partial class App : Application
     {
+        internal static bool UpdateProbePending;
+        internal static string UpdateProbeNonce;
         [STAThread]
         public static int Main(string[] args)
         {
             AppDomain.CurrentDomain.AssemblyResolve += LoadEmbedded;
             try
             {
+                if (args.Length > 0 && args[0] == "--update-probe")
+                {
+                    if (args.Length != 2) return 1;
+                    var deadline = DateTime.UtcNow.AddSeconds(5);
+                    while (!AppUpdate.ValidProbe(Bridge.Root, args[1]))
+                    {
+                        if (DateTime.UtcNow >= deadline) return 1;
+                        Thread.Sleep(50);
+                    }
+                    UpdateProbeNonce = args[1]; UpdateProbePending = true;
+                }
                 using (var instance = new InstallationInstance(Bridge.Root))
                 {
                 if (!instance.IsOwner) return 0;
-                string blocked = ReleaseInfo.StartupBlockReason(Bridge.Root);
+                string blocked = UpdateProbePending ? null : ReleaseInfo.StartupBlockReason(Bridge.Root);
                 if (blocked != null)
                 {
                     if (File.Exists(Path.Combine(Bridge.Root, "state", "app-update.json"))
@@ -57,6 +70,7 @@ namespace WindowsClaude.Launcher
             App app = new App();
             app.InitializeComponent();
             MainWindow window = new MainWindow();
+            if (UpdateProbePending) window.IsEnabled = false;
             window.Loaded += delegate { instance.Listen(app.Dispatcher, window.ShowExistingPanel); };
             return app.Run(window);
         }

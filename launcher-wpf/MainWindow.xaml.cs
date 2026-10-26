@@ -64,7 +64,7 @@ namespace WindowsClaude.Launcher
         static bool Flag(Dictionary<string, object> item, string key) { return item != null && item.ContainsKey(key) && item[key] is bool && (bool)item[key]; }
         static string Text(Dictionary<string, object> value, string key, string fallback) { return value != null && value.ContainsKey(key) && value[key] != null ? Convert.ToString(value[key], CultureInfo.InvariantCulture) : fallback; }
         static Dictionary<string, object> Child(Dictionary<string, object> value, string key) { return value != null && value.ContainsKey(key) ? value[key] as Dictionary<string, object> : null; }
-        static Task<Dictionary<string, object>> Run(string action, object payload) { return Bridge.RunAsync(Bridge.Root, action, payload); }
+        static Task<Dictionary<string, object>> Run(string action, object payload) { return App.UpdateProbePending ? Task.FromResult(Bridge.Failure("Проверяется обновление программы.")) : Bridge.RunAsync(Bridge.Root, action, payload); }
         static void Show(UIElement element, bool visible) { element.Visibility = visible ? Visibility.Visible : Visibility.Collapsed; }
         static readonly IEasingFunction EaseOut = new CubicEase { EasingMode = EasingMode.EaseOut };
 
@@ -117,6 +117,21 @@ namespace WindowsClaude.Launcher
                 var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(this);
                 if (chrome != null) chrome.ResizeBorderThickness = new Thickness(0);
                 Rise(LaunchCard, 0); Rise(HomePage, 90);
+                if (App.UpdateProbePending)
+                {
+                    IsEnabled = false;
+                    UpdateStatusTitle.Text = "Проверяем новую версию"; Navigate(AppPage.Updates);
+                    try
+                    {
+                        await AppUpdate.ProbeHealthAsync(Bridge.Root, App.UpdateProbeNonce);
+                        AppUpdate.AckProbe(Bridge.Root, App.UpdateProbeNonce);
+                        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120)))
+                            await AppUpdate.WaitForProbeCommitAsync(Bridge.Root, App.UpdateProbeNonce, deadline.Token);
+                        if (closing) return;
+                        App.UpdateProbePending = false; IsEnabled = true;
+                    }
+                    catch (Exception) { Application.Current.Shutdown(1); return; }
+                }
                 StartLifecycle(); StartShopNudge(); await RunAction("diagnose", false); StartUpdateCheck();
             };
             Closing += OnClosing;
@@ -474,7 +489,16 @@ namespace WindowsClaude.Launcher
             if (Checks(readinessReport).Any(item => !Flag(item, "passed") && Flag(item, "setup_required"))) Navigate(AppPage.Connection);
             else OnRefresh(sender, e);
         }
-        void OnPrepare(object sender, RoutedEventArgs e) { var task = RunAction("prepare-components", false); }
+        void OnPrepare(object sender, RoutedEventArgs e)
+        {
+            if (App.UpdateProbePending || runtimeActive || busy || outcomeUnknown) return;
+            try
+            {
+                if (AppUpdate.HasV2Catalog(Bridge.Root)) { Navigate(AppPage.Updates); OnOfflineRepair(sender, e); return; }
+                var task = RunAction("prepare-components", false);
+            }
+            catch (Exception error) { SetOperation("Не удалось прочитать каталог восстановления: " + error.Message); }
+        }
         void OnRepairGateway(object sender, RoutedEventArgs e) { var task = RunAction("repair-gateway", false); }
         void OnPrepareHost(object sender, RoutedEventArgs e) { var task = RunAction("prepare-host", false); }
         void OnCopyReport(object sender, RoutedEventArgs e) { try { Clipboard.SetText(reportText); SetOperation("Отчёт скопирован."); } catch (Exception) { SetOperation("Не удалось скопировать отчёт. Попробуй ещё раз."); } }
@@ -763,6 +787,8 @@ namespace WindowsClaude.Launcher
         }
         // ---------- Updates from GitHub Releases ----------
         AppUpdate.Offer updateOffer;
+        AppUpdate.Package updatePlan;
+        bool fullUpdateRequested;
         bool updating, checkingUpdate, updateHandedOff, closeAfterUpdateCancel;
         CancellationTokenSource updateCancel;
 
@@ -796,7 +822,7 @@ namespace WindowsClaude.Launcher
 
         async Task CheckUpdateAsync()
         {
-            if (checkingUpdate || closing || updating) return;
+            if (App.UpdateProbePending || checkingUpdate || closing || updating) return;
             checkingUpdate = true; ShowUpdateOffer();
             UpdateStatusTitle.Text = "Проверяем обновления";
             UpdateStatusText.Text = "Проверяем наличие новой версии…";
@@ -805,9 +831,10 @@ namespace WindowsClaude.Launcher
             {
                 var result = await AppUpdate.CheckAsync(ReleaseInfo.Read(Bridge.Root).ReleaseId);
                 if (closing) return;
+                AppUpdate.Discard(updatePlan); updatePlan = null; fullUpdateRequested = false;
                 updateOffer = result.Offer; UpdateStatusText.Text = result.Message;
                 UpdateStatusTitle.Text = result.Title;
-                UpdateCaption.Text = updateOffer == null ? result.Title : "Доступна версия " + updateOffer.Id;
+                UpdateCaption.Text = updateOffer == null ? result.Title : updateOffer.Repair ? "Можно восстановить файлы" : "Доступна версия " + updateOffer.Id;
             }
             catch (Exception)
             {
@@ -821,20 +848,80 @@ namespace WindowsClaude.Launcher
         void ShowUpdateOffer()
         {
             bool offered = updateOffer != null;
-            Show(UpdatePill, offered && !updating);
+            Show(UpdatePill, offered && !updating && !updateOffer.Repair);
             Show(InstallUpdateButton, offered || updating);
             Show(UpdatePackageText, offered);
             Show(UpdateProgress, updating);
             CheckUpdatesButton.IsEnabled = !checkingUpdate && !updating && !updateHandedOff;
-            InstallUpdateButton.Content = updating ? "Отменить" : "Обновить";
+            OfflineRepairButton.IsEnabled = !App.UpdateProbePending && !checkingUpdate && !updating && !updateHandedOff && !busy && !runtimeActive && !outcomeUnknown;
+            InstallUpdateButton.Content = updating ? "Отменить" : updatePlan != null ? (updatePlan.Offline ? "Восстановить файлы" : "Скачать и установить") : updateOffer != null && updateOffer.Repair ? "Восстановить файлы" : updateOffer != null && updateOffer.V2 && !fullUpdateRequested ? "Подготовить обновление" : "Обновить";
             InstallUpdateButton.IsEnabled = !checkingUpdate && !updateHandedOff && (updating || (!busy && !runtimeActive && !outcomeUnknown));
-            if (offered) UpdatePackageText.Text = updateOffer.IndexUrl != null ? "Загружаются только изменённые файлы" : "Пакет " + updateOffer.Id + ", " + Math.Ceiling(updateOffer.Bytes / 1048576.0).ToString("0") + " МБ";
+            Show(FullUpdateButton, offered && updateOffer.IndexUrl != null && !fullUpdateRequested && !updating);
+            FullUpdateButton.IsEnabled = InstallUpdateButton.IsEnabled;
+            if (offered)
+            {
+                FullUpdateButton.Content = "Полный пакет: " + BytesText(updateOffer.Bytes);
+                UpdatePackageText.Text = updatePlan != null ? "Скачать: " + BytesText(updatePlan.DownloadBytes) + ". Свободное место, верхняя оценка: " + BytesText(updatePlan.RequiredFreeBytes)
+                    : updateOffer.V2 && !fullUpdateRequested ? "Для подготовки скачается обновлятор: " + BytesText(updateOffer.ToolkitBytes) + ". Затем покажем объём изменённых файлов."
+                    : fullUpdateRequested || updateOffer.IndexUrl == null ? "Полный пакет: " + BytesText(updateOffer.Bytes) + (fullUpdateRequested && updateOffer.V2 ? ". Независимый обновлятор: " + BytesText(updateOffer.ToolkitBytes) : "") : "Загружаются только изменённые файлы";
+            }
+        }
+
+        static string BytesText(long bytes) { return bytes.ToString("N0", CultureInfo.CurrentCulture) + " байт (" + Math.Ceiling(bytes / 1048576.0).ToString("0") + " МБ)"; }
+
+        async void OnOfflineRepair(object sender, RoutedEventArgs e)
+        {
+            if (App.UpdateProbePending || updating || checkingUpdate || runtimeActive || busy || outcomeUnknown || closing) return;
+            Keyboard.ClearFocus(); if (!await CommitPendingSettingsAsync()) return;
+            if (runtimeActive || busy || outcomeUnknown || closing) return;
+            AppUpdate.Discard(updatePlan); updatePlan = null;
+            updating = true; updateCancel = new CancellationTokenSource(); Busy(true); ShowUpdateOffer();
+            UpdateStatusTitle.Text = "Проверяем сохранённые файлы";
+            try
+            {
+                updatePlan = await AppUpdate.PlanOfflineAsync(Bridge.Root, UpdateBytesProgress, updateCancel.Token);
+                updateOffer = new AppUpdate.Offer { Id = updatePlan.Id, V2 = true, Repair = true };
+                fullUpdateRequested = false;
+                UpdateStatusTitle.Text = "Восстановление без интернета готово";
+                UpdateStatusText.Text = "Сохранённые части проверены. Нажми «Восстановить файлы». Подключение к интернету не требуется.";
+            }
+            catch (OperationCanceledException) { UpdateStatusTitle.Text = "Проверка отменена"; UpdateStatusText.Text = "Файлы программы не изменены."; }
+            catch (Exception error) { UpdateStatusTitle.Text = "Не удалось подготовить восстановление"; UpdateStatusText.Text = error.Message + " Для загрузки недостающих файлов нажми «Проверить» и выбери подготовку обновления."; }
+            finally
+            {
+                updateCancel.Dispose(); updateCancel = null; updating = false; Busy(false); ShowUpdateOffer();
+                if (closeAfterUpdateCancel) Close();
+            }
+        }
+
+        void OnFullUpdate(object sender, RoutedEventArgs e)
+        {
+            if (App.UpdateProbePending || checkingUpdate || updating || updateOffer == null || runtimeActive || busy || outcomeUnknown) return;
+            AppUpdate.Discard(updatePlan); updatePlan = null; fullUpdateRequested = true;
+            UpdateStatusTitle.Text = "Выбран полный пакет";
+            UpdateStatusText.Text = "Для установки будет загружен весь пакет. Нажми «Обновить», чтобы продолжить.";
+            ShowUpdateOffer();
+        }
+
+        void UpdateBytesProgress(Dictionary<string, object> value)
+        {
+            Dispatcher.Invoke(delegate
+            {
+                string phase = Text(value, "phase", "");
+                string title = phase == "bootstrap" ? "Загружаем обновлятор" : phase == "planned" ? "План готов" : phase == "prepared" ? "Файлы готовы" : phase == "downloading" ? "Скачиваем изменения" : phase == "assembling" ? "Собираем изменённые файлы" : "Проверяем файлы";
+                UpdateStatusTitle.Text = title; UpdateCaption.Text = title;
+                long done = 0, total = 0;
+                bool measured = Int64.TryParse(Text(value, "done_bytes", ""), out done) && Int64.TryParse(Text(value, "total_bytes", ""), out total) && total > 0;
+                UpdateProgress.IsIndeterminate = !measured;
+                if (measured) { UpdateProgress.Value = Math.Min(100, done * 100.0 / total); UpdateStatusText.Text = BytesText(done) + " из " + BytesText(total) + ". Можно отменить."; }
+                else UpdateStatusText.Text = title + ". Можно отменить.";
+            });
         }
 
         async void OnUpdate(object sender, RoutedEventArgs e)
         {
             if (updating) { if (updateCancel != null) updateCancel.Cancel(); return; }
-            if (updateOffer == null || checkingUpdate) return;
+            if (App.UpdateProbePending || updateOffer == null || checkingUpdate) return;
             if (runtimeActive || busy || outcomeUnknown) { SetOperation("Сначала выключи Windows, потом обновляй."); return; }
             Keyboard.ClearFocus();
             if (!await CommitPendingSettingsAsync()) return;
@@ -848,13 +935,32 @@ namespace WindowsClaude.Launcher
             AppUpdate.Package package = null;
             try
             {
-                package = await AppUpdate.DownloadAsync(updateOffer, percent => Dispatcher.Invoke(delegate
+                if (updateOffer.V2 && !fullUpdateRequested && updatePlan == null)
+                {
+                    updatePlan = await AppUpdate.PlanV2Async(Bridge.Root, updateOffer, UpdateBytesProgress, updateCancel.Token);
+                    UpdateStatusTitle.Text = "Обновление подготовлено к загрузке";
+                    UpdateStatusText.Text = "Проверь объём загрузки и свободного места. Для продолжения нажми «Скачать и установить».";
+                    return;
+                }
+                if (updatePlan != null)
+                {
+                    package = updatePlan; updatePlan = null;
+                    await AppUpdate.PrepareV2Async(package, UpdateBytesProgress, updateCancel.Token);
+                }
+                else
+                {
+                if (fullUpdateRequested && updateOffer.V2)
+                    package = await AppUpdate.BootstrapV2Async(Bridge.Root, updateOffer, UpdateBytesProgress, updateCancel.Token);
+                var downloaded = await AppUpdate.DownloadAsync(fullUpdateRequested ? AppUpdate.FullOffer(updateOffer) : updateOffer, percent => Dispatcher.Invoke(delegate
                     { UpdateProgress.Value = percent; UpdateCaption.Text = "Загрузка: " + percent + "%"; UpdateStatusText.Text = "Загружено " + percent + "%. Можно отменить."; }), updateCancel.Token);
+                if (package == null) package = downloaded;
+                else { package.Work = downloaded.Work; package.Zip = downloaded.Zip; package.Sha = downloaded.Sha; }
                 UpdateCaption.Text = "Проверяем файлы и готовим установку…";
                 UpdateStatusTitle.Text = "Проверяем файлы";
                 UpdateStatusText.Text = "После проверки панель закроется для установки и откроется снова.";
                 UpdateProgress.IsIndeterminate = true;
                 await AppUpdate.PrepareAsync(Bridge.Root, package, updateCancel.Token);
+                }
                 updateCancel.Token.ThrowIfCancellationRequested();
                 if (runtimeActive || outcomeUnknown) throw new InvalidOperationException("Сначала выключи Windows.");
                 AppUpdate.Launch(Bridge.Root, package);
@@ -864,7 +970,7 @@ namespace WindowsClaude.Launcher
             catch (OperationCanceledException)
             {
                 UpdateStatusTitle.Text = "Обновление отменено"; UpdateCaption.Text = "Загрузка отменена";
-                UpdateStatusText.Text = "Программа не изменилась. Можно повторить загрузку.";
+                UpdateStatusText.Text = "Программа не изменилась. Проверенные части сохранены: повторная загрузка продолжится из кэша.";
             }
             catch (Exception error)
             {
@@ -874,6 +980,7 @@ namespace WindowsClaude.Launcher
             finally
             {
                 if (!updateHandedOff) AppUpdate.Discard(package);
+                if (!updateHandedOff && package != null && package.Offline) updateOffer = null;
                 updateCancel.Dispose(); updateCancel = null; updating = false;
                 if (!closing)
                 {
@@ -1005,6 +1112,7 @@ namespace WindowsClaude.Launcher
         async void OnClosing(object sender, CancelEventArgs e)
         {
             if (closing) return;
+            if (App.UpdateProbePending) { FinishClosing(); return; }
             if (updateHandedOff) { FinishClosing(); return; }
             if (updating && !updateHandedOff)
             { e.Cancel = true; closeAfterUpdateCancel = true; if (updateCancel != null) updateCancel.Cancel(); return; }
@@ -1028,6 +1136,7 @@ namespace WindowsClaude.Launcher
 
         void FinishClosing()
         {
+            AppUpdate.Discard(updatePlan); updatePlan = null;
             closing = true; lifecycleTimer.Stop(); saveTimer.Stop(); toastTimer.Stop();
             if (trayIcon != null) { trayIcon.Visible = false; trayIcon.Dispose(); trayIcon = null; }
         }

@@ -619,8 +619,16 @@ def stop_runtime(root):
 
 
 def repair_gateway(root):
-    from gateway_package import repair_package
+    from gateway_package import repair_package, repair_cached
     from file_snapshot import locked_read
+    import update_storage
+    catalog = root / update_storage.CATALOG
+    _plain(catalog)
+    if catalog.exists():
+        index_path, sha256, _ = update_storage.current_index(root)
+        result = repair_cached(root, index_path, sha256)
+        return {'ok': True, 'code': 'gateway_repaired', 'gateway_version': result['version'],
+                'message': 'Шлюз восстановлен. Настройки подключений и данные Windows сохранены.'}
     missing = {'ok': False, 'code': 'package_missing',
                'message': 'Не найден пакет восстановления шлюза. Для восстановления нужен исходный ZIP этого выпуска. Данные Windows и подключений сохранены.'}
     if not (root / 'runtime').exists():
