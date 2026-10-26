@@ -6,12 +6,14 @@
 
 Portable Windows for accessing blocked services through an existing proxy. One folder contains Windows 11, a launcher and a separate network environment. Extract the bundle, add your connection and open a desktop with Claude Desktop and Firefox already prepared.
 
-<p><a href="https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.25.7"><strong>Download the 2026.10.25.7 update</strong></a></p>
+<p><a href="https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.26.3"><strong>Download the 2026.10.26.3 update</strong></a></p>
 <p><a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><strong>Download the full 2026.10.24.12 bundle</strong></a></p>
 <p><a href="#first-start">Get started</a></p>
 <p><a href="https://t.me/TheFactChain">News on Telegram</a></p>
 
-Application update **2026.10.25.7** is available on GitHub: `Pocket-Windows-2026.10.25.7-app.zip`, **957,576,617 bytes** (about 957.6 MB). It updates an existing installation and does not include the Windows disk; see the [tested update paths](#do-application-updates-require-downloading-the-whole-windows-image-again).
+Application update **2026.10.26.3** is available on GitHub: `Pocket-Windows-2026.10.26.3-app.zip`, **917,636,990 bytes** (about 917.6 MB). It updates an existing installation and does not include the Windows disk; see the [tested update paths](#do-application-updates-require-downloading-the-whole-windows-image-again).
+
+From 2026.10.26.3, the updater checks actual files and downloads only new, changed or damaged files. An old launcher downloads one complete transition package first. The gateway binds to a physical IPv4 adapter independently of another VPN's normal routing.
 
 The full download on Google Drive remains version **2026.10.24.12**: `Pocket-Windows-2026.10.24.12.zip`, about **16.9 GB** (15.8 GiB). The screenshots were taken in version **2026.10.24.13**. GitHub **Source code** archives contain source files and cannot be used as the application.
 
@@ -75,15 +77,15 @@ These are the actual files on your PC. Editing or deleting a shared file inside 
 
 ## Download
 
-### Application update 2026.10.25.7
+### Application update 2026.10.26.3
 
-Download `Pocket-Windows-2026.10.25.7-app.zip` from the [GitHub release](https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.25.7). The package is **957,576,617 bytes** and does not include the Windows disk. Read the [update instructions](#do-application-updates-require-downloading-the-whole-windows-image-again) before installing it. Do not copy the contents of `app` over your installation manually: that bypasses validation and rollback.
+Download `Pocket-Windows-2026.10.26.3-app.zip` from the [GitHub release](https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.26.3). The package is **917,636,990 bytes** and does not include the Windows disk. Read the [update instructions](#do-application-updates-require-downloading-the-whole-windows-image-again) before installing it. Do not copy the contents of `app` over your installation manually: that bypasses validation and rollback.
 
 <details>
-<summary>SHA256 of the 2026.10.25.7 application package</summary>
+<summary>SHA256 of the 2026.10.26.3 application package</summary>
 
 ```text
-70379972667e923383c35519c73812072b009cb2448bf9710e8ef89e13798c72
+d520e493dfb088d0146a3cce4e4877852d726070173be5a77409008d93946875
 ```
 
 </details>
@@ -148,7 +150,7 @@ The Checks section can restore Python and QEMU from the local archive, replace t
 
 ### Do application updates require downloading the whole Windows image again?
 
-For **2026.10.25.3 and later**, use the launcher's normal update flow: shut guest Windows down normally, open “Обновления” (Updates) and install **2026.10.25.7**. No Windows image download is needed: the Windows disk, applications inside it, connections and personal settings are preserved.
+For **2026.10.25.3 and later**, use the launcher's normal update flow: shut guest Windows down normally, open “Обновления” (Updates) and install **2026.10.26.3**. No Windows image download is needed: the Windows disk, applications inside it, connections and personal settings are preserved.
 
 The **2026.10.24.13 to 2026.10.25.7** transition was tested only with the new external updater from a separate extraction of `Pocket-Windows-2026.10.25.7-app.zip`. Shut guest Windows down normally, close every launcher panel for that copy, then follow the [step-by-step release instructions](https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.25.7) (currently in Russian). Do not use the old 24.13 built-in updater for this transition: it does not fully replace the active gateway.
 
