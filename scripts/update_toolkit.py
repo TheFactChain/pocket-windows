@@ -62,7 +62,7 @@ def validate_host_build(source, component_directory=None):
     component = Path(component_directory) if component_directory is not None else source/'runtime/host-files'
     manifest = validate_guest_build(source, component)
     names = [*GUEST_INPUTS]
-    names.extend(path.relative_to(source).as_posix() for path in sorted((source/'host/files').glob('*.cs'), key=lambda path: path.name))
+    names.extend(path.relative_to(source).as_posix() for path in sorted((source/'host/files').glob('*.cs'), key=lambda path: path.name.casefold()))
     names.append('host/files/dependency-patches/SMBServer.Signatures.cs')
     expected = [record(source, name) for name in names]
     outputs = []

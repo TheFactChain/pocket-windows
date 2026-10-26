@@ -106,13 +106,16 @@ class ToolkitTests(unittest.TestCase):
         for name in toolkit.GUEST_INPUTS:
             self.write(name)
         self.write('host/files/HostFilesServer.cs')
+        self.write('host/files/ConfinedFileStore.cs')
+        self.write('host/files/ConfinedFileStore.Notify.cs')
         self.write('host/files/dependency-patches/SMBServer.Signatures.cs')
         component = self.source/'runtime/host-files'
         manifest_path = self.write('runtime/host-files/build-manifest.json', b'{}')
         for name in toolkit.pack.FILE_COMPONENT_FILES:
             if not name.endswith('/build-manifest.json'):
                 self.write(name)
-        inputs = (*toolkit.GUEST_INPUTS, 'host/files/HostFilesServer.cs', 'host/files/dependency-patches/SMBServer.Signatures.cs')
+        inputs = (*toolkit.GUEST_INPUTS, 'host/files/ConfinedFileStore.cs', 'host/files/ConfinedFileStore.Notify.cs',
+                  'host/files/HostFilesServer.cs', 'host/files/dependency-patches/SMBServer.Signatures.cs')
         outputs = [dict(toolkit.record(component, Path(name).name), name=Path(name).name)
                    for name in toolkit.pack.FILE_COMPONENT_FILES if not name.endswith('/build-manifest.json')]
         for row in outputs:
