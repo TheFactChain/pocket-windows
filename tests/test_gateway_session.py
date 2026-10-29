@@ -116,19 +116,16 @@ class SessionTests(unittest.TestCase):
         self.assertNotIn(session.firewall(value), policies)
         self.assertEqual(policies[-1], session.closed_firewall())
 
-    def test_ready_timeout_retry_ready_does_not_stop_children_or_emit_error(self):
-        ready=[]
+    def test_isolated_failed_round_keeps_forwarding_and_recovers_without_restarting_services(self):
         def event(event,children,handlers):
-            if event == 'READY':
-                ready.append(True)
-                if len(ready)==2:
-                    self.assertTrue(all(not child.terminate.called for child in children))
-                    handlers[session.signal.SIGTERM](None,None)
+            if event == 'HEALTHY':
+                self.assertTrue(all(not child.terminate.called for child in children))
+                handlers[session.signal.SIGTERM](None,None)
         result,events,children,policies,start,value,_=self.exercise_service([None,TimeoutError(),None],event)
         self.assertEqual(result,0)
-        self.assertEqual([row[0] for row in events],['FIREWALL_READY','READY','RECONNECTING','READY','STOPPED'])
+        self.assertEqual([row[0] for row in events],['FIREWALL_READY','READY','DEGRADED','HEALTHY','STOPPED'])
         self.assertEqual(start.call_count,2)
-        self.assertIn(session.firewall(value,connected=False),policies)
+        self.assertEqual(policies, [session.closed_firewall(), session.firewall(value, connected=False), session.firewall(value), session.closed_firewall()])
 
     def test_sustained_outage_remains_closed_and_uses_bounded_retry(self):
         probes=[0]
@@ -169,7 +166,7 @@ class SessionTests(unittest.TestCase):
         def event(event,children,handlers):
             if event=='RECONNECTING':
                 handlers[session.signal.SIGTERM](None,None)
-        result,events,_,_,_,_,_=self.exercise_service([None,TimeoutError()],event)
+        result,events,_,_,_,_,_=self.exercise_service([None,TimeoutError(),TimeoutError(),TimeoutError()],event)
         self.assertEqual(result,0)
         self.assertEqual(events[-1][0],'STOPPED')
         self.assertFalse(any(row[0]=='ERROR' for row in events))
@@ -220,7 +217,7 @@ class SessionTests(unittest.TestCase):
                 events_seen.append(name)
                 if name == 'READY' and openings[0] >= (3 if reconnect else 2):
                     handlers[session.signal.SIGTERM](None, None)
-            probe = [None, TimeoutError(), None, None] if reconnect else [None, None]
+            probe = [None, TimeoutError(), TimeoutError(), TimeoutError(), None, None] if reconnect else [None, None]
             with self.subTest(reconnect=reconnect):
                 result, events, _, policies, _, value, _ = self.exercise_service(
                     probe, event, probe_seconds=24.8, rule_hook=rule)
@@ -253,12 +250,147 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(any(row[0] in ('READY', 'ERROR') for row in events))
         self.assertEqual(policies[-1], session.closed_firewall())
 
-    def test_health_shares_one_deadline_across_dns_and_https(self):
+    def test_health_limits_dns_and_https_to_their_share_of_one_deadline(self):
         response = b'{"Status":0,"Answer":[{"type":1,"data":"93.184.215.14"}]}'
         with mock.patch.object(session.time, 'monotonic', return_value=10), \
              mock.patch.object(session, 'proxy_https', side_effect=[response, b'OK']) as probe:
             session.health(deadline=30)
-        self.assertEqual([call.kwargs['deadline'] for call in probe.call_args_list], [30, 30])
+        deadlines = [call.kwargs['deadline'] for call in probe.call_args_list]
+        self.assertTrue(10 < deadlines[0] < deadlines[1] < 30, 'first DNS and HTTPS must leave a budget for other independent probes')
+
+    def test_health_fallback_uses_an_independent_dns_provider_and_https_node(self):
+        answer = b'{"Status":0,"Answer":[{"type":1,"data":"192.0.43.8"}]}'
+        calls = []
+        def proxy(address, hostname, path, accept='text/html', *, deadline):
+            calls.append((address, hostname, path, deadline))
+            if hostname == 'cloudflare-dns.com':
+                raise TimeoutError('first provider unavailable')
+            if hostname == 'dns.google':
+                return answer
+            self.assertEqual(hostname, 'www.iana.org')
+            return b'OK'
+        with mock.patch.object(session.time, 'monotonic', return_value=10), \
+                mock.patch.object(session, 'proxy_https', side_effect=proxy), \
+                mock.patch.object(session.socket, 'create_connection', side_effect=AssertionError('no direct fallback')):
+            session.health(deadline=35)
+        self.assertEqual([row[1] for row in calls], ['cloudflare-dns.com', 'dns.google', 'www.iana.org'])
+        self.assertTrue(all(10 < row[3] < 35 for row in calls))
+
+    def test_health_fallback_retries_the_second_ipv4_with_a_separate_budget(self):
+        clock = [10]
+        answer = b'{"Status":0,"Answer":[{"type":1,"data":"93.184.215.14"},{"type":1,"data":"93.184.215.15"}]}'
+        calls = []
+        def proxy(address, hostname, path, accept='text/html', *, deadline):
+            calls.append((address, hostname, deadline))
+            if hostname == 'cloudflare-dns.com':
+                return answer
+            if address == '93.184.215.14':
+                clock[0] = deadline
+                raise TimeoutError('first A record timed out')
+            self.assertEqual((address, hostname), ('93.184.215.15', 'example.com'))
+            self.assertGreater(deadline, clock[0])
+            return b'OK'
+        with mock.patch.object(session.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(session, 'proxy_https', side_effect=proxy):
+            session.health(deadline=35)
+        self.assertEqual([row[0] for row in calls], ['1.1.1.1', '93.184.215.14', '93.184.215.15'])
+
+    def test_health_fallback_rejects_invalid_dns_schema_without_ending_the_round(self):
+        answer = b'{"Status":0,"Answer":[{"type":1,"data":"192.0.43.8"}]}'
+        for malformed in (b'[]', b'{', b'{"Status":true,"Answer":[]}', b'{"Status":0,"Answer":{}}',
+                          b'{"Status":0,"Answer":[null,{"type":1,"data":"127.0.0.1"}]}',
+                          b'[' * 10000 + b'0' + b']' * 10000):
+            with self.subTest(payload=malformed[:60]), \
+                    mock.patch.object(session, 'proxy_https', side_effect=[malformed, answer, b'OK']) as probe:
+                session.health()
+            self.assertEqual(probe.call_args_list[1].args[1], 'dns.google')
+
+    def test_three_failed_rounds_close_forwarding_then_a_success_recovers(self):
+        ready = []
+        def event(name, children, handlers):
+            if name == 'READY':
+                ready.append(True)
+                if len(ready) == 2:
+                    handlers[session.signal.SIGTERM](None, None)
+        result, events, _, policies, _, value, _ = self.exercise_service(
+            [None, TimeoutError(), TimeoutError(), TimeoutError(), None], event)
+        self.assertEqual(result, 0)
+        self.assertEqual([row[0] for row in events], ['FIREWALL_READY', 'READY', 'DEGRADED', 'DEGRADED', 'RECONNECTING', 'READY', 'STOPPED'])
+        self.assertEqual([row[-1] for row in events if row[0] == 'DEGRADED'], ['PROBE_FAILED_1', 'PROBE_FAILED_2'])
+        self.assertEqual(policies[2:5], [session.firewall(value), session.firewall(value, connected=False), session.firewall(value)])
+
+    def test_healthy_round_resets_the_consecutive_failure_count(self):
+        healthy = []
+        def event(name, children, handlers):
+            if name == 'HEALTHY':
+                healthy.append(True)
+                if len(healthy) == 2:
+                    handlers[session.signal.SIGTERM](None, None)
+        result, events, _, policies, _, value, _ = self.exercise_service(
+            [None, TimeoutError(), None, TimeoutError(), TimeoutError(), None], event)
+        self.assertEqual(result, 0)
+        self.assertEqual([row[-1] for row in events if row[0] == 'DEGRADED'], ['PROBE_FAILED_1', 'PROBE_FAILED_1', 'PROBE_FAILED_2'])
+        self.assertNotIn('RECONNECTING', [row[0] for row in events])
+        self.assertEqual(policies.count(session.firewall(value)), 1)
+
+    def test_service_exit_after_one_failed_probe_closes_immediately_and_restarts(self):
+        ready = []
+        def event(name, children, handlers):
+            if name == 'DEGRADED':
+                children[0].poll.return_value = 1
+            if name == 'READY':
+                ready.append(True)
+                if len(ready) == 2:
+                    handlers[session.signal.SIGTERM](None, None)
+        result, events, _, policies, start, value, _ = self.exercise_service([None, TimeoutError(), None], event)
+        self.assertEqual(result, 0)
+        self.assertEqual([row[0] for row in events], ['FIREWALL_READY', 'READY', 'DEGRADED', 'RECONNECTING', 'READY', 'STOPPED'])
+        self.assertEqual(start.call_count, 4)
+        self.assertEqual(policies[3], session.firewall(value, connected=False))
+
+    def test_malformed_dns_json_does_not_stop_the_initial_session_loop(self):
+        original_health = session.health
+        answer = b'{"Status":0,"Answer":[{"type":1,"data":"93.184.215.14"}]}'
+        def event(name, children, handlers):
+            if name == 'READY':
+                handlers[session.signal.SIGTERM](None, None)
+        with mock.patch.object(session, 'proxy_https', side_effect=[b'[]'] * 4 + [answer, b'OK']) as proxy:
+            result, events, _, _, _, _, _ = self.exercise_service(original_health, event)
+        self.assertEqual(result, 0)
+        self.assertEqual([row[0] for row in events], ['FIREWALL_READY', 'READY', 'STOPPED'])
+        self.assertEqual(proxy.call_count, 6)
+
+    def test_all_independent_attempts_share_a_bounded_25_second_round(self):
+        clock = [10]
+        answer = b'{"Status":0,"Answer":[{"type":1,"data":"93.184.215.14"}]}'
+        calls = []
+        def proxy(address, hostname, path, accept='text/html', *, deadline):
+            calls.append((hostname, deadline))
+            self.assertLessEqual(deadline, 35)
+            if hostname in ('cloudflare-dns.com', 'dns.google'):
+                return answer
+            clock[0] = deadline
+            raise TimeoutError('fixture per-node timeout')
+        with mock.patch.object(session.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(session, 'proxy_https', side_effect=proxy):
+            with self.assertRaises((ValueError, TimeoutError)):
+                session.health()
+        self.assertEqual(clock[0], 35)
+        self.assertEqual(len(calls), 8)
+        self.assertEqual({hostname for hostname, _ in calls}, {'cloudflare-dns.com', 'dns.google', 'example.com', 'www.iana.org'})
+
+    def test_invalid_a_records_are_ignored_while_valid_public_addresses_remain(self):
+        answer = {'Status': 0, 'Answer': [None, {'type': True, 'data': '8.8.8.8'},
+                  {'type': 1, 'data': '127.0.0.1'}, {'type': 1, 'data': '224.0.0.1'},
+                  {'type': 1, 'data': '10.0.0.1'}, {'type': 1, 'data': '::1'},
+                  {'type': 1, 'data': '93.184.215.14'}, {'type': 1, 'data': '93.184.215.14'}]}
+        self.assertEqual(session.dns_addresses(json.dumps(answer)), ['93.184.215.14'])
+
+    def test_one_untrusted_probe_certificate_is_rejected_but_another_verified_pair_can_pass(self):
+        answer = b'{"Status":0,"Answer":[{"type":1,"data":"192.0.43.8"}]}'
+        with mock.patch.object(session, 'proxy_https', side_effect=[session.ssl.SSLCertVerificationError('fixture'), answer, b'OK']) as proxy:
+            session.health()
+        self.assertEqual([call.args[1] for call in proxy.call_args_list], ['cloudflare-dns.com', 'dns.google', 'www.iana.org'])
 
     def test_trickled_https_body_cannot_extend_total_deadline(self):
         clock = [0]
@@ -477,11 +609,12 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(session.status_record(*order[0])['nonce'], value['nonce'])
         self.assertEqual(command.call_count, 1)  # config check, no IP configuration
 
-    def test_health_requires_dns_before_https_and_never_falls_back(self):
+    def test_health_requires_valid_dns_before_https_and_uses_no_direct_fallback(self):
         with mock.patch.object(session, 'proxy_https', return_value=b'{"Status":2}') as probe:
             with self.assertRaises(ValueError):
                 session.health()
-            self.assertEqual(probe.call_count, 1)
+            self.assertEqual(probe.call_count, 4)
+            self.assertTrue(all(call.args[1] in ('cloudflare-dns.com', 'dns.google') for call in probe.call_args_list))
         response = b'{"Status":0,"Answer":[{"type":1,"data":"93.184.215.14"}]}'
         with mock.patch.object(session, 'proxy_https', side_effect=[response, b'OK']) as probe:
             session.health()

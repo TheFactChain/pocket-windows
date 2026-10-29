@@ -1,6 +1,8 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
+from contextlib import nullcontext
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import gateway_profile as gateway
@@ -23,6 +25,59 @@ class GatewayProfileTests(unittest.TestCase):
             self.assertEqual(config['dns']['servers'][0]['detour'], 'proxy')
             if protocol in ('https', 'hysteria2'):
                 self.assertEqual(config['outbounds'][0]['tls']['server_name'], 'proxy.example')
+
+    def test_local_proxy_uses_the_qemu_host_address_in_config_and_firewall(self):
+        for protocol in ('hysteria2', 'socks5', 'http', 'https'):
+            with self.subTest(protocol=protocol):
+                session = self.session(protocol)
+                session['profile']['host'] = '127.0.0.1'
+                session['endpoint_ipv4'] = '127.0.0.1'
+                normalized = gateway.validate_session(session)
+                self.assertEqual(normalized['endpoint_ipv4'], '10.0.2.2')
+                self.assertEqual(normalized['profile']['host'], '127.0.0.1')
+                self.assertEqual(gateway.sing_box_config(session)['outbounds'][0]['server'], '10.0.2.2')
+                rules = gateway.firewall(session)
+                self.assertIn('ip daddr 10.0.2.2 ', rules)
+                self.assertNotIn('ip daddr 127.0.0.1 ', rules)
+                session['endpoint_ipv4'] = '10.0.2.2'
+                self.assertEqual(gateway.validate_session(session)['endpoint_ipv4'], '10.0.2.2')
+
+    def test_local_alias_still_must_match_a_literal_profile_address(self):
+        session = self.session('socks5')
+        session['profile']['host'] = '203.0.113.7'
+        session['endpoint_ipv4'] = '127.0.0.1'
+        with self.assertRaisesRegex(ValueError, 'match'):
+            gateway.validate_session(session)
+        session['profile']['host'] = '127.0.0.1'
+        session['endpoint_ipv4'] = '203.0.113.7'
+        with self.assertRaisesRegex(ValueError, 'match'):
+            gateway.validate_session(session)
+
+    def test_imported_local_proxy_reaches_the_host_local_uplink_branch(self):
+        import gateway_controller
+        from connection_profile import import_profile_uri
+        profile = import_profile_uri('socks5://127.0.0.1:1080')
+        store = mock.Mock()
+        store.selected_summary.return_value = {'profile_id': 'a' * 32, 'revision_id': 'b' * 32}
+        store.secret_config.return_value = profile
+        store.session_profile.return_value = nullcontext((store.selected_summary.return_value, profile))
+        _, session = gateway_controller.make_session(store, 'test')
+        self.assertEqual(session['endpoint_ipv4'], '10.0.2.2')
+        with mock.patch.object(gateway_controller, 'select_physical_ipv4') as physical:
+            uplink = gateway_controller.select_uplink(session['endpoint_ipv4'])
+        physical.assert_not_called()
+        self.assertEqual(uplink['mode'], 'host-local-proxy')
+
+    def test_other_loopback_addresses_cannot_be_redirected_to_a_different_service(self):
+        from connection_profile import import_profile_uri
+        for address in ('127.0.0.2', '127.1.2.3'):
+            with self.subTest(address=address):
+                with self.assertRaises(ValueError):
+                    import_profile_uri('socks5://' + address + ':1080')
+                session = self.session('socks5')
+                session['endpoint_ipv4'] = address
+                with self.assertRaises(ValueError):
+                    gateway.validate_session(session)
 
     def test_firewall_has_no_lan_wan_forward_or_dns_egress(self):
         rules = gateway.firewall(self.session('socks5'))

@@ -56,6 +56,14 @@ class ConnectionProfileTests(unittest.TestCase):
         self.assertEqual(value['host'], 'xn--e1afmkfd.xn--p1ai')
         self.assertEqual(profiles.import_profile_uri('https://example.com')['port'], 443)
 
+    def test_tls_identity_does_not_inherit_endpoint_route_restrictions(self):
+        for name in ('127.0.0.2', '0.0.0.0', '169.254.1.2'):
+            with self.subTest(name=name):
+                config = {'protocol': 'https', 'host': 'example.com', 'port': 443, 'tls_server_name': name}
+                self.assertEqual(profiles.validate_profile(config)['tls_server_name'], name)
+                with self.assertRaises(ValueError):
+                    profiles.validate_profile(config | {'host': name})
+
     def test_ambiguous_or_control_character_links_are_rejected(self):
         for uri in ('\x00http://example.com', 'http://example.com:', 'http://example.com...',
                     'http://u:p@x@example.com'):

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -32,6 +33,13 @@ internal static class LauncherLifecycleRegression
 {
     static int checks;
     static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); checks++; }
+    static List<Button> Buttons(DependencyObject node)
+    {
+        var result = new List<Button>();
+        foreach (object child in LogicalTreeHelper.GetChildren(node))
+            if (child is Button) result.Add((Button)child); else if (child is DependencyObject) result.AddRange(Buttons((DependencyObject)child));
+        return result;
+    }
     static object Field(object obj, string name) { return obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public).GetValue(obj); }
     static void Set(object obj, string name, object value) { obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(obj, value); }
     static object Call(object obj, string name, params object[] args) { return obj.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly).Invoke(obj, args); }
@@ -88,10 +96,99 @@ internal static class LauncherLifecycleRegression
             var probeClosing = new CancelEventArgs(); Call(probeWindow, "OnClosing", probeWindow, probeClosing);
             Assert(!probeClosing.Cancel && (bool)Field(probeWindow, "closing") && Bridge.Calls.Count == 0, "Probe exits without settings or VM actions");
             App.UpdateProbePending = false;
+            var brokenWindow = new MainWindow();
+            Bridge.Handler = (action, payload) => Task.FromResult(Bridge.Unknown("Python did not return a response", "invalid_response"));
+            var brokenDiagnosis = (Task<bool>)Call(brokenWindow, "RunAction", "diagnose", false, null); Pump(() => brokenDiagnosis.IsCompleted);
+            Set(brokenWindow, "updateOffer", new AppUpdate.Offer { Id = "2026.10.27.1", V2 = true }); Call(brokenWindow, "ShowUpdateOffer");
+            Assert(!(bool)Field(brokenWindow, "outcomeUnknown") && ((Button)Field(brokenWindow, "InstallUpdateButton")).IsEnabled, "Broken Python during initial diagnosis does not block independent update bootstrap");
             var window = Window();
+            var allFiles = Report();
+            allFiles["file_settings"] = new Dictionary<string, object> { { "mode", "all" }, { "folders", new string[0] } };
+            Call(window, "LoadSettings", allFiles);
+            ((System.Windows.Controls.RadioButton)Field(window, "FilesSelected")).IsChecked = true;
+            ((System.Windows.Controls.RadioButton)Field(window, "FilesSelected")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Call(window, "OnStart", null, new RoutedEventArgs());
+            Pump(() => !(bool)Field(window, "startPending"));
+            Assert(!Bridge.Calls.Contains("start") && !Bridge.Calls.Contains("save-settings"), "Empty selected folders never starts with saved all-disks access");
+            Assert(((TextBlock)Field(window, "SettingsNote")).Text.Contains("папку"), "Empty selected folders explains how to continue");
+            ((List<string>)Field(window, "folders")).Add(@"C:\Shared");
+            Call(window, "ScheduleSave");
+            object selectedSettings = null;
+            Bridge.Handler = (action, payload) => { if (action == "save-settings") selectedSettings = payload; return Task.FromResult(Report()); };
+            Call(window, "OnStart", null, new RoutedEventArgs());
+            Pump(() => Bridge.Calls.Contains("start"));
+            Assert((string)((Dictionary<string, object>)((Dictionary<string, object>)selectedSettings)["files"])["mode"] == "selected", "Adding a folder saves selected mode before start");
+            window = Window();
+            Call(window, "LoadProfileView", new Dictionary<string, object> {
+                { "profile_id", new string('a', 32) }, { "protocol", "hysteria2" }, { "host", "saved.example" },
+                { "port", 443 }, { "name", "Saved" }, { "auth_present", true } });
+            Set(window, "testAvailable", true);
+            ((TextBox)Field(window, "ProfileHost")).Text = "draft.example";
+            ((TextBox)Field(window, "ProfilePort")).Text = "8443";
+            ((PasswordBox)Field(window, "ProfileAuth")).Password = "draft-password";
+            object testedDraft = null;
+            Bridge.Handler = (action, payload) => { if (action == "test-profile") testedDraft = payload; return Task.FromResult(Report()); };
+            Call(window, "OnTestProfile", null, new RoutedEventArgs());
+            Pump(() => testedDraft != null);
+            var testedRequest = (Dictionary<string, object>)testedDraft;
+            Assert(testedRequest.ContainsKey("profile"), "Testing the editor sends current fields, not only a saved profile id");
+            var testedProfile = (Dictionary<string, object>)testedRequest["profile"];
+            Assert((string)testedProfile["host"] == "draft.example" && (int)testedProfile["port"] == 8443, "Test uses edited host and port");
+            Assert((string)((Dictionary<string, object>)testedProfile["credentials"])["auth"] == "draft-password", "Test uses edited credentials");
+            Assert(!Bridge.Calls.Contains("save-profile") && !Bridge.Calls.Contains("select-profile"), "Testing never saves or selects the draft");
+            Bridge.Calls.Clear(); ((TextBox)Field(window, "ProfilePort")).Text = "invalid";
+            Call(window, "OnTestProfile", null, new RoutedEventArgs());
+            Assert(!Bridge.Calls.Contains("test-profile"), "Invalid draft does not test the older saved profile");
+            Call(window, "NewProfile");
+            Assert(((Button)Field(window, "ExportButton")).Visibility == Visibility.Collapsed, "New draft cannot export a nonexistent saved profile");
+            Assert(((Button)Field(window, "TestProfileButton")).IsEnabled, "Draft test does not require a selected saved profile");
+            window = Window();
+            ((TextBox)Field(window, "MemoryInput")).Text = Decimal.MaxValue.ToString(CultureInfo.InvariantCulture);
+            Call(window, "StepMemory", 0.5m);
+            decimal steppedMemory;
+            Assert(MainWindow.TryGiB(((TextBox)Field(window, "MemoryInput")).Text, out steppedMemory) && steppedMemory == 32m, "Memory increment clamps before decimal arithmetic");
+            ((TextBox)Field(window, "MemoryInput")).Text = Decimal.MaxValue.ToString(CultureInfo.InvariantCulture);
+            Call(window, "StepMemory", -0.5m);
+            Assert(MainWindow.TryGiB(((TextBox)Field(window, "MemoryInput")).Text, out steppedMemory) && steppedMemory == 31.5m, "Memory decrement handles the largest decimal without overflow");
+            ((TextBox)Field(window, "CpuInput")).Text = Int32.MaxValue.ToString(CultureInfo.InvariantCulture);
+            Call(window, "StepCpu", 1);
+            Assert(((TextBox)Field(window, "CpuInput")).Text == "32", "CPU increment clamps before integer arithmetic");
+            window = Window();
+            foreach (string failureCode in new[] { "runtime_error", "supervisor_exited" })
+            {
+                window = Window();
+                var genericStartup = Bridge.Failure("Supervisor завершился во время запуска.\nlogs/receipt.json");
+                genericStartup["code"] = failureCode;
+                genericStartup["outcome_unknown"] = true;
+                Bridge.Handler = (action, payload) => Task.FromResult(action == "start" ? genericStartup : Report());
+                var failedStart = (Task<bool>)Call(window, "RunAction", "start", false, null);
+                Pump(() => failedStart.IsCompleted);
+                string explanation = ((TextBlock)Field(window, "OperationText")).Text;
+                Assert(!explanation.Contains("сервер") && !explanation.Contains("подключению"), "Generic supervisor failure never claims the proxy failed");
+                Assert(explanation.Contains("Проверка"), "Generic startup failure directs to evidence in diagnostics");
+                Assert(!explanation.Contains("не запустилась") && !((TextBlock)Field(window, "StatusText")).Text.Contains("не запустилась"), "An unknown outcome never claims Windows did not start");
+            }
+            window = Window();
+            var exactFailure = Bridge.Failure("Не удалось открыть диск Windows."); exactFailure["code"] = "disk_failed";
+            Bridge.Handler = (action, payload) => Task.FromResult(action == "start" ? exactFailure : Report());
+            var exactStart = (Task<bool>)Call(window, "RunAction", "start", false, null);
+            Pump(() => exactStart.IsCompleted);
+            Assert(((TextBlock)Field(window, "OperationText")).Text.Contains("диск Windows"), "A specific failure keeps its actual cause");
+            window = Window();
             Set(window, "updateOffer", new AppUpdate.Offer { Id = "2026.10.27.1", Repair = true });
             Call(window, "ShowUpdateOffer");
             Assert(((Border)Field(window, "UpdatePill")).Visibility == Visibility.Collapsed && ((Button)Field(window, "InstallUpdateButton")).Visibility == Visibility.Visible, "Current-version repair is available without a new-version notification");
+            Assert(Buttons((DependencyObject)Field(window, "UpdatesPane")).Count == 2 && ((Button)Field(window, "InstallUpdateButton")).Content.ToString() == "Обновить", "Updates has exactly Check and Update actions");
+            Assert(typeof(MainWindow).GetField("UpdatePackageText", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public) == null, "Updates has no technical package details control");
+            Call(window, "UpdateBytesProgress", new Dictionary<string, object> { { "phase", "downloading" }, { "done_bytes", 123 }, { "total_bytes", 456 } });
+            Assert(!((TextBlock)Field(window, "UpdateStatusText")).Text.Contains("123") && !((TextBlock)Field(window, "UpdateStatusText")).Text.Contains("байт"), "Progress uses a short human status instead of byte counts");
+            using (var updateCancellation = new System.Threading.CancellationTokenSource())
+            {
+                Set(window, "updating", true); Set(window, "updateCancel", updateCancellation); Call(window, "ShowUpdateOffer");
+                Assert(((Button)Field(window, "InstallUpdateButton")).Content.ToString() == "Отменить" && !((Button)Field(window, "CheckUpdatesButton")).IsEnabled, "Update becomes Cancel while Check is disabled");
+                Call(window, "OnUpdate", null, null); Assert(updateCancellation.IsCancellationRequested, "The same Update action cancels work");
+                Set(window, "updating", false); Set(window, "updateCancel", null);
+            }
             Set(window, "updateOffer", null); Call(window, "ShowUpdateOffer");
             Call(window, "Busy", true);
             Assert(!((StackPanel)Field(window, "SettingsBody")).IsEnabled, "settings disabled while saving/busy");
@@ -363,6 +460,93 @@ internal static class LauncherLifecycleRegression
             Assert(((Button)Field(window, "NextActionButton")).Content.ToString() == "Восстановить компоненты" && ((Button)Field(window, "RefreshButton")).Content.ToString() == "Добавить подключение", "repair and connection setup paths remain available together");
             Call(window, "Display", setup); Call(window, "Display", Bridge.Failure("Shutdown was not confirmed"));
             Assert(((TextBlock)Field(window, "StatusText")).Text != "Подключение не выбрано" && ((string)Field(window, "reportText")).Contains("Shutdown was not confirmed"), "setup never replaces a shutdown failure");
+            var partialFolders = Report("running", "running");
+            partialFolders["host_files"] = new Dictionary<string, object> { { "status", "partial" }, { "share_count", 1 },
+                { "unavailable", new object[] {
+                    new Dictionary<string, object> { { "label", "Archive на ПК" }, { "status", "unavailable" } },
+                    new Dictionary<string, object> { { "label", "Startup на ПК" }, { "status", "protected" } } } } };
+            Call(window, "Display", partialFolders);
+            Assert(((TextBlock)Field(window, "NextStepText")).Text.Contains("Часть папок ПК недоступна"), "partial file sharing never claims all folders are ready");
+            Assert(((string)Field(window, "reportText")).Contains("Archive на ПК: папка недоступна") && ((string)Field(window, "reportText")).Contains("Startup на ПК: защищённая папка"), "file sharing diagnostics names missing folders and gives their reasons");
+            var folderCards = (StackPanel)Field(window, "CheckCards");
+            Assert(folderCards.Children.Count > 0 && folderCards.Children[0] is DockPanel, "missing folders have a visible warning card");
+            var folderWarning = (StackPanel)((DockPanel)folderCards.Children[0]).Children[1];
+            Assert(((TextBlock)folderWarning.Children[1]).Text.Contains("Startup на ПК: защищённая папка"), "visible diagnostics explains each missing folder");
+            Assert(((TextBlock)Field(window, "DiagnosticSummary")).Text == "1 проблема" && (bool)Field(window, "ready"), "partial folder warning is visible without blocking VM startup");
+            var stable = Report("running", "running");
+            Call(window, "Display", stable);
+            Bridge.Handler = (action, payload) => Task.FromResult(stable);
+            window.ShowExistingPanel();
+            Pump(() => window.IsVisible && !(bool)Field(window, "busy"));
+            ((DispatcherTimer)Field(window, "lifecycleTimer")).Stop();
+            Call(window, "Display", stable);
+            string stableHeading = ((TextBlock)Field(window, "StatusText")).Text;
+            Bridge.Handler = (action, payload) => Task.FromResult(Bridge.Failure("temporary status failure"));
+            var failedPoll = (Task)Call(window, "RefreshRuntimeAsync"); Pump(() => failedPoll.IsCompleted);
+            Assert(((TextBlock)Field(window, "StatusText")).Text == "Состояние Windows не подтверждено", "a failed poll shows its temporary warning: " + ((TextBlock)Field(window, "StatusText")).Text);
+            Bridge.Handler = (action, payload) => Task.FromResult(stable);
+            var restoredPoll = (Task)Call(window, "RefreshRuntimeAsync"); Pump(() => restoredPoll.IsCompleted);
+            Assert(((TextBlock)Field(window, "StatusText")).Text == stableHeading, "an unchanged successful poll clears the temporary failure warning");
+            var reconnectWarning = Report("running", "reconnecting");
+            reconnectWarning["ok"] = false;
+            reconnectWarning["checks"] = new Dictionary<string, object> { { "runtime_files", new Dictionary<string, object> {
+                { "passed", false }, { "title", "Компоненты требуют проверки" }, { "detail", "fixture component failure" } } } };
+            reconnectWarning["network_warning"] = "Связь восстанавливается. Интернет Windows временно закрыт.";
+            Call(window, "Display", reconnectWarning);
+            var warningText = (TextBlock)Field(window, "NetworkText");
+            Assert(warningText.Visibility == Visibility.Visible && warningText.Text == (string)reconnectWarning["network_warning"], "the actual network warning stays visible alongside an unrelated failed check");
+            var changedWarning = new Dictionary<string, object>(reconnectWarning);
+            changedWarning["report_kind"] = "runtime_status";
+            changedWarning["network_warning"] = "Проверка связи задерживается. Текущий доступ не подтверждён.";
+            Bridge.Handler = (action, payload) => Task.FromResult(changedWarning);
+            var warningPoll = (Task)Call(window, "RefreshRuntimeAsync"); Pump(() => warningPoll.IsCompleted);
+            Assert(warningText.Text == (string)changedWarning["network_warning"], "a changed warning redraws even when readiness and runtime states stay the same");
+            var serverStopped = Report("running", "running");
+            serverStopped["host_files"] = new Dictionary<string, object> { { "status", "failed" }, { "code", "FILE_SERVER_STOPPED" }, { "share_count", 1 } };
+            Call(window, "Display", serverStopped);
+            string serverAction = ((TextBlock)Field(window, "NextStepText")).Text;
+            Assert(serverAction.Contains("выключи") && serverAction.Contains("панели") && serverAction.Contains("запусти заново"), "a stopped host file server asks for a full safe session restart");
+            Assert(!serverAction.Contains("следующем входе") && ((string)Field(window, "reportText")).Contains("Файловый сервер остановился"), "file server failure never promises recovery by guest logon alone");
+            var fileRecovery = Report("running", "running");
+            var recoveryFields = new Dictionary<string, object> { { "status", "ready" }, { "share_count", 1 },
+                { "recovery_required", true }, { "recovery_log", "logs/host-files-recovery-fixture.jsonl" } };
+            fileRecovery["host_files"] = recoveryFields;
+            Call(window, "Display", fileRecovery);
+            Assert(((TextBlock)Field(window, "DiagnosticSummary")).Text == "1 проблема" && (bool)Field(window, "ready"), "retained file recovery becomes visible without blocking Windows");
+            Assert(((string)Field(window, "reportText")).Contains("logs/host-files-recovery-fixture.jsonl") && ((TextBlock)Field(window, "NextStepText")).Text.IndexOf("журнал",StringComparison.OrdinalIgnoreCase)>=0, "file recovery shows its journal and an actionable next step: "+((TextBlock)Field(window,"NextStepText")).Text);
+            recoveryFields["recovery_log_failed"] = true;
+            Call(window, "Display", fileRecovery);
+            Assert(((string)Field(window, "reportText")).Contains("Не удалось записать журнал"), "failed durability never claims the recovery journal was saved");
+            recoveryFields["recovery_channel_failed"] = true;
+            recoveryFields["status"] = "failed"; recoveryFields["code"] = "RECOVERY_CHANNEL_FAILED";
+            Call(window, "Display", fileRecovery);
+            Assert(((TextBlock)Field(window, "NextStepText")).Text.Contains("выключи") && !((string)Field(window, "reportText")).Contains("Файловый сервер остановился"), "a broken recovery channel asks for a safe restart without inventing process death");
+            var clipboardFailed = Report("running", "running");
+            clipboardFailed["clipboard"] = new Dictionary<string, object> { { "status", "failed" }, { "code", "CLIPBOARD_START_FAILED" } };
+            Call(window, "Display", clipboardFailed);
+            Assert(((TextBlock)Field(window, "ClipboardDetail")).Text.Contains("не готов") && ((TextBlock)Field(window, "DiagnosticSummary")).Text == "1 проблема", "native clipboard startup failure is visible");
+            Assert((bool)Field(window, "ready") && ((string)Field(window, "reportText")).Contains("CLIPBOARD_START_FAILED"), "clipboard failure keeps Windows available and reports a safe reason");
+            var clipboardReady = Report("running", "running");
+            clipboardReady["report_kind"] = "runtime_status";
+            clipboardReady["clipboard"] = new Dictionary<string, object> { { "status", "ready" }, { "code", "CLIPBOARD_READY" }, { "last_transfer_utc", "2026-10-27T00:12:34+00:00" } };
+            Bridge.Handler = (action, payload) => Task.FromResult(clipboardReady);
+            var clipboardPoll = (Task)Call(window, "RefreshRuntimeAsync"); Pump(() => clipboardPoll.IsCompleted);
+            Assert(((TextBlock)Field(window, "ClipboardDetail")).Text.Contains("передача подтверждена"), "clipboard status alone refreshes the visible last confirmed transfer");
+            foreach (string protocol in new[] { "hysteria2", "http", "https", "socks5" })
+            {
+                var capabilities = Report("running", "running");
+                capabilities["connection"] = new Dictionary<string, object> { { "selected_profile", new Dictionary<string, object> {
+                    { "name", "Fixture" }, { "protocol", protocol } } } };
+                Call(window, "Display", capabilities);
+                string detail = ((TextBlock)Field(window, "ConnectionDetail")).Text;
+                Assert(detail.Contains("только IPv4") && detail.Contains(protocol == "hysteria2" ? "TCP и UDP" : "Только TCP"), "selected connection shows the actual UDP and external IPv4 capabilities: " + protocol);
+            }
+            Assert(((TextBlock)Field(window, "FilesLimits")).Text.Contains("жёсткими ссылками"), "file sharing exposes the retained hardlink limitation");
+            var oversizedClipboard = Report("running", "running");
+            oversizedClipboard["clipboard"] = new Dictionary<string, object> { { "status", "unconfirmed" }, { "code", "GUEST_CLIPBOARD_TEXT_TOO_LARGE" } };
+            Call(window, "Display", oversizedClipboard);
+            string copyAdvice = ((TextBlock)Field(window, "ClipboardDetail")).Text;
+            Assert(copyAdvice.Contains("слишком большой") && copyAdvice.Contains("файлом") && !copyAdvice.Contains("перезапусти"), "over-limit text has actionable advice without requiring a Windows restart");
             Console.WriteLine("PASS launcher lifecycle: " + checks + " checks"); return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }

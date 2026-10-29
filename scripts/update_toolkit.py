@@ -14,7 +14,8 @@ from file_snapshot import locked_read
 from profile_store import _plain, _pinned_directory
 
 PYTHON_ROOT_FILES = ('python.exe', 'python3.dll', 'python312.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
-GUEST_INPUTS = ('guest/files/GuestFiles.cs', 'guest/GuestEnvironment.cs', 'guest/GuestClipboard.cs',
+GUEST_INPUTS = ('guest/files/GuestFiles.cs', 'guest/GuestEnvironment.cs', 'guest/GuestClipboard.cs', 'guest/ClipboardFiles.cs',
+                'guest/ClipboardStage.cs', 'guest/ClipboardProtocol.cs', 'guest/ClipboardTransport.cs',
                 'ui/app.manifest', 'scripts/Build-GuestFiles.ps1', 'scripts/Build-HostFiles.ps1')
 EXCLUDED = {'test', 'tests', '__pycache__', 'site-packages', 'tkinter', 'idlelib', 'ensurepip'}
 MAX_FILES = 15000
@@ -64,6 +65,7 @@ def validate_host_build(source, component_directory=None):
     names = [*GUEST_INPUTS]
     names.extend(path.relative_to(source).as_posix() for path in sorted((source/'host/files').glob('*.cs'), key=lambda path: path.name.casefold()))
     names.append('host/files/dependency-patches/SMBServer.Signatures.cs')
+    names.append('patches/smblibrary/smblibrary-1.5.8.patch')
     expected = [record(source, name) for name in names]
     outputs = []
     for name in pack.FILE_COMPONENT_FILES:

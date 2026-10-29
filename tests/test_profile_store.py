@@ -1,8 +1,10 @@
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -54,13 +56,150 @@ class ProfileStoreTests(unittest.TestCase):
     def test_revisions_select_and_explicit_secret_replacement(self):
         first = self.store.save(self.config, {'auth': 'old'})
         self.store.select(first['profile_id'])
-        second = self.store.save(self.config | {'name': 'Новый'}, profile_id=first['profile_id'])
-        self.assertNotEqual(first['revision_id'], second['revision_id'])
-        self.assertTrue(self.store.get_view(first['profile_id'])['selected'])
-        self.assertEqual(self.store.secret_config(first['profile_id'], first['revision_id'])['credentials']['auth'], 'old')
+        with self.store.session_profile(first['profile_id']) as (selected, profile):
+            second = self.store.save(self.config | {'name': 'Новый'}, profile_id=first['profile_id'])
+            self.assertNotEqual(first['revision_id'], second['revision_id'])
+            self.assertTrue(self.store.get_view(first['profile_id'])['selected'])
+            self.assertEqual(self.store.secret_config(first['profile_id'], first['revision_id'])['credentials']['auth'], 'old')
+            self.assertEqual(selected['revision_id'], first['revision_id'])
+            self.assertEqual(profile['credentials']['auth'], 'old')
         with self.assertRaises(ValueError):
             self.store.save(self.config, {'auth': ''}, profile_id=first['profile_id'])
         self.assertEqual(self.store.get_view(first['profile_id'])['revision_id'], second['revision_id'])
+
+    def test_inactive_history_is_pruned_before_the_store_size_check(self):
+        first = self.store.save(self.config, {'auth': 'first'})
+        with mock.patch.object(storage, 'MAX_STORE_BYTES', 4096):
+            for number in range(30):
+                current = self.store.save(self.config | {'name': 'revision ' + str(number)}, profile_id=first['profile_id'])
+        data = self.store._read()
+        self.assertEqual(set(data['profiles'][first['profile_id']]['revisions']), {current['revision_id']})
+        self.assertLess((self.directory / 'profiles.json').stat().st_size, 4096)
+        with self.assertRaises(ValueError):
+            self.store.secret_config(first['profile_id'], first['revision_id'])
+
+    def test_active_revision_is_retained_until_its_session_releases_the_pin(self):
+        first = self.store.save(self.config, {'auth': 'old'})
+        self.store.select(first['profile_id'])
+        with self.store.session_profile() as (selected, profile):
+            for number in range(3):
+                current = self.store.save(self.config, {'auth': str(number)}, profile_id=first['profile_id'])
+            self.assertEqual(selected['revision_id'], first['revision_id'])
+            self.assertEqual(profile['credentials']['auth'], 'old')
+            self.assertEqual(self.store.secret_config(first['profile_id'], first['revision_id'])['credentials']['auth'], 'old')
+            self.assertEqual(len(self.store._read()['profiles'][first['profile_id']]['revisions']), 2)
+        current = self.store.save(self.config, profile_id=first['profile_id'])
+        self.assertEqual(set(self.store._read()['profiles'][first['profile_id']]['revisions']), {current['revision_id']})
+        self.assertEqual(list((self.directory / 'leases').iterdir()), [])
+
+    def test_crashed_session_releases_its_revision_pin_without_stale_state(self):
+        first = self.store.save(self.config, {'auth': 'old'})
+        code = """import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from profile_store import ProfileStore
+with ProfileStore(Path(sys.argv[2])).session_profile(sys.argv[3]):
+    print('READY', flush=True)
+    sys.stdin.read(1)
+"""
+        child = subprocess.Popen([sys.executable, '-X', 'utf8', '-I', '-B', '-c', code,
+                                  str(Path(storage.__file__).parent), str(self.directory), first['profile_id']],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+        ready = queue.Queue()
+        reader = threading.Thread(target=lambda: ready.put(child.stdout.readline()), daemon=True)
+        reader.start()
+        try:
+            self.assertEqual(ready.get(timeout=10), b'READY\r\n')
+            self.store.save(self.config, {'auth': 'new'}, profile_id=first['profile_id'])
+            self.assertEqual(self.store.secret_config(first['profile_id'], first['revision_id'])['credentials']['auth'], 'old')
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=10)
+            reader.join(timeout=2)
+            for stream in (child.stdin, child.stdout, child.stderr):
+                stream.close()
+        self.store.save(self.config, profile_id=first['profile_id'])
+        with self.assertRaises(ValueError):
+            self.store.secret_config(first['profile_id'], first['revision_id'])
+        self.assertEqual(list((self.directory / 'leases').iterdir()), [])
+
+    def test_legacy_unsupported_endpoint_in_old_history_does_not_break_valid_profiles(self):
+        first = self.store.save(self.config, {'auth': 'secret'})
+        data = self.store._read()
+        current = data['profiles'][first['profile_id']]['revisions'][first['revision_id']]
+        data['profiles'][first['profile_id']]['revisions']['f' * 32] = {
+            'config': current['config'] | {'host': '0.0.0.0'}, 'credentials_blob': current['credentials_blob']}
+        self.store._write(data)
+        before = (self.directory / 'profiles.json').read_bytes()
+        self.assertFalse(self.store.get_view(first['profile_id'])['needs_correction'])
+        self.assertEqual((self.directory / 'profiles.json').read_bytes(), before)
+        self.store.save(self.config, profile_id=first['profile_id'])
+        self.assertNotIn('f' * 32, self.store._read()['profiles'][first['profile_id']]['revisions'])
+
+    def test_current_legacy_endpoint_is_editable_but_cannot_start(self):
+        first = self.store.save(self.config, {'auth': 'secret'})
+        other = self.store.save(self.config | {'name': 'Other'}, {'auth': 'other'})
+        self.store.select(first['profile_id'])
+        data = self.store._read()
+        data['profiles'][first['profile_id']]['revisions'][first['revision_id']]['config']['host'] = '127.0.0.2'
+        self.store._write(data)
+        view = self.store.get_view(first['profile_id'])
+        self.assertTrue(view['needs_correction'])
+        self.assertFalse(view['needs_credentials'])
+        self.assertTrue(self.store.selected_summary()['needs_correction'])
+        self.assertEqual(len(self.store.list_profiles()), 2)
+        self.assertEqual(self.store.get_view(other['profile_id'])['name'], 'Other')
+        with self.assertRaises(ValueError), self.store.session_profile(first['profile_id']):
+            self.fail('Unsupported saved endpoint cannot start a session')
+        repaired = self.store.save(self.config, profile_id=first['profile_id'])
+        self.assertFalse(repaired['needs_correction'])
+
+    def test_old_tls_identity_does_not_make_the_profile_store_unreadable(self):
+        first = self.store.save(self.config, {'auth': 'secret'})
+        data = self.store._read()
+        data['profiles'][first['profile_id']]['revisions'][first['revision_id']]['config']['tls_server_name'] = '127.0.0.2'
+        self.store._write(data)
+        view = self.store.get_view(first['profile_id'])
+        self.assertFalse(view['needs_correction'])
+        with self.store.session_profile(first['profile_id']) as (_, config):
+            self.assertEqual(config['tls_server_name'], '127.0.0.2')
+
+    def test_prepare_draft_uses_current_form_and_pinned_secrets_without_saving(self):
+        saved = self.store.save(self.config, {'auth': 'saved-secret'})
+        self.store.select(saved['profile_id'])
+        before = (self.directory / 'profiles.json').read_bytes()
+        draft = self.config | {'name': 'Unsaved', 'host': '203.0.113.77', 'port': 8443}
+        with mock.patch.object(self.store, '_write', side_effect=AssertionError('draft must not persist')):
+            prepared = self.store.prepare_draft(draft, saved['profile_id'])
+        self.assertEqual(prepared['host'], '203.0.113.77')
+        self.assertEqual(prepared['port'], 8443)
+        self.assertEqual(prepared['credentials'], {'auth': 'saved-secret'})
+        self.assertNotIn('credentials', draft)
+        self.assertEqual((self.directory / 'profiles.json').read_bytes(), before)
+        self.assertEqual(self.store.selected_summary()['revision_id'], saved['revision_id'])
+
+    def test_prepare_draft_does_not_reuse_credentials_after_protocol_or_obfs_change(self):
+        saved = self.store.save(self.config, {'auth': 'saved-secret'})
+        for changed in (self.config | {'protocol': 'http'}, self.config | {'obfs': 'salamander'}):
+            with self.subTest(changed=changed), mock.patch.object(storage, '_unprotect', side_effect=AssertionError('must not decrypt incompatible secrets')):
+                with self.assertRaisesRegex(ValueError, 'Enter credentials again'):
+                    self.store.prepare_draft(changed, saved['profile_id'])
+        prepared = self.store.prepare_draft(self.config | {'credentials': {'auth': 'draft-secret'}}, saved['profile_id'])
+        self.assertEqual(prepared['credentials'], {'auth': 'draft-secret'})
+        self.assertEqual(self.store.secret_config(saved['profile_id'])['credentials'], {'auth': 'saved-secret'})
+        with mock.patch.object(storage, '_unprotect', side_effect=AssertionError('explicit empty credentials must not reuse a secret')):
+            anonymous = self.store.prepare_draft(self.config | {'protocol': 'http', 'credentials': {}}, saved['profile_id'])
+        self.assertEqual(anonymous['credentials'], {})
+
+    def test_prepare_new_draft_needs_no_store_but_requires_hysteria_auth(self):
+        with mock.patch.object(self.store, '_transaction', side_effect=AssertionError('new draft must not create storage')):
+            ready = self.store.prepare_draft({'protocol': 'http', 'host': '203.0.113.3', 'port': 8080})
+            self.assertEqual(ready['protocol'], 'http')
+            with self.assertRaisesRegex(ValueError, 'Hysteria2 authentication is required'):
+                self.store.prepare_draft(self.config)
+        self.assertFalse(self.directory.exists())
 
     def test_transferred_credentials_preserve_profile_and_require_reentry(self):
         view = self.store.save(self.config, {'auth': 'secret'})
@@ -149,6 +288,15 @@ class ProfileStoreTests(unittest.TestCase):
                                     capture_output=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b'StoreBusy', result.stderr)
+
+    def test_pinned_directory_really_blocks_native_rename_until_release(self):
+        self.directory.mkdir()
+        destination = self.directory.with_name('moved-profiles')
+        with storage._pinned_directory(self.directory, create=False):
+            with self.assertRaises(PermissionError):
+                self.directory.rename(destination)
+        self.directory.rename(destination)
+        self.assertTrue(destination.is_dir())
 
     def test_duplicate_keys_and_invalid_encrypted_blob_do_not_destroy_metadata(self):
         view = self.store.save(self.config, {'auth': 'secret'})

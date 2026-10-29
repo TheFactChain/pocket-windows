@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest import mock
@@ -101,6 +102,48 @@ class ChunkUpdateTests(unittest.TestCase):
             self.assertEqual((self.base/'stage/app'/name).read_bytes(), data)
         self.assertEqual(json.loads((self.base/'stage/prepared.json').read_bytes())['schema'], 2)
         self.assertFalse((self.base/'stage/app.zip').exists())
+
+    def test_cached_unchanged_update_reserves_only_remaining_operations(self):
+        for name, data in self.files.items():
+            path = self.target/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        update.seed_cache(self.value, self.target, self.target)
+        planned = update.plan(self.index, self.digest, self.target)
+        self.assertEqual(planned['changed_files'], 0)
+        self.assertEqual(planned['download_bytes'], 0)
+        self.assertLessEqual(planned['required_free_bytes'], 80 * 1024**2)
+        usage = mock.Mock(free=80 * 1024**2)
+        with mock.patch.object(update.shutil, 'disk_usage', return_value=usage), \
+             mock.patch.object(update, '_fetch', side_effect=AssertionError('no download needed')):
+            result = update.prepare(self.index, self.digest, self.target, self.base/'unchanged-stage')
+        self.assertEqual(result['changed_files'], 0)
+        self.assertFalse((self.base/'unchanged-stage/app').exists())
+
+    def test_small_replacement_keeps_space_for_the_larger_previous_file(self):
+        for name, data in self.files.items():
+            path = self.target/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        update.seed_cache(self.value, self.target, self.target)
+        (self.target/'scripts/portable_app.py').write_bytes(b'old' * 1024**2)
+        planned = update.plan(self.index, self.digest, self.target)
+        self.assertEqual(planned['changed_files'], 1)
+        self.assertGreaterEqual(planned['required_free_bytes'], 86 * 1024**2)
+        with mock.patch.object(update.shutil, 'disk_usage', return_value=mock.Mock(free=80 * 1024**2)):
+            with self.assertRaisesRegex(RuntimeError, 'space'):
+                update.prepare(self.index, self.digest, self.target, self.base/'rollback-space')
+
+    def test_space_is_combined_on_shared_volumes_and_separated_on_other_volumes(self):
+        space = {'apply': 30, 'stage': 20, 'cache': 10}
+        paths = [SimpleNamespace(stat=lambda: SimpleNamespace(st_dev=1)) for _ in range(3)]
+        with mock.patch.object(update.shutil, 'disk_usage', return_value=mock.Mock(free=64 * 1024**2 + 59)):
+            with self.assertRaisesRegex(RuntimeError, 'space'):
+                update._check_space(*paths, space)
+        for index, path in enumerate(paths):
+            path.stat = lambda number=index: SimpleNamespace(st_dev=number)
+        with mock.patch.object(update.shutil, 'disk_usage', return_value=mock.Mock(free=64 * 1024**2 + 30)):
+            update._check_space(*paths, space)
 
     def test_http_200_corruption_and_invalid_cache_are_not_trusted(self):
         self.status = 200

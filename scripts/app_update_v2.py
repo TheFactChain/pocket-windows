@@ -414,11 +414,14 @@ def _inventory(index, target, progress, populate=False):
     if populate:
         release.directory(cache)
     missing = {row['sha256'] for row in index['chunks'] if _cache_read(cache, row) is None}
+    uncached = set(missing)
     def consume(row, raw):
         if populate:
             _cache_write(cache, row, raw)
     same = _local(index, target, missing, consume, progress)
-    return cache, missing, same
+    if populate:
+        uncached.intersection_update(missing)  # Locally reused chunks have already been written to cache.
+    return cache, missing, same, uncached
 
 
 def seed_cache(index, source_root, target, progress=lambda value: None):
@@ -441,11 +444,34 @@ def seed_cache(index, source_root, target, progress=lambda value: None):
         return verify_cache(index, target)
 
 
-def _summary(index, missing, same):
+def _space(index, uncached, same, target):
+    records = [{key: row[key] for key in ('path', 'bytes', 'sha256')} for row in index['files']]
+    rows, obsolete = release._update_operations(target, records, same, True)
+    previous = 0
+    for row in rows + obsolete:
+        path = target / row['path']
+        _plain(path)
+        if path.exists():
+            previous += path.stat().st_size
+    return {'cache': sum(row['bytes'] + 65536 for row in index['chunks'] if row['sha256'] in uncached),
+            'stage': sum(row['bytes'] for row in rows), 'apply': release._update_space(rows, previous)}
+
+
+def _check_space(target, stage, cache, space):
+    volumes = {}
+    for path, amount in ((target, space['apply']), (stage, space['stage']), (cache, space['cache'])):
+        volume = path.stat().st_dev
+        first, required = volumes.get(volume, (path, 0))
+        volumes[volume] = first, required + amount
+    for path, required in volumes.values():
+        if shutil.disk_usage(path).free < required + 64 * 1024**2:
+            raise RuntimeError('Insufficient disk space to prepare update')
+
+
+def _summary(index, missing, same, space):
     needed = sum(row['compressed_bytes'] for row in index['chunks'] if row['sha256'] in missing)
     changed = [row['path'] for row in index['files'] if row['path'] not in same]
-    # Cache, staged files, transaction copies and rollback, plus bounded I/O slack.
-    required = sum(row['bytes'] + 65536 for row in index['chunks']) + 3*sum(row['bytes'] for row in index['files']) + 64*1024**2
+    required = sum(space.values()) + 64*1024**2
     return {'download_bytes': needed, 'required_free_bytes': required, 'changed_files': len(changed),
             'changed_paths': changed, 'reused_chunks': len(index['chunks']) - len(missing), 'total_chunks': len(index['chunks'])}
 
@@ -454,8 +480,9 @@ def plan(index_path, sha256, target, progress=lambda value: None):
     index, target = read_index(index_path, sha256), release.absolute(target)
     with _pinned_directory(target, create=False):
         _require_vm_off(target)
-        _, missing, same = _inventory(index, target, progress)
-    return dict(_summary(index, missing, same), phase='planned')
+        _, missing, same, uncached = _inventory(index, target, progress)
+        space = _space(index, uncached, same, target)
+    return dict(_summary(index, missing, same, space), phase='planned')
 
 
 class _Redirect(urllib.request.HTTPRedirectHandler):
@@ -518,12 +545,12 @@ def prepare(index_path, sha256, target, stage, progress=lambda value: None, offl
     with _pinned_directory(target, create=False), _pinned_directory(stage.parent, create=False):
         stage.mkdir()
         with _pinned_directory(stage, create=False):
-            cache, missing, same = _inventory(index, target, progress, populate=True)
+            cache, missing, same, uncached = _inventory(index, target, progress, populate=True)
             if offline and missing:
                 raise RuntimeError(f'Offline repair needs {len(missing)} missing verified chunks; no network request was made')
-            result = _summary(index, missing, same)
-            if shutil.disk_usage(stage).free < result['required_free_bytes'] or shutil.disk_usage(cache).free < result['required_free_bytes']:
-                raise RuntimeError('Insufficient disk space to prepare update')
+            space = _space(index, uncached, same, target)
+            result = _summary(index, missing, same, space)
+            _check_space(target, stage, cache, space)
             downloaded = 0
             for row in index['chunks']:
                 if row['sha256'] in missing:

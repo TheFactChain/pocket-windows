@@ -577,6 +577,37 @@ def consume_prepared(stage, target, destination, row):
             os.replace(source, destination)
 
 
+def _update_operations(target, records, same, prepared):
+    """The files that will be installed or removed, shared by planning and commit."""
+    rows = [row for row in records if row['path'] not in same]
+    obsolete = []
+    inventory_path = target / INVENTORY
+    _plain(inventory_path)
+    if inventory_path.exists():
+        previous = read_json(inventory_path)
+        if type(previous) is not dict or type(previous.get('schema')) is not int or previous['schema'] not in (1, 2):
+            raise ValueError('Invalid installed application inventory')
+        names = {row['path'].casefold() for row in records}
+        for row in validate_common_records(previous.get('files'), transaction=previous['schema'] == 2):
+            path = target / row['path']
+            if row['path'].startswith('gateway/packages/releases/'):
+                continue  # Versioned gateway bases remain available to the retained rollback.
+            if row['path'].casefold() not in names and path.exists():
+                if file_record(pack.file_under(target, row['path']), row['path']) != row:
+                    raise RuntimeError('Obsolete application file changed; preserve it before updating: ' + row['path'])
+                obsolete.append(row)
+    if not prepared:
+        catalog_pointer = target / 'state/components/current.json'
+        _plain(catalog_pointer)
+        if catalog_pointer.exists():
+            obsolete.append(file_record(catalog_pointer, 'state/components/current.json'))
+    return rows, obsolete
+
+
+def _update_space(rows, previous_bytes):
+    return sum(row['bytes'] for row in rows) + 2 * previous_bytes + 16 * 1024**2
+
+
 def apply_update(release, target, probe=False, prepared_sha256=None, _local_stage=False):
     release, target = absolute(release), absolute(target)
     local_stage = (_local_stage and release.parent == target / 'state' and bool(re.fullmatch('[a-f0-9]{32}', release.name)))
@@ -613,27 +644,8 @@ def apply_update(release, target, probe=False, prepared_sha256=None, _local_stag
             rows = [row for row in manifest['common_files'] if row['path'] not in omitted]
             rows = [row for row in rows if not (target / row['path']).exists()
                     or file_record(pack.file_under(target, row['path']), row['path']) != row]
-            obsolete = []
-            inventory_path = target / INVENTORY
-            _plain(inventory_path)
-            if inventory_path.exists():
-                previous = read_json(inventory_path)
-                if type(previous) is not dict or type(previous.get('schema')) is not int or previous['schema'] not in (1, 2):
-                    raise ValueError('Invalid installed application inventory')
-                names = {row['path'].casefold() for row in manifest['common_files']}
-                for row in validate_common_records(previous.get('files'), transaction=previous['schema'] == 2):
-                    path = target / row['path']
-                    if row['path'].startswith('gateway/packages/releases/'):
-                        continue  # Versioned gateway bases remain available to the retained rollback.
-                    if row['path'].casefold() not in names and path.exists():
-                        if file_record(pack.file_under(target, row['path']), row['path']) != row:
-                            raise RuntimeError('Obsolete application file changed; preserve it before updating: ' + row['path'])
-                        obsolete.append(row)
-            if not prepared_sha256:
-                catalog_pointer = target / 'state/components/current.json'
-                _plain(catalog_pointer)
-                if catalog_pointer.exists():
-                    obsolete.append(file_record(catalog_pointer, 'state/components/current.json'))
+            same = {row['path'] for row in manifest['common_files']} - {row['path'] for row in rows}
+            rows, obsolete = _update_operations(target, manifest['common_files'], same, bool(prepared_sha256))
             previous_bytes = 0
             for row in rows + obsolete:
                 path = target / row['path']
@@ -644,7 +656,7 @@ def apply_update(release, target, probe=False, prepared_sha256=None, _local_stag
                     with _exclusive_file(path, create=False):
                         pass
                     previous_bytes += path.stat().st_size
-            needed = sum(row['bytes'] for row in rows) + 2 * previous_bytes + 16 * 1024**2
+            needed = _update_space(rows, previous_bytes)
             if shutil.disk_usage(target).free < needed:
                 raise RuntimeError('Insufficient space for update staging, backups and rollback')
             transaction = directory(target / 'state' / ('app-update-' + uuid.uuid4().hex))

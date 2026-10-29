@@ -1,7 +1,13 @@
 """Pure generation of the pinned, fail-closed gateway session configuration."""
 import ipaddress
 import re
-from connection_profile import validate_profile
+from connection_profile import validate_profile, validate_ipv4_endpoint
+
+
+def endpoint_ipv4(value):
+    """Use the QEMU host alias for a proxy running on this PC, before generating any rules."""
+    address = validate_ipv4_endpoint(value)
+    return '10.0.2.2' if address == '127.0.0.1' else address
 
 
 def validate_session(value):
@@ -16,19 +22,18 @@ def validate_session(value):
         raise ValueError('Invalid profile revision')
     if not isinstance(value['gateway_version'], str) or not re.fullmatch('[A-Za-z0-9_.-]{1,64}', value['gateway_version']):
         raise ValueError('Invalid gateway version')
-    endpoint = str(ipaddress.IPv4Address(value['endpoint_ipv4']))
-    address = ipaddress.IPv4Address(endpoint)
-    if address.is_loopback or address.is_unspecified or address.is_multicast or address.is_link_local:
-        raise ValueError('Invalid endpoint address')
+    endpoint = endpoint_ipv4(value['endpoint_ipv4'])
     profile = validate_profile(value['profile'])
     if profile['protocol'] == 'hysteria2' and not profile.get('credentials', {}).get('auth'):
         raise ValueError('Hysteria2 password required')
     # Hostname resolution is performed by the controller before the NIC is activated.
     try:
-        if str(ipaddress.IPv4Address(profile['host'])) != endpoint:
-            raise ValueError('Endpoint does not match profile')
+        literal = str(ipaddress.IPv4Address(profile['host']))
     except ipaddress.AddressValueError:
         pass
+    else:
+        if endpoint_ipv4(literal) != endpoint:
+            raise ValueError('Endpoint does not match profile')
     return {**value, 'profile': profile, 'endpoint_ipv4': endpoint}
 
 

@@ -16,12 +16,22 @@ def _text(value, field, limit, empty=False):
     return value
 
 
-def _host(value):
+def validate_ipv4_endpoint(value):
+    if type(value) is not str:
+        raise ValueError('Invalid endpoint address')
+    address = ipaddress.IPv4Address(value)
+    if (address.is_unspecified or address.is_multicast or address.is_link_local
+            or (address.is_loopback and str(address) != '127.0.0.1')):
+        raise ValueError('Unsupported endpoint address')
+    return str(address)
+
+
+def _host(value, allow_legacy_endpoint=False):
     value = _text(value, 'host', 253).removesuffix('.')
     if ':' in value or '[' in value or ']' in value:
         raise ValueError('IPv6 endpoints are not supported in this version')
     try:
-        return str(ipaddress.IPv4Address(value))
+        return str(ipaddress.IPv4Address(value)) if allow_legacy_endpoint else validate_ipv4_endpoint(value)
     except ipaddress.AddressValueError:
         if re.fullmatch(r'[0-9.]+', value):
             raise ValueError('Invalid IPv4 address') from None
@@ -35,7 +45,7 @@ def _host(value):
     return value
 
 
-def validate_profile(value):
+def validate_profile(value, *, allow_legacy_endpoint=False):
     """Normalize metadata and optional credentials; missing secrets may be re-entered later."""
     if not isinstance(value, dict) or set(value) - FIELDS:
         raise ValueError('Profile object has unsupported fields')
@@ -58,7 +68,7 @@ def validate_profile(value):
         raise ValueError('TLS verification cannot be disabled or added to this protocol')
     if 'udp_supported' in value and (type(value['udp_supported']) is not bool or value['udp_supported'] != udp):
         raise ValueError('UDP capability is determined by the protocol')
-    host = _host(value.get('host'))
+    host = _host(value.get('host'), allow_legacy_endpoint)
     result = {'schema': 1, 'name': _text(value.get('name', host), 'name', 128),
               'protocol': protocol, 'host': host, 'port': port,
               'tls_verify': tls, 'udp_supported': udp}
@@ -66,7 +76,8 @@ def validate_profile(value):
     if sni:
         if not tls:
             raise ValueError('TLS server name requires a TLS connection')
-        result['tls_server_name'] = _host(sni)
+        # A certificate name is not a destination for routing.
+        result['tls_server_name'] = _host(sni, allow_legacy_endpoint=True)
     elif sni != '':
         raise ValueError('Invalid TLS server name')
     obfs = value.get('obfs', '')

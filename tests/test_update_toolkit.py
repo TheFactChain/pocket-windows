@@ -109,13 +109,15 @@ class ToolkitTests(unittest.TestCase):
         self.write('host/files/ConfinedFileStore.cs')
         self.write('host/files/ConfinedFileStore.Notify.cs')
         self.write('host/files/dependency-patches/SMBServer.Signatures.cs')
+        self.write('patches/smblibrary/smblibrary-1.5.8.patch')
         component = self.source/'runtime/host-files'
         manifest_path = self.write('runtime/host-files/build-manifest.json', b'{}')
         for name in toolkit.pack.FILE_COMPONENT_FILES:
             if not name.endswith('/build-manifest.json'):
                 self.write(name)
         inputs = (*toolkit.GUEST_INPUTS, 'host/files/ConfinedFileStore.cs', 'host/files/ConfinedFileStore.Notify.cs',
-                  'host/files/HostFilesServer.cs', 'host/files/dependency-patches/SMBServer.Signatures.cs')
+                  'host/files/HostFilesServer.cs', 'host/files/dependency-patches/SMBServer.Signatures.cs',
+                  'patches/smblibrary/smblibrary-1.5.8.patch')
         outputs = [dict(toolkit.record(component, Path(name).name), name=Path(name).name)
                    for name in toolkit.pack.FILE_COMPONENT_FILES if not name.endswith('/build-manifest.json')]
         for row in outputs:
@@ -125,7 +127,7 @@ class ToolkitTests(unittest.TestCase):
                   'local_sources': [toolkit.record(self.source, name) for name in inputs], 'files': outputs}
         manifest_path.write_text(json.dumps(report), encoding='utf-8')
         toolkit.validate_host_build(self.source, component)
-        for name in ('host/files/HostFilesServer.cs', 'runtime/host-files/HostFiles.exe'):
+        for name in ('host/files/HostFilesServer.cs', 'runtime/host-files/HostFiles.exe', 'patches/smblibrary/smblibrary-1.5.8.patch'):
             self.write(name, b'stale')
             with self.assertRaises(ValueError):
                 toolkit.validate_host_build(self.source, component)

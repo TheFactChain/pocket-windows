@@ -275,7 +275,8 @@ def state_matches(root, path, state, identity):
         if role == 'gateway':
             nonce = state.get('nonce', '')
             disk = 'logs/guest-gateway-boot-' + nonce + '/gateway.qcow2'
-            if (state.get('schema') != 2 or not re.fullmatch('[0-9a-f]{32}', nonce)
+            if ('generation' in state and not valid_gateway_generations(root, state)
+                    or state.get('schema') != 2 or not re.fullmatch('[0-9a-f]{32}', nonce)
                     or Path(path).parent.name != 'guest-gateway-boot-' + nonce
                     or state.get('disk') != disk or type(state.get('test_only')) is not bool
                     or not same_identity(identity, state.get('process'))
@@ -381,6 +382,76 @@ def state_record(path, state, identity):
     return record
 
 
+def gateway_refresh_proof_valid(root, proof, identity, generation):
+    return (isinstance(proof, dict) and type(proof.get('generation')) is int and proof['generation'] == generation
+            and proof.get('reason') == 'connection-refresh' and proof.get('guest_shutdown') is True
+            and proof.get('gone') is True and type(proof.get('exit_code')) is int and proof['exit_code'] == 0
+            and valid_vm_identity(root, identity) and same_identity(identity, proof.get('process')))
+
+
+def valid_gateway_generations(root, state):
+    generation, history = state.get('generation'), state.get('previous_generations')
+    return (type(generation) is int and 1 <= generation <= 64 and isinstance(history, list)
+            and len(history) == generation - 1 and all(gateway_refresh_proof_valid(root, proof, proof.get('process'), index + 1)
+                for index, proof in enumerate(history) if isinstance(proof, dict))
+            and all(isinstance(proof, dict) for proof in history))
+
+
+def gateway_envelope_valid(root, path, state):
+    try:
+        path = safe_state_path(root, path)
+        nonce = state.get('nonce')
+        started = datetime.fromisoformat(state['started_utc'])
+        return (state.get('schema') == 2 and state.get('guest') == 'gateway-boot' and state.get('network') == 'gateway'
+                and state.get('test_only') is False and state.get('normal_runtime') is True
+                and isinstance(nonce, str) and re.fullmatch('[a-f0-9]{32}', nonce) is not None
+                and path.parent.name == 'guest-gateway-boot-' + nonce
+                and state.get('disk') == 'logs/' + path.parent.name + '/gateway.qcow2'
+                and all(isinstance(state.get(key), str) and re.fullmatch('[a-f0-9]{32}', state[key]) is not None
+                        for key in ('profile_id', 'profile_revision_id'))
+                and isinstance(state.get('gateway_version'), str) and re.fullmatch('[A-Za-z0-9_.-]{1,64}', state['gateway_version']) is not None
+                and valid_controller(root, state.get('controller')) and valid_vm_identity(root, state.get('process'))
+                and type(state.get('pid')) is int and state['pid'] == state['process']['pid']
+                and started.tzinfo is not None and valid_gateway_generations(root, state))
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+        return False
+
+
+def refresh_gateway_record(root, record, state):
+    """Adopt only this live controller's proved successor; a restart gap stays owned."""
+    if 'generation' not in state:
+        return False
+    controller = record.get('controller', {})
+    if (not gateway_envelope_valid(root, record['state'], state)
+            or state.get('nonce') != record.get('nonce')
+            or not same_identity(controller, state.get('controller'))
+            or not same_identity(controller, process_identity(controller.get('pid', 0)))):
+        return False
+    previous = record.get('generation', 1)
+    if type(previous) is not int or previous < 1 or previous > state['generation']:
+        raise RuntimeError('Gateway generation moved backwards')
+    identity = state.get('process', {})
+    if same_identity(identity, process_identity(identity.get('pid', 0))):
+        if not state_matches(root, record['state'], state, identity):
+            raise RuntimeError('Gateway successor state does not match its process')
+        if state['generation'] > previous:
+            proof = state['previous_generations'][previous - 1]
+            if (not gateway_refresh_proof_valid(root, proof, record['process'], previous)
+                    or same_identity(record['process'], process_identity(record['process']['pid']))):
+                raise RuntimeError('Gateway replacement lacks a confirmed predecessor exit')
+        elif not same_identity(identity, record['process']):
+            raise RuntimeError('Gateway process changed without a new generation')
+        record.update(state_record(record['state'], state, identity))
+        return True
+    if state.get('status') not in ('reconnecting', 'starting', 'stopping', 'shutdown-unconfirmed'):
+        return False
+    if state['generation'] == previous:
+        return (same_identity(identity, record['process']) and state.get('refresh_requested') is True
+                and state.get('guest_shutdown') is True and type(state.get('exit_code')) is int
+                and state['exit_code'] == 0 and not state.get('error'))
+    return gateway_refresh_proof_valid(root, state['previous_generations'][previous - 1], record['process'], previous)
+
+
 def controller_live(root, record):
     try:
         if not record_live(root, record):
@@ -417,6 +488,17 @@ def discover_guests(root):
         try:
             state = read_json(path)
             identity = processes.get(state.get('pid'))
+            if (not identity and state.get('guest') == 'gateway-boot' and 'generation' in state
+                    and valid_gateway_generations(root, state) and isinstance(state.get('process'), dict)):
+                candidate = state_record(path, state, state['process'])
+                proof = state.get('refresh_proof')
+                if isinstance(proof, dict) and same_identity(proof.get('process'), state['process']):
+                    candidate['generation'] = proof['generation']
+                if record_live(root, candidate):
+                    if 'gateway' in found:
+                        raise RuntimeError('Multiple live gateway controller sessions')
+                    found['gateway'] = candidate
+                continue
             if ('session_nonce' in state and state.get('guest') == 'work-boot'
                     and not identity and state.get('status') in ('restarting','starting','running','paused')
                     and valid_work_session(root, state)):
@@ -690,6 +772,10 @@ def record_live(root, record):
                 raise RuntimeError('Windows controller disappeared while settling its exit; gateway retained')
             return True
         return live
+    if 'nonce' in record:
+        state = read_json(path)
+        if refresh_gateway_record(root, record, state):
+            return True
     expected = record['process']
     actual = process_identity(expected['pid'])
     if not same_identity(expected, actual):
@@ -832,6 +918,8 @@ class ProjectLock:
 
 def launch_guest(root, role, report, save, cancelled, startup_deadline=None):
     from runtime_logs import start_capped_drain, CappedWriter
+    if cancelled():
+        raise RuntimeError('Stop requested during startup; no additional controller was started')
     deadline = time.monotonic() + START_TIMEOUT
     if startup_deadline is not None:
         deadline = min(deadline, startup_deadline)
@@ -843,6 +931,8 @@ def launch_guest(root, role, report, save, cancelled, startup_deadline=None):
     with ExitStack() as pending:
         stdout_writer = pending.enter_context(CappedWriter(stdout_path))
         stderr_writer = pending.enter_context(CappedWriter(stderr_path))
+        if cancelled():
+            raise RuntimeError('Stop requested during startup; no additional controller was started')
         controller = subprocess.Popen(controller_command(root, role, report.get('work_test_media', False)), cwd=root, stdin=subprocess.DEVNULL,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
         pending.pop_all()
@@ -853,7 +943,9 @@ def launch_guest(root, role, report, save, cancelled, startup_deadline=None):
     report.setdefault('controllers', {})[role] = {'pid': controller.pid, 'identity': controller_identity,
                                                 'stdout': str(stdout_path), 'stderr': str(stderr_path)}
     save()
+    stopping, early_requests = False, set()
     while time.monotonic() < deadline:
+        stopping = stopping or cancelled()
         for line in stdout_path.read_text(encoding='utf-8', errors='replace').splitlines():
             try:
                 event = json.loads(line)
@@ -861,17 +953,54 @@ def launch_guest(root, role, report, save, cancelled, startup_deadline=None):
                     continue
                 path = safe_state_path(root, event['state'])
                 state = read_json(path)
+                trusted = (valid_controller(root, controller_identity)
+                           and same_identity(controller_identity, state.get('controller'))
+                           and state.get('guest') == role + '-boot'
+                           and state.get('network') == NETWORKS[role]
+                           and path.parent.name.startswith('guest-' + role + '-boot-'))
+                if role == 'gateway':
+                    nonce = state.get('nonce', '')
+                    trusted = (trusted and state.get('schema') == 2 and isinstance(nonce, str)
+                               and re.fullmatch('[0-9a-f]{32}', nonce) is not None
+                               and path.parent.name == 'guest-gateway-boot-' + nonce
+                               and state.get('disk') == 'logs/' + path.parent.name + '/gateway.qcow2')
+                if not trusted:
+                    continue
+                stopping = stopping or cancelled()
+                if stopping and state.get('pid') is None:
+                    # Only this controller's pinned session may receive a pre-VM request.
+                    if path not in early_requests and state.get('status') == 'starting':
+                        from profile_store import _pinned_directory
+                        with _pinned_directory(path.parent, create=False):
+                            if (read_json(path) != state
+                                    or not same_identity(controller_identity, process_identity(controller.pid))):
+                                continue
+                            atomic_json(path.parent / ('control-runtime-' + uuid.uuid4().hex + '.json'),
+                                        {'action': 'powerdown'})
+                        early_requests.add(path)
+                    if state.get('status') == 'exited':
+                        raise RuntimeError('Stop requested during startup; controller confirmed exit before guest creation')
+                    continue
                 if (role == 'gateway' and state.get('status') == 'exited'
                         and state.get('error') == 'DIRECT_NETWORK_UNAVAILABLE'
                         and same_identity(controller_identity or {}, state.get('controller'))):
                     raise RuntimeError('Не найдено прямое подключение к интернету. Подключи Ethernet или Wi-Fi.')
                 identity = process_identity(state['pid'])
-                record = state_record(path, state, identity)
-                if (identity and state_matches(root, path, state, identity)
-                        and state.get('guest') == role + '-boot' and state.get('network') == NETWORKS[role]
-                        and state.get('status') == 'running'
-                        and same_identity(controller_identity or {}, state.get('controller'))
-                        and (role != 'gateway' or gateway_ready(root, record))):
+                owned_identity = identity or state.get('process')
+                owned = owned_identity and state_matches(root, path, state, owned_identity)
+                record = state_record(path, state, owned_identity)
+                ready = (not stopping and identity and owned and state.get('status') == 'running'
+                         and (role != 'gateway' or gateway_ready(root, record)))
+                stopping = stopping or cancelled()
+                if stopping and owned:
+                    try:
+                        report.setdefault('guests', {})[role] = record
+                        save()
+                        request_powerdown(root, record)
+                    except (OSError, ValueError, KeyError) as error:
+                        raise RuntimeError('Stop requested during startup; guest retained but graceful request could not be completed') from error
+                    raise RuntimeError('Stop requested during startup; recorded guest retained for graceful shutdown')
+                if ready:
                     return record
                 if state.get('status') == 'exited':
                     raise RuntimeError(role + ' controller reported an early exit; see ' + str(stderr_path))
@@ -880,6 +1009,8 @@ def launch_guest(root, role, report, save, cancelled, startup_deadline=None):
         if controller.poll() is not None:
             raise RuntimeError(role + ' controller exited before startup; see ' + str(stderr_path))
         time.sleep(.2)
+    if stopping:
+        raise RuntimeError('Stop requested during startup; guest ownership remains unknown; controller and logs retained. See ' + str(directory))
     raise RuntimeError(role + ' startup timed out; any running guest is retained. See ' + str(directory))
 
 
@@ -910,6 +1041,8 @@ def start_pair(root, report, save, cancelled):
             else:
                 report['guests'][role] = launch_guest(root, role, report, save, cancelled, startup_deadline=deadline)
             save()
+    if cancelled():
+        raise RuntimeError('Stop requested during startup; recorded guests retained for graceful shutdown')
     if (not controller_live(root, report['guests']['work'])
             or read_json(safe_state_path(root, report['guests']['work']['state'])).get('status') != 'running'):
         raise RuntimeError('Windows controller is unavailable; existing guests retained')
@@ -996,7 +1129,8 @@ def run_start(root, receipt, work_test_media=False):
                 if not record_live(root, report['guests']['gateway']):
                     raise RuntimeError('Gateway exited while Windows remains active; Windows retained')
                 work_state=read_json(safe_state_path(root,report['guests']['work']['state']))
-                observed=(work_state.get('status'),work_state.get('generation'),report['guests']['work']['process']['created_filetime'])
+                observed=(work_state.get('status'),work_state.get('generation'),report['guests']['work']['process']['created_filetime'],
+                          report['guests']['gateway'].get('generation'))
                 if observed != last_work_state:
                     report.update(phase='restarting' if work_state.get('status') == 'restarting' else 'ready',
                                   message='Windows is restarting' if work_state.get('status') == 'restarting' else 'Gateway and Windows are running')
@@ -1129,6 +1263,12 @@ def run_stop(root):
             report = read_json(path)
         if report.get('phase') == 'starting':
             raise RuntimeError('Startup has not settled; running guests retained. Retry Stop after checking ' + str(path))
+    for role, controller in report.get('controllers', {}).items():
+        actual = process_identity(controller['pid'])
+        expected = controller.get('identity')
+        if (role not in report.get('guests', {}) and actual is not None
+                and (not valid_controller(root, expected) or same_identity(expected, actual))):
+            raise RuntimeError('Startup controller still active with unknown guest ownership; guests retained. Retry Stop after checking its state')
     if report.get('phase') in ('error', 'stopped'):
         try:
             recoverable = recovery_snapshot(root)['available']

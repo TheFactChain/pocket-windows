@@ -103,15 +103,12 @@ internal static class AppUpdateRegression
                 Environment.SetEnvironmentVariable("POCKET_WINDOWS_UPDATE_API", server.Url + "/release"); server.Start();
                 var offer = new AppUpdate.Offer { V2 = true, Id = id, ZipUrl = server.Url + "/full.zip", ShaUrl = server.Url + "/full.sha256", Bytes = fullBytes.Length, ToolkitUrl = server.Url + "/" + kitName, ToolkitShaUrl = server.Url + "/kit.sha256", ToolkitBytes = kit.Length, IndexUrl = server.Url + "/index.json", IndexShaUrl = server.Url + "/index.sha256" };
                 bool bootstrap = false;
-                var package = AppUpdate.PlanV2Async(root, offer, value => { if (value["phase"].Equals("bootstrap")) bootstrap = true; }, CancellationToken.None).GetAwaiter().GetResult();
-                Assert(bootstrap && package.DownloadBytes == 17 && package.RequiredFreeBytes == 1234, "Bootstrap uses toolkit despite broken installed Python and reports plan bytes");
+                var package = AppUpdate.PrepareOfferAsync(root, offer, value => { if (value["phase"].Equals("bootstrap")) bootstrap = true; }, CancellationToken.None).GetAwaiter().GetResult();
+                Assert(bootstrap && package.DownloadBytes == 17 && package.RequiredFreeBytes == 1234 && package.Stage != null, "One action uses toolkit despite broken installed Python and completes plan plus prepare");
                 AppUpdate.Discard(package);
-                var fullPackage = AppUpdate.BootstrapV2Async(root, offer, value => { }, CancellationToken.None).GetAwaiter().GetResult();
+                var fullPackage = AppUpdate.PrepareDownloadAsync(root, offer, true, value => { }, CancellationToken.None).GetAwaiter().GetResult();
                 try
                 {
-                    var downloaded = AppUpdate.DownloadAsync(AppUpdate.FullOffer(offer), value => { }, CancellationToken.None, root).GetAwaiter().GetResult();
-                    fullPackage.Work = downloaded.Work; fullPackage.Zip = downloaded.Zip; fullPackage.Sha = downloaded.Sha;
-                    AppUpdate.PrepareAsync(root, fullPackage, CancellationToken.None).GetAwaiter().GetResult();
                     Assert(File.ReadAllText(Path.Combine(root, "runtime", "python-3.12.14", "python.exe")) == "broken installed interpreter", "Full fallback uses independent toolkit instead of installed Python");
                     Assert(Array.IndexOf(AppUpdate.InstallerArguments(fullPackage), "--catalog") >= 0, "Full fallback keeps the authenticated V2 catalog");
                 }
@@ -239,8 +236,12 @@ internal static class AppUpdateRegression
             }
             AppUpdate.AtomicJson(Path.Combine(goodTools, "toolkit-manifest.json"), new Dictionary<string, object> { { "schema", 1 }, { "release_id", release["release_id"] }, { "source_commit", commit }, { "files", toolkitRows.ToArray() } });
             AppUpdate.AtomicJson(Path.Combine(savedTools, "toolkit-manifest.json"), new Dictionary<string, object> { { "schema", 1 }, { "release_id", "2026.10.28.1" }, { "source_commit", new string('d', 40) }, { "files", new object[0] } });
-            var offline = AppUpdate.PlanOfflineAsync(root, value => { }, CancellationToken.None).GetAwaiter().GetResult();
+            var savedOffer = AppUpdate.SavedOffer(root);
+            Assert(savedOffer != null && savedOffer.Offline && savedOffer.Repair, "Saved catalog offers repair without network metadata");
+            bool preparedInOneAction = false;
+            var offline = AppUpdate.PrepareOfferAsync(root, savedOffer, value => { if (value["phase"].Equals("prepared")) preparedInOneAction = true; }, CancellationToken.None).GetAwaiter().GetResult();
             Assert(offline.Tools == goodTools && offline.DownloadBytes == 0, "Rolled-back catalog A selects verified toolkit A despite marker B without network");
+            Assert(preparedInOneAction && offline.Stage != null && File.Exists(Path.Combine(offline.Stage, "prepared.json")), "One update action plans and prepares offline repair without a second click");
             Assert(AppUpdate.RecoveryWork(root) == savedTools, "Offline planning preserves recovery marker B");
             AppUpdate.Discard(offline);
         }
@@ -250,7 +251,18 @@ internal static class AppUpdateRegression
     {
         try
         {
-            if (args.Length > 5 && args[0] == "-X") { Console.WriteLine("{\"phase\":\"planned\",\"download_bytes\":" + (File.ReadAllText(args[4]) == "offlinefixture" ? "0" : "17") + ",\"required_free_bytes\":1234}"); return 0; }
+            if (args.Length > 5 && args[0] == "-X")
+            {
+                Console.OutputEncoding = new UTF8Encoding(false);
+                if (args[5] == "prepare")
+                {
+                    string stage = args[Array.IndexOf(args, "--stage") + 1], indexPath = args[Array.IndexOf(args, "--index") + 1], digest = args[Array.IndexOf(args, "--index-sha256") + 1];
+                    Directory.CreateDirectory(stage); File.Copy(indexPath, Path.Combine(stage, "index.json")); File.WriteAllText(Path.Combine(stage, "prepared.json"), "{}");
+                    Console.WriteLine(new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "phase", "prepared" }, { "stage", stage }, { "index_sha256", digest }, { "downloaded_bytes", 0 } }));
+                }
+                else Console.WriteLine("{\"phase\":\"planned\",\"download_bytes\":" + (File.ReadAllText(args[4]) == "offlinefixture" ? "0" : "17") + ",\"required_free_bytes\":1234}");
+                return 0;
+            }
             V2Contracts();
             LongPaths();
             if (args.Length == 1 && args[0] == "v2-bootstrap") { BootstrapWithoutInstalledPython(); return 0; }

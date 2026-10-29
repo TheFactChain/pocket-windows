@@ -48,6 +48,29 @@ class WindowBrandingTests(unittest.TestCase):
         self.assertIn('SendMessageTimeoutW', branding)
         self.assertNotIn('SetWindowTextW', branding)  # a plain call would wait for QEMU's UI thread
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows callback ABI')
+    def test_window_stays_hidden_until_title_is_set(self):
+        tree = ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name in ('brand_work_window', 'show_work_window')]
+        user = mock.Mock()
+        user.EnumWindows.side_effect = lambda callback, unused: callback(17, 0)
+        user.GetWindowThreadProcessId.side_effect = lambda window, pid: setattr(pid._obj, 'value', 1234)
+        user.GetClassNameW.side_effect = lambda window, name, length: setattr(name, 'value', 'SDL_app')
+        user.GetWindowTextW.side_effect = lambda window, title, length: setattr(title, 'value', 'Windows Claude')
+        user.SendMessageTimeoutW.side_effect = [0, 1]
+        user.ShowWindowAsync.return_value = 1
+        controller = {'ctypes': ctypes, 'branding_icons': {'small': 1, 'big': 2},
+                      'report': {'window_icon_set': True}, 'WINDOW_TITLE': 'Pocket Windows',
+                      'process': SimpleNamespace(pid=1234)}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), 'window-title-retry', 'exec'), controller)
+        with mock.patch.object(ctypes, 'WinDLL', return_value=user):
+            self.assertFalse(controller['show_work_window'](9))
+            user.ShowWindowAsync.assert_not_called()
+            self.assertTrue(controller['show_work_window'](9))
+        user.ShowWindowAsync.assert_called_once_with(17, 9)
+        self.assertEqual(user.SendMessageTimeoutW.call_count, 2)
+
     @unittest.skipUnless(os.name == 'nt', 'Native Windows/SDL first-show check')
     def test_real_qemu_is_branded_before_its_first_visible_window(self):
         tree = ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
@@ -115,6 +138,10 @@ class WindowBrandingTests(unittest.TestCase):
             self.assertFalse(user.IsWindowVisible(window))
             time.sleep(.01)
         self.assertTrue(controller['report'].get('window_icon_set'))
+        user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        title = ctypes.create_unicode_buffer(256)
+        user.GetWindowTextW(window, title, len(title))
+        self.assertEqual(title.value, 'Pocket Windows')
         checked = set()
         deadline = time.monotonic() + 5
         while checked != {0, 1} and time.monotonic() < deadline:
@@ -185,7 +212,7 @@ class WindowBrandingTests(unittest.TestCase):
                        and f"report.get('window_parked') is {value}" in ast.unparse(node.test)
                        and 'show_work_window(' in ast.unparse(node))
                   for value in ('False', 'True')]
-        show = mock.Mock(side_effect=[False, True, True])
+        show = mock.Mock(side_effect=[False, True, False, True])
         scope = {'normal_runtime': True, 'report': {'window_parked': False}, 'begin': 0, 'display_poll': 5,
                  'time': mock.Mock(monotonic=mock.Mock(return_value=90)), 'show_work_window': show,
                  'pointer_settled': mock.Mock(return_value=True), 'save': mock.Mock()}
@@ -193,7 +220,10 @@ class WindowBrandingTests(unittest.TestCase):
         exec(code, scope)
         self.assertIs(scope['report']['window_parked'], False)
         exec(code, scope)
-        self.assertEqual(show.call_args_list, [mock.call(7), mock.call(7), mock.call(9)])
+        self.assertIs(scope['report']['window_parked'], True)
+        scope['save'].assert_not_called()
+        exec(code, scope)
+        self.assertEqual(show.call_args_list, [mock.call(7), mock.call(7), mock.call(9), mock.call(9)])
         self.assertEqual(scope['report']['window_parked'], 'released')
 
 

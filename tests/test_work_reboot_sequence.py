@@ -23,7 +23,7 @@ import launch_runtime as runtime
 
 class WorkRebootSequence(unittest.TestCase):
     def exercise(self, reasons=('guest-reset','guest-shutdown'), first_code=0, guest=True, stop_gap=False, gateway_outage=False, close_error=False,
-                 files_network=False, link_error=False):
+                 files_network=False, link_error=False, cont_error=False):
         with tempfile.TemporaryDirectory(prefix='work-reboot-sequence-') as temporary:
             root=Path(temporary)
             output=root/'logs/guest-work-boot-fixture123'
@@ -41,18 +41,27 @@ class WorkRebootSequence(unittest.TestCase):
                 child=mock.Mock(pid=100+index)
                 child.identity={'pid':child.pid,'created_filetime':134000000010000000+index*10000000,'image':str(engine)}
                 child.alive=True
-                child.poll.return_value=first_code if index==0 else 0
-                child.returncode=child.poll.return_value
-                child.wait.side_effect=lambda **kwargs:setattr(child,'alive',False) or child.returncode
-                messages=[{'QMP':{'version':{'fixture':True}}}]+[{'id':i,'return':[]} for i in range(1,7 if files_network else 6)]
+                child.returncode=first_code if index==0 else 0
+                child.poll.return_value=None if link_error or cont_error else child.returncode
+                def wait(**kwargs):
+                    child.alive=False
+                    child.poll.return_value=child.returncode
+                    return child.returncode
+                child.wait.side_effect=wait
+                messages=[{'QMP':{'version':{'fixture':True}}}]+[{'id':i,'return':[]} for i in range(1,8 if files_network else 7)]
+                messages[2]={'id':2,'return':{'status':'prelaunch','running':False}}
                 if link_error:
-                    messages[5]={'id':5,'error':{'class':'GenericError','desc':'fixture'}}
+                    messages[6]={'id':6,'error':{'class':'GenericError','desc':'fixture'}}
+                if cont_error:
+                    index_cont=7 if files_network else 6
+                    messages[index_cont]={'id':index_cont,'error':{'class':'GenericError','desc':'fixture'}}
                 messages += [{'event':'SHUTDOWN','data':{'guest':guest,'reason':reasons[index]}}]
                 child.stdout=io.StringIO('\n'.join(map(json.dumps,messages)))
                 child.sent=[]
                 class Input(io.StringIO):
                     def write(self,text):
                         child.sent.append(text)
+                        if json.loads(text)['execute']=='quit':child.poll.return_value=child.returncode
                         return super().write(text)
                     def close(self):
                         super().close()
@@ -78,14 +87,15 @@ class WorkRebootSequence(unittest.TestCase):
             files=SimpleNamespace(arguments=[],public={'status':'pending','share_count':1},medium=None,network=files_network,
                                   healthy=lambda:True,close=mock.Mock())
             file_api=SimpleNamespace(Session=mock.Mock(return_value=files))
-            api=SimpleNamespace(Popen=mock.Mock(side_effect=spawn),PIPE=subprocess.PIPE,CREATE_NO_WINDOW=subprocess.CREATE_NO_WINDOW)
+            api=SimpleNamespace(Popen=mock.Mock(side_effect=spawn),PIPE=subprocess.PIPE,CREATE_NO_WINDOW=subprocess.CREATE_NO_WINDOW,TimeoutExpired=subprocess.TimeoutExpired)
             scope={'runtime':runtime,'normal_runtime':True,'work_reboot_session':True,'output':output,'root':root,'engine':engine,'env':{},
                 'display_settings':None, 'protect_work_window':mock.Mock(return_value=True),
                 'show_work_window':mock.Mock(return_value=False),'pointer_settled':mock.Mock(return_value=True),
                 'work_startup_info':mock.Mock(return_value=None),
                 'prepare_taskbar_icon':mock.Mock(return_value='test-icon.ico'),
                 'clear_work_taskbar':mock.Mock(),
-                'file_sharing':file_api,'files_session':None,'clipboard':None,'clipboard_port':None,
+                'file_sharing':file_api,'files_session':None,'clipboard':None,'clipboard_port':None,'viewer_settings':{'share_clipboard':False},
+                'clipboard_state':{'status':'off','code':'CLIPBOARD_OFF','last_transfer_utc':None},
                 'pointer_thread':SimpleNamespace(is_alive=lambda:True),
                 'arguments':['-drive','file=images/workvm-empty.qcow2','-no-reboot'],
                 'session_nonce':'a'*32,'controller_identity':controller,'generation':1,'previous_generations':[],
@@ -107,7 +117,7 @@ class WorkRebootSequence(unittest.TestCase):
                 except SystemExit as error:
                     failure=error.code
             report=runtime.read_json(output/'state.json')
-            file_api.Session.assert_called_once_with(root,'a'*32)
+            file_api.Session.assert_called_once_with(root,'a'*32,clipboard_port=None,clipboard_nonce=None)
             files.close.assert_called_once_with(guest_stopped=True)
             self.assertTrue(all(not child.alive for child in children), 'File helper must outlive all Windows generations')
             return report,children,writer,failure
@@ -162,6 +172,7 @@ class WorkRebootSequence(unittest.TestCase):
         self.assertIsNone(failure)
         self.assertEqual(len(children),2)
         for child in children:
+            self.assertIn('-S', child.command, 'CPU must remain stopped until network setup completes')
             sent=[json.loads(line) for line in child.sent if line.strip()]
             names=[message['execute'] for message in sent]
             self.assertLess(names.index('set_link'),names.index('cont'),'Windows must not run before the file NIC is unplugged')
@@ -169,15 +180,24 @@ class WorkRebootSequence(unittest.TestCase):
         self.assertEqual(report['host_files']['link'],'down')
         self.assertEqual(report['host_files']['status'],'pending')
 
-    def test_unplug_failure_is_reported_and_windows_still_starts(self):
+    def test_unplug_failure_is_reported_and_windows_never_starts(self):
         report,children,_,failure=self.exercise(reasons=('guest-shutdown',),files_network=True,link_error=True)
-        self.assertIsNone(failure)
+        self.assertEqual(failure, 1)
         self.assertEqual(report['host_files']['code'],'LINK_CONTROL_FAILED')
-        self.assertIn('cont',[json.loads(line)['execute'] for line in children[0].sent if line.strip()])
+        self.assertNotIn('cont',[json.loads(line)['execute'] for line in children[0].sent if line.strip()])
+        self.assertIn('quit',[json.loads(line)['execute'] for line in children[0].sent if line.strip()])
 
     def test_without_file_network_no_link_command_is_sent(self):
         _,children,_,_=self.exercise(reasons=('guest-shutdown',))
         self.assertNotIn('set_link',[json.loads(line)['execute'] for line in children[0].sent if line.strip()])
+
+    def test_cont_failure_never_hard_stops_a_possibly_running_guest(self):
+        _,children,_,failure=self.exercise(reasons=('guest-shutdown',),cont_error=True)
+        self.assertEqual(failure,1)
+        child=children[0]
+        child.kill.assert_not_called()
+        child.terminate.assert_not_called()
+        self.assertNotIn('quit',[json.loads(line)['execute'] for line in child.sent if line.strip()])
 
     def test_static_nic_receipt_connects_link_then_mapping_receipt_marks_ready(self):
         import host_file_sharing
@@ -190,11 +210,11 @@ class WorkRebootSequence(unittest.TestCase):
         def command(name,parameters=None):
             calls.append((name,parameters))
             return incoming.pop(0) if name=='ringbuf-read' else {}
-        for network in (True,False):
-            with self.subTest(network=network):
+        for network, unavailable in ((True, []), (False, []), (True, [{'label': 'Archive на ПК', 'status': 'unavailable'}])):
+            with self.subTest(network=network, unavailable=unavailable):
                 incoming[:]=[line('NIC_STATIC',False,[]),line('OK',True,[{'name':'PC_test','letter':'Z'}])];calls.clear()
-                scope={'report':{'host_files':{'status':'pending','share_count':1}},'files_buffer':'','command':command,'save':mock.Mock(),
-                       'file_sharing':host_file_sharing,'queue':queue,
+                scope={'report':{'host_files':{'status':'pending','share_count':1,'unavailable':unavailable}},'files_buffer':'','command':command,'save':mock.Mock(),
+                       'file_sharing':host_file_sharing,'queue':queue,'time':time,
                        'files_session':SimpleNamespace(healthy=lambda:True,medium=object(),network=network,config=config,public={'status':'pending'})}
                 exec(compile(ast.Module(body=[function],type_ignores=[]),'read-file-receipt','exec'),scope)
                 scope['read_file_receipt']()
@@ -206,7 +226,108 @@ class WorkRebootSequence(unittest.TestCase):
                     self.assertNotIn('set_link',[name for name,_ in calls])
                     self.assertEqual(state['status'],'failed')
                 scope['read_file_receipt']()
-                self.assertEqual(scope['report']['host_files']['status'],'ready')
+                self.assertEqual(scope['report']['host_files']['status'],'partial' if unavailable else 'ready')
+                scope['files_session'].healthy = lambda: False
+                scope['report']['host_files'].update(status='failed', code='EARLIER_FAILURE')
+                scope['read_file_receipt']()
+                self.assertEqual(scope['report']['host_files']['code'], 'FILE_SERVER_STOPPED')
+
+    def test_only_a_fresh_guest_probe_recovers_after_receipt_read_failure(self):
+        import host_file_sharing
+        tree = ast.parse((ROOT/'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'read_file_receipt')
+        config = {'session_nonce':'a'*32, 'shares':[{'name':'PC_test'}], 'clipboard':{'enabled':True,'port':27844}}
+        def receipt(serial):
+            return json.dumps({'schema':2,'session_nonce':'a'*32,'success':True,'code':'OK',
+                               'mappings':[{'name':'PC_test','letter':'Z'}], 'serial':serial,
+                               'clipboard':{'status':'ready','code':'READY'}})+'\n'
+        now = [0]
+        values = iter([receipt(1), RuntimeError('temporary QMP failure'), '', receipt(1), receipt(2), '', receipt(3)])
+        def command(*args):
+            value = next(values)
+            if isinstance(value, Exception):
+                raise value
+            return value
+        scope = {'report':{'host_files':{'status':'pending','share_count':1}},'files_buffer':'',
+                 'file_sharing':host_file_sharing,'queue':queue,'command':command,'save':mock.Mock(),
+                 'datetime':datetime,'timezone':timezone,'time':SimpleNamespace(monotonic=lambda:now[0]),
+                 'files_session':SimpleNamespace(healthy=lambda:True,medium=object(),network=True,config=config,public={'status':'pending'})}
+        exec(compile(ast.Module(body=[function],type_ignores=[]),'file-receipt','exec'),scope)
+        poll = scope['read_file_receipt']
+        state = scope['report']['host_files']
+        poll(); self.assertEqual(state['status'], 'ready')
+        poll(); self.assertEqual(state['status'], 'unconfirmed')
+        poll(); self.assertEqual(state['status'], 'unconfirmed')
+        poll(); self.assertEqual(state['status'], 'unconfirmed', 'replayed receipt cannot restore status')
+        poll(); self.assertEqual(state['status'], 'ready')
+        now[0] = 13
+        poll(); self.assertEqual(state['code'], 'GUEST_STATUS_STALE')
+        poll(); self.assertEqual(state['status'], 'ready')
+
+    def test_file_recovery_changes_reach_status_without_a_new_guest_receipt(self):
+        tree = ast.parse((ROOT/'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'read_file_receipt')
+        public = {'recovery_required': False, 'recovery_log_failed': False, 'recovery_channel_failed': False}
+        state = {'status': 'ready', 'share_count': 1}
+        healthy = [True]
+        scope = {'report': {'host_files': state}, 'save': mock.Mock(), 'files_buffer': '',
+                 'files_session': SimpleNamespace(public=public, medium=None, healthy=lambda: healthy[0])}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'file-receipt', 'exec'), scope)
+        poll = scope['read_file_receipt']
+        poll()
+        self.assertFalse(state['recovery_required'])
+        log = 'logs/host-files-recovery-' + 'a'*32 + '.jsonl'
+        public.update(recovery_required=True, recovery_log=log, recovery_latest={'code': 'SUPERSEDE_BACKUP_RETAINED'})
+        poll()
+        self.assertTrue(state['recovery_required'])
+        self.assertEqual(state['recovery_log'], log)
+        self.assertEqual(state['recovery_latest'], public['recovery_latest'])
+        self.assertEqual(state['status'], 'ready', 'a retained backup does not invent a mapping failure')
+        public.update(recovery_channel_failed=True, recovery_log_failed=True)
+        healthy[0] = False
+        poll()
+        self.assertTrue(state['recovery_log_failed'])
+        self.assertTrue(state['recovery_channel_failed'])
+        self.assertEqual((state['status'], state['code']), ('failed', 'RECOVERY_CHANNEL_FAILED'))
+
+    def test_clipboard_failure_and_confirmed_transfer_are_reported_independently(self):
+        tree = ast.parse((ROOT/'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'read_clipboard_status')
+        bridge = SimpleNamespace(public=lambda:{'status':'ready','code':'CLIPBOARD_READY','last_transfer_utc':'confirmed'})
+        guest = {'status':'failed','code':'START_FAILED'}
+        scope = {'clipboard':bridge,'clipboard_state':{},'files_session':None,'report':{'host_files':{'receipt':{'clipboard':guest}}},'save':mock.Mock()}
+        exec(compile(ast.Module(body=[function],type_ignores=[]),'clipboard-status','exec'),scope)
+        scope['read_clipboard_status']()
+        self.assertEqual(scope['report']['clipboard']['code'], 'GUEST_START_FAILED')
+        self.assertEqual(scope['report']['clipboard']['last_transfer_utc'], 'confirmed')
+        guest.update(status='ready',code='READY')
+        scope['read_clipboard_status']()
+        self.assertEqual(scope['report']['clipboard']['status'], 'ready')
+        scope['clipboard'] = None
+        scope['clipboard_state'] = {'status':'failed','code':'CLIPBOARD_START_FAILED'}
+        scope['read_clipboard_status']()
+        self.assertEqual(scope['report']['clipboard']['code'], 'CLIPBOARD_START_FAILED')
+
+    def test_initial_legacy_confirmation_expires_without_the_first_heartbeat(self):
+        import host_file_sharing
+        tree = ast.parse((ROOT/'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'read_file_receipt')
+        now = [0]
+        legacy = json.dumps({'schema':1,'session_nonce':'a'*32,'success':True,'code':'OK','mappings':[{'name':'PC_test','letter':'Z'}]})+'\n'
+        responses = iter([legacy,'',legacy])
+        scope = {'report':{'host_files':{'status':'pending','share_count':1}},'files_buffer':'',
+                 'file_sharing':host_file_sharing,'queue':queue,'command':lambda *args:next(responses),'save':mock.Mock(),
+                 'time':SimpleNamespace(monotonic=lambda:now[0]),
+                 'files_session':SimpleNamespace(healthy=lambda:True,medium=object(),network=True,
+                     config={'session_nonce':'a'*32,'shares':[{'name':'PC_test'}]},public={'status':'pending'})}
+        exec(compile(ast.Module(body=[function],type_ignores=[]),'file-receipt','exec'),scope)
+        scope['read_file_receipt']()
+        self.assertEqual(scope['report']['host_files']['status'],'ready')
+        now[0] = 13
+        scope['read_file_receipt']()
+        self.assertEqual(scope['report']['host_files']['status'],'unconfirmed')
+        scope['read_file_receipt']()
+        self.assertEqual(scope['report']['host_files']['status'],'unconfirmed', 'old schema1 cannot reset freshness')
 
     def test_reboot_waits_for_same_gateway_outage_to_recover(self):
         report,children,_,failure=self.exercise(gateway_outage=True)

@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -23,7 +24,7 @@ from connection_profile import import_profile_uri
 from profile_store import ProfileStore, StoreBusy, StoreError, SecretsUnavailable, _pinned_directory, _plain
 from gateway_package import inspect_current
 
-ENGINE_SHA256 = '63dc4e2f5fc131afe5ad2416c2d9627f26ae764eec3a03a86acb41eae71b2b2a'
+ENGINE_SHA256 = '93b16a220fdc7b6125ecd63758fa8cd45f0ec8329359ad27aa796325445f7738'
 RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
                  'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd',
@@ -36,6 +37,7 @@ RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'scripts/windows_guest_settings.py',
                  'scripts/windows_hardware.py',
                  'scripts/host_file_sharing.py', 'scripts/file_share_carrier.py', 'scripts/clipboard_bridge.py',
+                 'scripts/clipboard_files.py', 'scripts/clipboard_stage.py',
                  'scripts/window_branding.py', 'runtime/qemu-11.1.0/qemu-img.exe')
 GUEST_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 CHECK_INFO = {
@@ -216,7 +218,8 @@ def preflight(root, host=None, *, full=True):
     try:
         connection['selected_profile'] = ProfileStore(root / 'profiles').selected_summary()
         selected = connection['selected_profile']
-        check('connection', selected is not None and not selected['needs_credentials'],
+        check('connection', selected is not None and not selected['needs_credentials'] and not selected.get('needs_correction'),
+              'Исправь адрес сохранённого подключения в разделе «Подключение».' if selected and selected.get('needs_correction') else
               'Пароль выбранного подключения недоступен. Открой раздел «Подключение» и введи его заново.'
               if selected and selected['needs_credentials'] else 'Подключение выбрано для следующего запуска.' if selected else
               'Добавь подключение, чтобы запустить Windows.')
@@ -229,7 +232,10 @@ def preflight(root, host=None, *, full=True):
     if guests:
         try:
             runtime_state['control_available'] = all(runtime.controller_live(root, item) for item in guests.values())
-            if 'work' in guests:
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+            runtime_state['control_available'] = False
+        if 'work' in guests:
+            try:
                 work_state = runtime.read_json(Path(guests['work']['state']))
                 display_state = {'status': 'pending'}
                 display = work_state.get('windows_display', {})
@@ -241,7 +247,10 @@ def preflight(root, host=None, *, full=True):
                     display_state = {'status': 'applied' if receipt['success'] else 'failed', 'receipt': receipt}
                 elif display.get('status') == 'unconfirmed':
                     display_state = {'status': 'unconfirmed'}
-            if 'gateway' in guests:
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+                display_state = {'status': 'unconfirmed', 'code': 'DISPLAY_STATUS_UNREADABLE'}
+        if 'gateway' in guests:
+            try:
                 gateway_state = runtime.read_json(Path(guests['gateway']['state']))
                 network_verified = runtime.gateway_ready(root, guests['gateway'])
                 connection.update(applied_revision_id=gateway_state.get('profile_revision_id'),
@@ -252,8 +261,8 @@ def preflight(root, host=None, *, full=True):
                     and selected['revision_id'] == connection['applied_revision_id'])
                 if selected and connection['verified']:
                     selected['state'] = 'verified'
-        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
-            runtime_state['control_available'] = False
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+                network_verified = False
     force_stop = runtime.force_stop_offer(root, guests) if host['windows'] else None
     ok = all(item['passed'] for item in checks.values())
     blockers = [{'code': name, 'title': CHECK_INFO[name][1], 'detail': item['detail'],
@@ -266,6 +275,7 @@ def preflight(root, host=None, *, full=True):
             'root': str(root), 'settings': settings, 'windows_settings': display_settings, 'viewer_settings': viewer_settings,
             'file_settings': file_settings,
             'host_files': states.get('work', {}).get('host_files', {'status': 'off'}) if guests else {'status': 'off'},
+            'clipboard': states.get('work', {}).get('clipboard', {'status': 'off'}) if guests else {'status': 'off'},
             'windows_display': display_state, 'host': host, 'checks': checks,
             'blockers': blockers, 'checked_utc': runtime.utc_now(),
             'already_running': already_running, 'network_verified': network_verified,
@@ -279,7 +289,7 @@ def preflight(root, host=None, *, full=True):
             'gateway_version': gateway_version,
             'network_acceptance_scope': 'current_session' if network_verified else 'unverified',
             'connection_error': 'CONNECTION_LOST' if runtime_state['gateway'] == 'reconnecting' else None,
-            'network_warning': 'Связь восстанавливается. Windows продолжает работать.' if runtime_state['gateway'] == 'reconnecting' and 'work' in guests else
+            'network_warning': 'Связь восстанавливается. Windows продолжает работать; внешний интернет временно закрыт.' if runtime_state['gateway'] == 'reconnecting' and 'work' in guests else
                                '' if network_verified else 'Подключение будет проверено шлюзом перед запуском Windows.',
             'secret_values_exposed': False, 'network_requests_made': False}
 
@@ -343,7 +353,7 @@ def save_settings(root, value):
     value = dict(value)
     display = windows_settings.validate_settings(value.pop('windows')) if 'windows' in value else None
     viewer = validate_viewer_settings(value.pop('viewer')) if 'viewer' in value else None
-    files = file_sharing.validate_settings(value.pop('files')) if 'files' in value else None
+    files = file_sharing.validate_saved_settings(root, value.pop('files')) if 'files' in value else None
     settings = validate_settings(value)
     with runtime.ProjectLock(root) as acquired:
         if not acquired:
@@ -517,6 +527,7 @@ CONNECTION_ERRORS = {
     'PROXY_SERVICE_FAILED': 'Служба подключения не запустилась. Восстанови шлюз.',
     'CONNECTION_FAILED': 'Сервер не подтвердил подключение. Проверь адрес, порт, пароль и параметры TLS.',
     'CONNECTION_LOST': 'Подключение оборвалось. Прямой выход Windows в интернет остаётся закрыт.',
+    'PROBE_FAILED': 'Проверочные адреса пока не ответили. Связь перепроверяется.',
     'HEALTH_TIMEOUT': 'Шлюз перестал подтверждать соединение. Прямой выход закрыт.',
     'STARTUP_TIMEOUT': 'Шлюз не подтвердил готовность вовремя.',
     'DIRECT_NETWORK_UNAVAILABLE': 'Не найдено прямое подключение к интернету. Подключи Ethernet или Wi-Fi и повтори запуск.',
@@ -563,10 +574,19 @@ def _connection_test_state(root, expected, view):
 
 
 def test_connection(root, request):
-    if not isinstance(request, dict) or set(request) != {'profile_id'}:
-        raise ValueError('Supply one profile_id for a connection test')
-    view = ProfileStore(root / 'profiles').get_view(request['profile_id'])
-    if view['needs_credentials']:
+    if not isinstance(request, dict) or set(request) - {'profile', 'profile_id'} or not request:
+        raise ValueError('Supply a draft profile or one profile_id for a connection test')
+    store = ProfileStore(root / 'profiles')
+    draft = None
+    if 'profile' in request:
+        profile = store.prepare_draft(request['profile'], request.get('profile_id'))
+        view = {'profile_id': uuid.uuid4().hex, 'revision_id': uuid.uuid4().hex}
+        draft = json.dumps(view | {'profile': profile}, ensure_ascii=False, separators=(',', ':'))
+        if len(draft.encode('utf-8')) > 65536:
+            raise ValueError('Connection draft exceeds 64 KiB')
+    else:
+        view = store.get_view(request['profile_id'])
+    if draft is None and view['needs_credentials']:
         return {'ok': False, 'code': 'credentials_needed', 'verified': False,
                 'message': 'Пароль подключения недоступен. Введи его заново в разделе «Подключение».'}
     host = host_facts()
@@ -579,27 +599,49 @@ def test_connection(root, request):
         if not acquired or runtime.engine_processes(root):
             return {'ok': False, 'code': 'runtime_busy', 'message': 'Перед проверкой подключения штатно выключи Windows и шлюз.'}
         inspect_current(root)
-        process = subprocess.Popen(
-            [str(root / 'runtime/python-3.12.14/python.exe'), '-I', '-S', '-B',
-             str(root / 'scripts/gateway_controller.py'), '--project', str(root),
-             '--test-profile', view['profile_id']], cwd=root, stdin=subprocess.DEVNULL,
+        command = [str(root / 'runtime/python-3.12.14/python.exe'), '-I', '-S', '-B',
+                   str(root / 'scripts/gateway_controller.py'), '--project', str(root)]
+        command += ['--test-draft'] if draft is not None else ['--test-profile', view['profile_id']]
+        process = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE if draft is not None else subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
             creationflags=subprocess.CREATE_NO_WINDOW)
         expected = runtime.process_identity(process.pid)
+        sent = threading.Event()
+        writer = None
+        if draft is not None:
+            def send_draft():
+                try:
+                    process.stdin.write(draft)
+                    process.stdin.flush()
+                    sent.set()
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+            # Windows communicate() writes stdin synchronously before checking its timeout.
+            writer = threading.Thread(target=send_draft, name='connection-test-draft', daemon=True)
+            writer.start()
         try:
             process.wait(timeout=300)
         except subprocess.TimeoutExpired:
             return {'ok': False, 'code': 'test_pending',
                     'message': 'Проверка ещё не завершилась. Открой диагностику, чтобы увидеть состояние шлюза.',
                     'verified': False}
+        if writer is not None:
+            writer.join(timeout=1)
         state = _connection_test_state(root, expected, view)
         verified = bool(state and state.get('status') == 'exited' and process.returncode == 0 and state.get('connection_test_passed') is True
+                        and (draft is None or sent.is_set())
                         and state.get('guest_shutdown') is True and state.get('carrier_removed') is True
                         and state.get('overlay_removed') is True
                         and not runtime.engine_processes(root))
         error = state.get('error') if state and isinstance(state.get('error'), str) else None
         return {'ok': verified, 'code': 'connection_verified' if verified else error if error in CONNECTION_ERRORS else 'connection_failed',
-                'message': 'Подключение проверено. Оно применится при следующем запуске Windows.' if verified else
+                'message': ('Черновик подключения проверен. Сохрани настройки, чтобы применить его при следующем запуске Windows.' if draft is not None else
+                    'Подключение проверено. Оно применится при следующем запуске Windows.') if verified else
                     CONNECTION_ERRORS.get(error, 'Шлюз не подтвердил подключение. Открой диагностику.'),
                 'profile_id': view['profile_id'], 'revision_id': view['revision_id'],
                 'applied_revision_id': None, 'verified': verified}

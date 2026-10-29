@@ -7,9 +7,10 @@ Add-Type -Path (Join-Path $PSHOME 'Microsoft.CodeAnalysis.dll')
 Add-Type -Path (Join-Path $PSHOME 'Microsoft.CodeAnalysis.CSharp.dll')
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $root=Split-Path -Parent $PSScriptRoot
-$localNames=@('guest/files/GuestFiles.cs','guest/GuestEnvironment.cs','guest/GuestClipboard.cs','ui/app.manifest','scripts/Build-GuestFiles.ps1','scripts/Build-HostFiles.ps1')
+$localNames=@('guest/files/GuestFiles.cs','guest/GuestEnvironment.cs','guest/GuestClipboard.cs','guest/ClipboardFiles.cs','guest/ClipboardStage.cs','guest/ClipboardProtocol.cs','guest/ClipboardTransport.cs','ui/app.manifest','scripts/Build-GuestFiles.ps1','scripts/Build-HostFiles.ps1')
 $localNames+=@(Get-ChildItem -LiteralPath (Join-Path $root 'host\files') -Filter '*.cs' -File | Sort-Object Name | ForEach-Object { 'host/files/'+$_.Name })
 $localNames+='host/files/dependency-patches/SMBServer.Signatures.cs'
+$localNames+='patches/smblibrary/smblibrary-1.5.8.patch'
 function Get-LocalSources {
     @($localNames | ForEach-Object {
         $item=Get-Item -LiteralPath (Join-Path $root $_)
@@ -21,92 +22,17 @@ $archive=[IO.Path]::GetFullPath($SourceArchive)
 if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne '2240C49F69AAFFA5225E8316D5A5440AB2F20BC577BD3161091905F05B94D318'){throw 'Source archive hash mismatch'}
 $output=[IO.Path]::GetFullPath($OutputDirectory)
 if(Test-Path -LiteralPath $output){throw 'Output already exists; use a new build directory.'}
-$target=Join-Path $root ('state\host-files-build-'+[Guid]::NewGuid().ToString('N'))
+$target=Join-Path (Split-Path -Parent $output) ('host-files-source-'+[Guid]::NewGuid().ToString('N'))
 [IO.Compression.ZipFile]::ExtractToDirectory($archive,$target)
 $source=Join-Path $target 'TalAloni-SMBLibrary-2edbcf3'
 $null=New-Item -ItemType Directory -Path $output
-& {
-    $path=Join-Path $source 'SMBLibrary\Server\SMBServer.SMB2.cs'
-    $script:code=[IO.File]::ReadAllText($path).Replace("`r`n","`n")
-    function Replace-Source([string]$old,[string]$new,[int]$count=1){
-        if(($script:code.Split(@($old),[StringSplitOptions]::None)).Count -ne $count+1){throw ('Patch context mismatch: '+$path+' '+$old)}
-        $script:code=$script:code.Replace($old,$new)
-    }
-    Replace-Source '            FileID? fileID = null;' "            byte[] responseSigningKey = null;`n            FileID? fileID = null;"
-    Replace-Source '            NTStatus? fileIDStatus = null;' "            NTStatus? fileIDStatus = null;`n            ulong relatedSessionID = 0;`n            uint relatedTreeID = 0;"
-    Replace-Source "            foreach (SMB2Command request in requestChain)`n            {" @'
-            foreach (SMB2Command request in requestChain)
-            {
-                if (request.Header.IsRelatedOperations)
-                {
-                    request.Header.SessionID = relatedSessionID;
-                    request.Header.TreeID = relatedTreeID;
-                }
-                else
-                {
-                    fileID = null;
-                    fileIDStatus = null;
-                }
-'@
-    Replace-Source "                SMB2Command response;`n" @'
-                SMB2Session originalSession = state is SMB2ConnectionState ? ((SMB2ConnectionState)state).GetSession(request.Header.SessionID) : null;
-                if (responseChain.Count == 0 && originalSession != null && originalSession.SigningKey != null)
-                    responseSigningKey = (byte[])originalSession.SigningKey.Clone();
-                SMB2Command response;
-'@
-    Replace-Source '                    UpdateSMB2Header(response, request, state);' @'
-                    UpdateSMB2Header(response, request, state);
-                    relatedSessionID = response.Header.SessionID;
-                    relatedTreeID = response.Header.TreeID;
-                    if (response is LogoffResponse && originalSession != null && originalSession.SigningRequired)
-                        response.Header.IsSigned = true;
-'@
-    Replace-Source '                EnqueueResponseChain(state, responseChain);' '                EnqueueResponseChain(state, responseChain, responseSigningKey);'
-    Replace-Source 'private static void EnqueueResponseChain(ConnectionState state, List<SMB2Command> responseChain)' 'private static void EnqueueResponseChain(ConnectionState state, List<SMB2Command> responseChain, byte[] fallbackSigningKey = null)'
-    Replace-Source '            byte[] signingKey = null;' '            byte[] signingKey = fallbackSigningKey;'
-    [IO.File]::WriteAllText($path,$code,[Text.UTF8Encoding]::new($false))
-    $path=Join-Path $source 'SMBLibrary\Server\SMBServer.cs'
-    $script:code=[IO.File]::ReadAllText($path).Replace("`r`n","`n")
-    Replace-Source '                    ProcessSMB2RequestChain(requestChain, ref state);' @'
-                    if (!ValidateIncomingSignatures(packet.Trailer, requestChain, state))
-                    {
-                        state.ClientSocket.Close();
-                        state.ReceiveBuffer.Dispose();
-                        return;
-                    }
-                    ProcessSMB2RequestChain(requestChain, ref state);
-'@
-    [IO.File]::WriteAllText($path,$code,[Text.UTF8Encoding]::new($false))
-    Copy-Item -LiteralPath (Join-Path $root 'host\files\dependency-patches\SMBServer.Signatures.cs') -Destination (Join-Path $source 'SMBLibrary\Server\SMBServer.Signatures.cs')
-    $path=Join-Path $source 'SMBLibrary\Server\SMB2\NegotiateHelper.cs'
-    $script:code=[IO.File]::ReadAllText($path).Replace("`r`n","`n")
-    Replace-Source 'response.SecurityMode = SecurityMode.SigningEnabled;' 'response.SecurityMode = SecurityMode.SigningEnabled | SecurityMode.SigningRequired;' 2
-    [IO.File]::WriteAllText($path,$code,[Text.UTF8Encoding]::new($false))
-    $path=Join-Path $source 'SMBLibrary\Server\SMB2\SessionSetupHelper.cs'
-    $script:code=[IO.File]::ReadAllText($path).Replace("`r`n","`n")
-    Replace-Source 'bool signingRequired = (request.SecurityMode & SecurityMode.SigningRequired) > 0;' 'bool signingRequired = true;'
-    [IO.File]::WriteAllText($path,$code,[Text.UTF8Encoding]::new($false))
-    $path=Join-Path $source 'SMBLibrary.Win32\NTFileStore\NTDirectoryFileSystem.cs'
-    $script:code=[IO.File]::ReadAllText($path).Replace("`r`n","`n")
-    Replace-Source @'
-            NTStatus status = NtCreateFile(out handle, (uint)desiredAccess, ref objectAttributes, out ioStatusBlock, ref allocationSize, fileAttributes, shareAccess, createDisposition, createOptions, IntPtr.Zero, 0);
-            fileStatus = (FileStatus)ioStatusBlock.Information;
-            return status;
-'@ @'
-            try
-            {
-                NTStatus status = NtCreateFile(out handle, (uint)desiredAccess, ref objectAttributes, out ioStatusBlock, ref allocationSize, fileAttributes, shareAccess, createDisposition, createOptions, IntPtr.Zero, 0);
-                fileStatus = (FileStatus)ioStatusBlock.Information;
-                return status;
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(objectAttributes.ObjectName);
-                objectName.Dispose();
-            }
-'@
-    [IO.File]::WriteAllText($path,$code,[Text.UTF8Encoding]::new($false))
-}
+$patch=Join-Path $root 'patches\smblibrary\smblibrary-1.5.8.patch'
+$git=Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+& $git.Source -C $source apply --check --ignore-space-change --whitespace=nowarn $patch
+if($LASTEXITCODE -ne 0){throw 'Pinned SMBLibrary patch does not apply cleanly.'}
+& $git.Source -C $source apply --ignore-space-change --whitespace=nowarn $patch
+if($LASTEXITCODE -ne 0){throw 'Pinned SMBLibrary patch failed.'}
+Copy-Item -LiteralPath (Join-Path $root 'host\files\dependency-patches\SMBServer.Signatures.cs') -Destination (Join-Path $source 'SMBLibrary\Server\SMBServer.Signatures.cs')
 $framework=Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319'
 $baseReferences=@('mscorlib.dll','System.dll','System.Core.dll','System.Security.dll','System.Xml.dll') | ForEach-Object { [Microsoft.CodeAnalysis.MetadataReference]::CreateFromFile((Join-Path $framework $_)) }
 function Compile-Library([string]$name,[string[]]$references){
@@ -137,7 +63,9 @@ Pinned upstream commit: 2edbcf3161084b51dbe11b8a960b0bc7c224b851
 https://github.com/TalAloni/SMBLibrary/tree/v1.5.8
 Local changes: require/verify SMB2 request signatures before dispatch;
 reject authentication compounds; inherit related session/tree identifiers;
-retain LOGOFF response signing key; release native open path buffers.
+retain LOGOFF and async response identities/signing keys; bound pending notifications;
+CANCEL completes only the original request; refresh directory scans and report truncated
+first records; release native open and directory-pattern buffers.
 NTLMv1 is disabled. SMB1 is disabled in HostFiles.exe.
 Corresponding modified source and upstream license are included beside the DLLs.
 Build procedure: scripts/Build-HostFiles.ps1 in the Windows Claude source tree.

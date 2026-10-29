@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Web.Script.Serialization;
 using WindowsClaude.GuestFiles;
 using Microsoft.Win32;
@@ -13,15 +15,39 @@ internal static class GuestFilesRegression
     static readonly JavaScriptSerializer Json=new JavaScriptSerializer();
     static string ConfigText(){return "{\"schema\":1,\"session_nonce\":\"0123456789abcdef0123456789abcdef\",\"username\":\"WCP_session\",\"password\":\"0123456789abcdefghijklmnopqrstuvwxyz_-\",\"shares\":[{\"name\":\"PC_work\",\"label\":\"Работа и 📁\",\"preferred_letter\":\"Z\"}]}";}
     static void Reject(string text){bool rejected=false;try{Program.ParseConfig(text);}catch(FormatException){rejected=true;}Assert(rejected,"Invalid config accepted: "+text.Substring(0,Math.Min(60,text.Length)));}
+    static void ClipboardConfigRegression()
+    {
+        Config legacy=Program.ParseConfig(ConfigText());
+        Assert(!legacy.ClipboardEnabled&&legacy.ClipboardNonce==null,"Legacy bootstrap must leave clipboard disabled");
+        var value=Json.Deserialize<Dictionary<string,object>>(ConfigText());string secret=new string('f',32);
+        value["clipboard"]=new{enabled=true,port=27844,nonce=secret};
+        Config config=Program.ParseConfig(Json.Serialize(value));
+        Assert(config.ClipboardEnabled&&config.ClipboardPort==27844&&config.ClipboardNonce==secret&&config.Nonce==legacy.Nonce,"Clipboard must use its separate private handshake nonce");
+        var outcome=new Outcome{Code="OK"};
+        string publicText=Program.Receipt(config,outcome)+Program.LinkRequest(config)+Program.LiveReceipt(config,outcome,1,"READY");
+        Assert(!publicText.Contains(secret)&&publicText.Contains(config.Nonce),"Receipts must identify the session without exposing clipboard authentication");
+        foreach(object bad in new object[]{new{enabled=true,port=27844},new{enabled=true,port=27844,nonce=legacy.Nonce},
+            new{enabled=true,port=27844,nonce=new string('F',32)},new{enabled=true,port=27844,nonce=new string('f',31)},
+            new{enabled=true,port=27844,nonce=(string)null},new{enabled=true,port=27844,nonce=123},
+            new{enabled="true",port=27844,nonce=secret},new{enabled=1,port=27844,nonce=secret},
+            new{enabled=true,port=27844,nonce=secret,extra=true}})
+        {value["clipboard"]=bad;Reject(Json.Serialize(value));}
+        value["clipboard"]=new{enabled=false,port=27844,nonce=secret};
+        config=Program.ParseConfig(Json.Serialize(value));Assert(!config.ClipboardEnabled,"Explicitly disabled clipboard must remain disabled");
+    }
     sealed class FakeNet : INetwork
     {
         internal readonly Dictionary<string,string> Connections=new Dictionary<string,string>();
+        internal readonly HashSet<string> Deviceless=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         internal readonly HashSet<string> Used=new HashSet<string>();
-        internal int Calls,Adds,Cancels;internal int AddError,CancelError,AddFailOn;
+        internal int Calls,Adds,Cancels;internal int AddError,CancelError,AddFailOn,EnumerationError;
+        internal bool ThrowAfterAdd,ThrowEnumerate;internal string ReplaceAfterAdd;
+        internal readonly List<string> CancelTargets=new List<string>();
         public IEnumerable<string> UsedLetters(){Calls++;return Used.Concat(Connections.Keys).ToArray();}
+        public int Enumerate(out List<NetworkConnection> connections){Calls++;if(ThrowEnumerate)throw new IOException("fixture probe failure");connections=Connections.Select(item=>new NetworkConnection{Letter=item.Key,Remote=item.Value}).Concat(Deviceless.Select(remote=>new NetworkConnection{Letter="",Remote=remote})).ToList();return EnumerationError;}
         public int GetConnection(string letter,out string remote){Calls++;return Connections.TryGetValue(letter,out remote)?0:2250;}
-        public int Add(string remote,string letter,string username,string password,uint flags){Calls++;Adds++;Assert(flags==4,"Mapping must use CONNECT_TEMPORARY only");Assert(remote.StartsWith(Program.Server+"\\PC_",StringComparison.Ordinal),"Mapping endpoint escaped");if(AddError!=0&&(AddFailOn==0||Adds==AddFailOn))return AddError;if(letter.Length>0)Connections[letter]=remote;return 0;}
-        public int Cancel(string letter,uint flags,bool force){Calls++;Cancels++;Assert(flags==0&&!force,"Cleanup must not force open files or modify a persistent profile");if(CancelError!=0)return CancelError;Connections.Remove(letter);return 0;}
+        public int Add(string remote,string letter,string username,string password,uint flags){Calls++;Adds++;Assert(flags==4,"Mapping must use CONNECT_TEMPORARY only");Assert(remote.StartsWith(Program.Server+"\\PC_",StringComparison.Ordinal),"Mapping endpoint escaped");if(AddError!=0&&(AddFailOn==0||Adds==AddFailOn))return AddError;if(letter.Length>0)Connections[letter]=ReplaceAfterAdd??remote;else Deviceless.Add(remote);if(ThrowAfterAdd)throw new IOException("uncertain fixture add");return 0;}
+        public int Cancel(string target,uint flags,bool force){Calls++;Cancels++;CancelTargets.Add(target);Assert(flags==0&&!force,"Cleanup must not force open files or modify a persistent profile");if(CancelError!=0)return CancelError;if(target.StartsWith("\\\\",StringComparison.Ordinal))Deviceless.Remove(target);else Connections.Remove(target);return 0;}
     }
     sealed class FakeNic : INicConfiguration
     {
@@ -120,6 +146,154 @@ internal static class GuestFilesRegression
     }
     static Outcome Apply(Config config,List<Mapping> old,FakeNet net,Func<bool> ready=null,bool elevated=false,bool interactive=true)
     {return Program.ApplyMappings(config,old,net,ready??(()=>true),()=>{},elevated,interactive,owned=>{});}
+    static void MappingJournalRegression()
+    {
+        Config config=Program.ParseConfig(ConfigText());var empty=Program.ParseConfig(ConfigText());empty.Shares.Clear();
+        var net=new FakeNet();string durable="[]";
+        Outcome result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>{throw new IOException("intent write failure");});
+        Assert(result.Code=="OWN_RECEIPT_WRITE_FAILED"&&net.Adds==0&&result.Owned.Count==0&&net.Connections.Count==0,"Failed intent persistence must precede Add and preserve durable ownership");
+        net=new FakeNet();int writes=0;
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>{if(writes++==0)Assert(net.Adds==0,"Intent must be persisted before native Add");durable=Program.OwnedReceipt(owned);});
+        Assert(result.Success&&Program.ParseOwned(durable).Count==1&&net.Connections.Count==1,"Successful native add already has durable recovery intent");
+        Assert(writes==1,"Successful Add requires only the durable pre-add intent, not a second commit write");
+        net=new FakeNet{AddError=1219};durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Code=="CREDENTIAL_CONFLICT"&&result.Owned.Count==0&&Program.ParseOwned(durable).Count==0,"Definite Add refusal rolls intent back");
+        net=new FakeNet{AddError=5};writes=0;durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>{if(writes++>0)throw new IOException("intent rollback write failure");durable=Program.OwnedReceipt(owned);});
+        Assert(result.Code=="OWN_RECEIPT_WRITE_FAILED"&&result.Owned.Count==1&&Program.ParseOwned(durable).Count==1,"Failed intent rollback must retain its full durable ownership");
+        net=new FakeNet{ThrowAfterAdd=true};durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(!result.Success&&net.Cancels==1&&net.Connections.Count==0&&result.Owned.Count==0&&Program.ParseOwned(durable).Count==0,"Uncertain Add is inspected and rolled back without orphaning its mapping");
+        net=new FakeNet{ThrowAfterAdd=true,CancelError=2401};durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Code=="OWN_MAPPING_BUSY"&&net.Connections.Count==1&&result.Owned.Count==1&&Program.ParseOwned(durable).Count==1,"Failed uncertain-add cancellation preserves recovery ownership");
+        net.CancelError=0;
+        result=Program.ApplyMappings(empty,Program.ParseOwned(durable),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Success&&net.Connections.Count==0&&Program.ParseOwned(durable).Count==0,"Next helper run can recover the durable uncertain-add intent");
+        net=new FakeNet{ThrowAfterAdd=true,ReplaceAfterAdd="\\\\foreign\\manual"};durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Code=="MAPPING_OUTCOME_UNKNOWN"&&net.Cancels==0&&net.Connections.Values.Single()=="\\\\foreign\\manual"&&Program.ParseOwned(durable).Count==1,"Uncertain Add must never cancel a replacement foreign mapping");
+        net=new FakeNet();foreach(char letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")net.Used.Add(letter.ToString());durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Success&&net.Deviceless.Count==1,"Deviceless fixture created");
+        result=Program.ApplyMappings(empty,Program.ParseOwned(durable),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Success&&net.Deviceless.Count==0&&net.CancelTargets.Single()==Program.Server+"\\PC_work","Owned deviceless mapping is cancelled by exact UNC");
+        net=new FakeNet();net.Deviceless.Add(Program.Server+"\\PC_manual");result=Apply(empty,new List<Mapping>(),net);
+        Assert(result.Code=="UNOWNED_CONNECTION_REMAINS"&&net.Cancels==0&&net.Deviceless.Count==1,"A manually created reserved-namespace UNC is not adopted or cancelled");
+        net=new FakeNet();net.Deviceless.Add(Program.Server+"\\PC_work");net.Connections["X"]=Program.Server+"\\PC_work";
+        result=Apply(empty,new List<Mapping>{new Mapping{Name="PC_work",Letter=""}},net);
+        Assert(result.Code=="UNOWNED_CONNECTION_REMAINS"&&net.Cancels==0&&result.Owned.Count==1,"An owned deviceless UNC must not disconnect an unowned lettered use of the same resource");
+        net=new FakeNet{EnumerationError=5};result=Apply(config,new List<Mapping>(),net);
+        Assert(result.Code=="CONNECTION_INSPECTION_FAILED"&&net.Adds==0&&net.Cancels==0,"Incomplete enumeration must not create or cancel mappings");
+        net=new FakeNet{ThrowAfterAdd=true};foreach(char letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")net.Used.Add(letter.ToString());durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Code=="MAPPING_FAILED"&&net.Deviceless.Count==0&&net.CancelTargets.Single()==Program.Server+"\\PC_work"&&Program.ParseOwned(durable).Count==0,"Uncertain deviceless Add also rolls back through its exact durable UNC intent");
+        net=new FakeNet{ThrowAfterAdd=true};writes=0;durable="[]";
+        result=Program.ApplyMappings(config,new List<Mapping>(),net,()=>true,()=>{},false,true,owned=>{if(writes++>0)throw new IOException("uncertain rollback write failure");durable=Program.OwnedReceipt(owned);});
+        Assert(result.Code=="OWN_RECEIPT_WRITE_FAILED"&&net.Connections.Count==0&&result.Owned.Count==1&&Program.ParseOwned(durable).Count==1,"Cancellation followed by failed receipt write must retain recovery intent");
+        result=Program.ApplyMappings(empty,Program.ParseOwned(durable),net,()=>true,()=>{},false,true,owned=>durable=Program.OwnedReceipt(owned));
+        Assert(result.Success&&Program.ParseOwned(durable).Count==0&&net.Cancels==1,"Recovery clears missing actual mappings without another cancellation");
+        net=new FakeNet();net.Connections["Z"]=Program.Server+"\\PC_work";durable=Program.OwnedReceipt(new[]{new Mapping{Name="PC_work",Letter="Z"}});
+        result=Program.ApplyMappings(empty,Program.ParseOwned(durable),net,()=>true,()=>{},false,true,owned=>{throw new IOException("cleanup receipt failure");});
+        Assert(result.Code=="OWN_RECEIPT_WRITE_FAILED"&&net.Connections.Count==0&&result.Owned.Count==1&&Program.ParseOwned(durable).Count==1,"Failed post-cancel persistence keeps the previous durable ownership state");
+    }
+    static void LiveProbeRegression()
+    {
+        Config config=Program.ParseConfig(ConfigText());var net=new FakeNet();Outcome applied=Apply(config,new List<Mapping>(),net);
+        string original=Program.Receipt(config,applied),ownership=Program.OwnedReceipt(applied.Owned);int adds=net.Adds,cancels=net.Cancels,calls=net.Calls;
+        Outcome result=Program.VerifyMappings(config,applied,net,()=>true);
+        Assert(result.Success&&result.Mappings.Single().Letter=="Z"&&net.Calls==calls+1,"Live confirmation must freshly enumerate exact owned mappings");
+        result.Owned[0].Letter="Y";result.Mappings[0].Letter="X";
+        Assert(Program.Receipt(config,applied)==original&&Program.OwnedReceipt(applied.Owned)==ownership,"Live reports must own their metadata copies");
+        net.EnumerationError=5;result=Program.VerifyMappings(config,applied,net,()=>true);
+        Assert(!result.Success&&result.Code=="CONNECTION_INSPECTION_FAILED"&&applied.Success,"Transient enum failure does not change the original outcome");
+        net.EnumerationError=0;Assert(Program.VerifyMappings(config,applied,net,()=>true).Success,"The next successful fresh enumeration clears a transient probe failure");
+        net.ThrowEnumerate=true;Assert(Program.VerifyMappings(config,applied,net,()=>true).Code=="CONNECTION_INSPECTION_FAILED","Thrown inspection failure is contained");net.ThrowEnumerate=false;
+        Assert(Program.VerifyMappings(config,applied,net,()=>false).Code=="NIC_NOT_READY","Lost isolated NIC is no longer reported ready");
+        Assert(Program.VerifyMappings(config,applied,net,()=>{throw new IOException("fixture NIC read");}).Code=="NIC_NOT_READY","NIC read failure is a failed read-only confirmation");
+        net.Connections.Remove("Z");result=Program.VerifyMappings(config,applied,net,()=>true);
+        Assert(result.Code=="MAPPING_MISSING"&&result.Mappings.Count==0&&result.Owned.Count==1,"Removed mapping is reported without losing durable ownership");
+        net.Connections["Z"]="\\\\foreign\\manual";Assert(Program.VerifyMappings(config,applied,net,()=>true).Code=="MAPPING_CHANGED","Foreign letter replacement must not be reported as our connected mapping");
+        Assert(net.Connections["Z"]=="\\\\foreign\\manual"&&net.Adds==adds&&net.Cancels==cancels,"Live probing must never reconnect or cancel anything");
+        net.Connections["Z"]=Program.Server+"\\PC_work";Assert(Program.VerifyMappings(config,applied,net,()=>true).Success,"Read-only confirmation can recover once the exact mapping reappears");
+        var unowned=new Outcome();unowned.Mappings.Add(new Mapping{Name="PC_work",Letter="Z"});
+        Assert(Program.VerifyMappings(config,unowned,net,()=>true).Code=="OWN_RECEIPT_MISMATCH","A coincidentally matching unowned mapping is insufficient");
+        var uncertain=new Outcome{Code="MAPPING_OUTCOME_UNKNOWN"};uncertain.Owned.Add(new Mapping{Name="PC_work",Letter="Z"});
+        Assert(Program.VerifyMappings(config,uncertain,net,()=>true).Success&&uncertain.Code=="MAPPING_OUTCOME_UNKNOWN"&&uncertain.Mappings.Count==0,"Fresh exact ownership can confirm an uncertain apply without modifying its original result");
+        var deviceless=new Outcome{NeedsShortcut=true};deviceless.Owned.Add(new Mapping{Name="PC_work",Letter=""});net=new FakeNet();net.Deviceless.Add(Program.Server+"\\PC_work");
+        Assert(Program.VerifyMappings(config,deviceless,net,()=>true).Success,"Deviceless ownership requires its exact fresh UNC entry");
+        net.Deviceless.Clear();Assert(Program.VerifyMappings(config,deviceless,net,()=>true).Code=="MAPPING_MISSING","Lost deviceless mapping is detected");
+        config.Shares.Clear();net=new FakeNet();Assert(Program.VerifyMappings(config,new Outcome(),net,()=>{throw new Exception("Off folders do not require NIC");}).Success&&net.Calls==1,"Even off-mode heartbeat has a fresh enumeration without configuring/probing NIC");
+        var invalid=new Outcome{Code="CONFIG_INVALID"};var legacy=Json.Deserialize<Dictionary<string,object>>(Program.Receipt(null,invalid));
+        Assert((int)legacy["schema"]==1&&legacy.Count==5&&legacy["session_nonce"]==null&&!(bool)legacy["success"],"Initial config failure retains the exact legacy receipt shape");
+    }
+    static void LiveReceiptRegression()
+    {
+        Config config=Program.ParseConfig(ConfigText());var net=new FakeNet();Outcome applied=Apply(config,new List<Mapping>(),net);config.ClipboardEnabled=true;
+        var statuses=new Dictionary<string,string>{{"READY","ready"},{"FILES_READY","ready"},{"CONNECTED","ready"},{"WAITING","connecting"},{"RECONNECTING","connecting"},{"NIC_UNAVAILABLE","connecting"},{"START_FAILED","failed"},{"PROTOCOL_FAILED","failed"},{"FILES_FAILED","failed"},{"CLEANUP_FAILED","failed"},{"CLIPBOARD_READ_FAILED","failed"},{"CLIPBOARD_BUSY","unconfirmed"},{"CLIPBOARD_UNSUPPORTED","unconfirmed"},{"FUTURE_CODE","unconfirmed"},{"OFF","unconfirmed"}};
+        foreach(var expected in statuses)
+        {
+            var value=Json.Deserialize<Dictionary<string,object>>(Program.LiveReceipt(config,applied,123456789,expected.Key));var clip=(Dictionary<string,object>)value["clipboard"];
+            Assert(value.Count==7&&new[]{"schema","session_nonce","success","code","mappings","serial","clipboard"}.All(value.ContainsKey)&&clip.Count==2,"Live receipt exact schema fields");
+            Assert((int)value["schema"]==2&&Convert.ToInt64(value["serial"])==123456789&&(string)clip["status"]==expected.Value&&(string)clip["code"]==expected.Key,"Fixed clipboard status mapping: "+expected.Key);
+        }
+        foreach(string malformed in new[]{null,"secret/path",new string('A',65),"lower"})
+        {
+            string wire=Program.LiveReceipt(config,applied,1,malformed);var clip=(Dictionary<string,object>)Json.Deserialize<Dictionary<string,object>>(wire)["clipboard"];
+            Assert((string)clip["status"]=="unconfirmed"&&(string)clip["code"]=="UNCONFIRMED","Unknown/unsafe clipboard strings must not be echoed");
+            Assert(!wire.Contains(config.Password)&&!wire.Contains(config.Username)&&!wire.Contains("192.168")&&!wire.Contains("secret/path"),"Live report contains no credentials, endpoints, contents or paths");
+        }
+        config.ClipboardEnabled=false;var off=(Dictionary<string,object>)Json.Deserialize<Dictionary<string,object>>(Program.LiveReceipt(config,applied,1,"READY"))["clipboard"];
+        Assert((string)off["status"]=="off"&&(string)off["code"]=="OFF","Requested off is authoritative even if an old global status exists");
+        foreach(long serial in new[]{0L,-1L,Program.MaxReceiptSerial+1})
+        {bool rejected=false;try{Program.LiveReceipt(config,applied,serial);}catch(ArgumentOutOfRangeException){rejected=true;}Assert(rejected,"Live serial outside exact host integer range rejected");}
+        Assert(Program.LiveReceipt(config,applied,Program.MaxReceiptSerial).Contains("9007199254740991"),"Largest exact serial preserved");
+        Assert(Program.NextReceiptSerial(0,100000)==100000&&Program.NextReceiptSerial(100000,90000)==100001&&Program.NextReceiptSerial(100001,103000)==103000,"UTC seed plus previous+1 remains monotonic across local clock changes");
+    }
+    static void HeartbeatOwnerRegression()
+    {
+        Config config=Program.ParseConfig(ConfigText());var net=new FakeNet();Outcome applied=Apply(config,new List<Mapping>(),net);string original=Program.OwnedReceipt(applied.Owned);long serial=0;var sent=new List<Dictionary<string,object>>();
+        string name=@"Local\GuestFilesRegression."+Guid.NewGuid().ToString("N");
+        using(var owner=new Mutex(false,name))
+        {
+            int result=Program.WithApplyMutex(owner,()=>
+            {
+                bool entered=false;int blocked=-1;var contender=new Thread(()=>{using(var second=new Mutex(false,name))blocked=Program.WithApplyMutex(second,()=>{entered=true;return 0;});});contender.Start();Assert(contender.Join(3000)&&!entered&&blocked==2,"Another helper performs no work/serial writes while the resident owner holds its mutex");
+                for(int tick=0;tick<3;tick++)
+                {
+                    net.EnumerationError=tick==1?5:0;
+                    serial=Program.HeartbeatTick(config,applied,net,()=>true,serial,()=>1000,()=>null,line=>sent.Add(Json.Deserialize<Dictionary<string,object>>(line)));
+                }
+                serial=Program.HeartbeatTick(config,applied,net,()=>true,serial,()=>900,()=>{throw new IOException("status fixture");},line=>{throw new IOException("serial fixture");});
+                serial=Program.HeartbeatTick(config,applied,net,()=>true,serial,()=>900,()=>null,line=>sent.Add(Json.Deserialize<Dictionary<string,object>>(line)));
+                return 7;
+            });
+            Assert(result==7&&sent.Count==4&&(bool)sent[0]["success"]&&!(bool)sent[1]["success"]&&(bool)sent[2]["success"]&&(bool)sent[3]["success"],"Fresh next heartbeat recovers transient probe/send failure with clipboard off and no remap");
+            Assert(Convert.ToInt64(sent[0]["serial"])==1000&&Convert.ToInt64(sent[1]["serial"])==1001&&Convert.ToInt64(sent[2]["serial"])==1002&&Convert.ToInt64(sent[3]["serial"])==1004&&serial==1004,"Serial advances even after clock rollback/send failure");
+            bool available=false;var after=new Thread(()=>{using(var second=new Mutex(false,name)){available=second.WaitOne(0);if(available)second.ReleaseMutex();}});after.Start();Assert(after.Join(3000)&&available,"Owner releases only after resident work ends");
+        }
+        Assert(Program.OwnedReceipt(applied.Owned)==original&&applied.Success&&net.Adds==1&&net.Cancels==0,"Heartbeat failures never modify original state or network ownership");
+    }
+    static void NativeConnectionBufferRegression()
+    {
+        Type winNet=typeof(Program).GetNestedType("WinNet",BindingFlags.NonPublic);
+        MethodInfo read=winNet.GetMethod("ResourceString",BindingFlags.Static|BindingFlags.NonPublic);
+        IntPtr buffer=Marshal.AllocHGlobal(128);
+        try
+        {
+            for(int index=0;index<128;index++)Marshal.WriteByte(buffer,index,65);
+            char[] text=(Program.Server+"\\PC_test\0").ToCharArray();Marshal.Copy(text,0,IntPtr.Add(buffer,8),text.Length);
+            Assert((string)read.Invoke(null,new object[]{IntPtr.Add(buffer,8),buffer,128})==Program.Server+"\\PC_test","Native enum buffer strings are decoded from their bounded Unicode span");
+            Assert(read.Invoke(null,new object[]{IntPtr.Zero,buffer,128})==null,"Null LocalName is the deviceless native representation");
+            foreach(IntPtr invalid in new[]{IntPtr.Subtract(buffer,2),IntPtr.Add(buffer,128),IntPtr.Add(buffer,9),IntPtr.Add(buffer,124)})
+            {
+                bool rejected=false;try{read.Invoke(null,new object[]{invalid,buffer,128});}catch(TargetInvocationException error){rejected=error.InnerException is FormatException;}
+                Assert(rejected,"Malformed or unterminated native enum string must fail without reading beyond its buffer");
+            }
+        }
+        finally{Marshal.FreeHGlobal(buffer);}
+    }
     static void HandoverRegression()
     {
         var steps=new List<string>();int reads=0;
@@ -159,6 +333,11 @@ internal static class GuestFilesRegression
     {
         try
         {
+            if(args.Length==3&&args[0]=="--live-receipt")
+            {
+                Config fixture=Program.ParseConfig(ConfigText());fixture.ClipboardEnabled=args[1]=="on";var network=new FakeNet();Outcome mapped=Apply(fixture,new List<Mapping>(),network);
+                Console.WriteLine(Program.LiveReceipt(fixture,Program.VerifyMappings(fixture,mapped,network,()=>true),Program.MaxReceiptSerial,args[2]));return 0;
+            }
             if(args.Length>0&&File.Exists(args[0]))
             {
                 var read=typeof(Program).GetMethod("ReadBounded",BindingFlags.Static|BindingFlags.NonPublic);
@@ -177,6 +356,7 @@ internal static class GuestFilesRegression
                 string selected=(string)choose.Invoke(null,new object[]{Path.GetDirectoryName(args[0])});
                 string text=(string)read.Invoke(null,new object[]{selected});Config carried=Program.ParseConfig(text);
                 Assert(carried.Shares.Count==64&&carried.Shares.All(share=>share.Label.Length-share.Label.Count(Char.IsLowSurrogate)==128),"64 Unicode labels must survive the actual carrier and bounded guest reader");
+                if(args.Length==2&&args[1]=="--clipboard")Assert(carried.ClipboardEnabled&&carried.ClipboardNonce==new string('f',32)&&carried.Nonce==new string('c',32),"The current helper must load the private clipboard nonce from HOSTFIL2 while legacy bootstrap omits it");
                 Reject(new string(' ',65537));Reject(ConfigText().Replace("Работа и 📁",new string('Я',129)));
                 return 0;
             }
@@ -191,6 +371,7 @@ internal static class GuestFilesRegression
             foreach(NicState bad in new[]{new NicState{Mac="525400770003",Up=true,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.255.0"}},new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.0.0"}},new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.255.0"},HasDns=true},new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15"},Masks=new[]{"255.255.255.0"},HasGateway=true}})Assert(!Program.NicReady(bad),"Unisolated NIC accepted");
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.16"},Masks=new[]{"255.255.255.0"}}),"Bootstrap must require the exact static guest address, not any address in the subnet");
             Assert(!Program.NicReady(new NicState{Mac="525400770004",Up=true,Addresses=new[]{"192.168.234.15","192.168.234.16"},Masks=new[]{"255.255.255.0","255.255.255.0"}}),"Extra IPv4 addresses must fail exact bootstrap validation");
+            ClipboardConfigRegression();
             BootstrapRegression();
             HandoverRegression();
             LinkRegression();
@@ -199,6 +380,11 @@ internal static class GuestFilesRegression
             Assert(Program.NativeMode(modes)==3,"The desktop must take the largest true-colour adapter mode (the window-sized one), highest refresh on ties");
             Assert(Program.NativeMode(new List<int[]>{new[]{1024,768,16,60}})==-1&&Program.NativeMode(new List<int[]>())==-1,"No true-colour mode leaves the desktop unchanged");
             ExplorerLabelRegression();
+            MappingJournalRegression();
+            LiveProbeRegression();
+            LiveReceiptRegression();
+            HeartbeatOwnerRegression();
+            NativeConnectionBufferRegression();
             FakeNet net=new FakeNet();net.Used.Add("C");Outcome outcome=Apply(config,new List<Mapping>(),net);Assert(outcome.Success&&outcome.Mappings.Single().Letter=="Z"&&net.Adds==1,"Normal temporary mapping");
             var second=new Share{Name="PC_second",Label="second",PreferredLetter="Z"};config.Shares.Add(second);net=new FakeNet();outcome=Apply(config,new List<Mapping>(),net);Assert(outcome.Mappings[0].Letter=="Z"&&outcome.Mappings[1].Letter=="Y","Preferred-letter conflicts must pick a different free letter");config.Shares.RemoveAt(1);
             net=new FakeNet();foreach(string letter in full)net.Used.Add(letter);outcome=Apply(config,new List<Mapping>(),net);Assert(outcome.Success&&outcome.NeedsShortcut&&outcome.Mappings.Single().Letter=="","Full-letter UNC fallback");
@@ -209,7 +395,7 @@ internal static class GuestFilesRegression
             net=new FakeNet();net.Connections["Z"]=Program.Server+"\\PC_old";outcome=Apply(empty,new List<Mapping>{new Mapping{Name="PC_old",Letter="Z"}},net,()=>{throw new Exception("Cleanup must not wait for NIC");});Assert(outcome.Success&&net.Cancels==1&&outcome.Owned.Count==0,"Own exact-UNC cleanup");
             net=new FakeNet();net.Connections["Z"]="\\\\foreign\\share";outcome=Apply(empty,new List<Mapping>{new Mapping{Name="PC_old",Letter="Z"}},net);Assert(net.Cancels==0&&net.Connections.ContainsKey("Z"),"Foreign mapping must survive");
             net=new FakeNet{CancelError=2401};net.Connections["Z"]=Program.Server+"\\PC_old";outcome=Apply(empty,new List<Mapping>{new Mapping{Name="PC_old",Letter="Z"}},net);Assert(!outcome.Success&&outcome.Code=="OWN_MAPPING_BUSY"&&outcome.Owned.Count==1,"Open-file cleanup must remain tracked and fail without force");
-            net=new FakeNet();outcome=Apply(empty,new List<Mapping>{new Mapping{Name="PC_old",Letter=""}},net);Assert(!outcome.Success&&outcome.Code=="UNLETTERED_CONNECTION_REMAINS"&&net.Cancels==0,"Unprovable deviceless cleanup must fail safely");
+            net=new FakeNet();outcome=Apply(empty,new List<Mapping>{new Mapping{Name="PC_old",Letter=""}},net);Assert(outcome.Success&&outcome.Owned.Count==0&&net.Cancels==0,"Missing deviceless mapping clears its stale ownership without cancellation");
             net=new FakeNet();outcome=Apply(config,new List<Mapping>(),net,null,true);Assert(!outcome.Success&&outcome.Code=="ORDINARY_TOKEN_REQUIRED"&&net.Calls==0,"Elevated token must not call WinNet");
             net=new FakeNet();outcome=Apply(config,new List<Mapping>(),net,null,false,false);Assert(!outcome.Success&&net.Calls==0,"Noninteractive mapping must be refused");int checks=0;net=new FakeNet();outcome=Apply(config,new List<Mapping>(),net,()=>{checks++;return false;});Assert(!outcome.Success&&outcome.Code=="NIC_NOT_READY"&&checks<=61&&net.Calls==0,"NIC wait must be bounded and precede network actions");
             net=new FakeNet{AddError=1219};outcome=Apply(config,new List<Mapping>(),net);Assert(!outcome.Success&&outcome.Code=="CREDENTIAL_CONFLICT"&&net.Cancels==0,"Credential conflict must not remove unknown sessions");
@@ -218,7 +404,7 @@ internal static class GuestFilesRegression
             bool hostRefused=false;try{WindowsClaude.GuestEnvironment.Require();}catch(InvalidOperationException){hostRefused=true;}
             Assert(hostRefused,"This harness must run on the physical host, never execute native guest code in a guest");
             Assert(Program.Main(new[]{"--apply"})!=0&&Program.Main(new[]{"--configure-nic"})!=0&&Program.Main(new[]{"--install"})!=0,"Real host firmware guard must refuse mapping, configuration and installation");
-            Console.WriteLine("PASS: strict bounded config; exact NIC and configuration boundary; static setup before link request, per-adapter marker; UAC/post-child verification; immutable upgrade and failure retention; letters/C/UNC; own cleanup/no-force; ordinary token; receipt redaction; real host guard. No native network/UAC/shortcut operations executed.");return 0;
+            Console.WriteLine("PASS: strict bounded config; exact NIC and configuration boundary; static setup before link request, per-adapter marker; UAC/post-child verification; immutable upgrade and failure retention; letters/C/UNC; durable pre-add intent and failed rollback recovery; receipt-owned deviceless cleanup/manual mapping preservation; bounded native enum strings; fresh read-only mapping probes/recovery; exact schema2/clipboard status/monotonic serial; resident mutex ownership; ordinary token; receipt redaction; real host guard. No native network/UAC/shortcut operations executed.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }

@@ -20,7 +20,7 @@ namespace WindowsClaude.Launcher
         const string GitHubApi = "https://api.github.com/repos/nekontritce11123-lab/pocket-windows/releases/latest";
         const string AssetPrefix = "https://github.com/nekontritce11123-lab/pocket-windows/releases/download/";
         const long MaxPackage = 8L * 1024 * 1024 * 1024;
-        internal sealed class Offer { public string Id, ZipUrl, ShaUrl, IndexUrl, IndexShaUrl, ToolkitUrl, ToolkitShaUrl; public long Bytes, ToolkitBytes; public bool V2, Repair; }
+        internal sealed class Offer { public string Id, ZipUrl, ShaUrl, IndexUrl, IndexShaUrl, ToolkitUrl, ToolkitShaUrl; public long Bytes, ToolkitBytes; public bool V2, Repair, Offline; }
         internal sealed class CheckResult { public Offer Offer; public string Title, Message; }
         internal sealed class Package { public string Zip, Sha, Id, Work, Tools, Root, Index, IndexSha, Stage; public long DownloadBytes, RequiredFreeBytes; public bool Offline, PreserveTools; }
 
@@ -347,6 +347,69 @@ namespace WindowsClaude.Launcher
         internal static Offer FullOffer(Offer offer)
         { return new Offer { Id = offer.Id, ZipUrl = offer.ZipUrl, ShaUrl = offer.ShaUrl, Bytes = offer.Bytes, Repair = offer.Repair }; }
 
+        internal static Offer SavedOffer(string root)
+        {
+            try
+            {
+                var pointer = JsonFile(Path.Combine(root, "state", "components", "current.json"), 8192);
+                if (Number(pointer, "schema") != 2) return null;
+                string id = Str(pointer, "release_id");
+                if (Parts(id) == null) throw new InvalidDataException("Каталог восстановления повреждён.");
+                return new Offer { Id = id, V2 = true, Repair = true, Offline = true };
+            }
+            catch (FileNotFoundException) { return null; }
+            catch (DirectoryNotFoundException) { return null; }
+        }
+
+        internal static async Task<Package> PrepareOfferAsync(string root, Offer offer, Action<Dictionary<string, object>> progress, CancellationToken cancel)
+        {
+            Package package = null;
+            try
+            {
+                if (offer.Repair || offer.Offline)
+                {
+                    try
+                    {
+                        package = await PlanOfflineAsync(root, progress, cancel).ConfigureAwait(false);
+                        await PrepareV2Async(package, progress, cancel).ConfigureAwait(false);
+                        return package;
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception)
+                    {
+                        cancel.ThrowIfCancellationRequested();
+                        if (offer.Offline) throw;
+                        Discard(package); package = null;
+                    }
+                }
+                if (offer.V2)
+                {
+                    package = await PlanV2Async(root, offer, progress, cancel).ConfigureAwait(false);
+                    await PrepareV2Async(package, progress, cancel).ConfigureAwait(false);
+                    return package;
+                }
+                return await PrepareDownloadAsync(root, offer, false, progress, cancel).ConfigureAwait(false);
+            }
+            catch { Discard(package); cancel.ThrowIfCancellationRequested(); throw; }
+        }
+
+        internal static async Task<Package> PrepareDownloadAsync(string root, Offer offer, bool full, Action<Dictionary<string, object>> progress, CancellationToken cancel)
+        {
+            Package package = null;
+            try
+            {
+                if (full && offer.V2) package = await BootstrapV2Async(root, offer, progress, cancel).ConfigureAwait(false);
+                var downloaded = await DownloadAsync(full ? FullOffer(offer) : offer, percent => progress(new Dictionary<string, object>
+                    { { "phase", "downloading" }, { "done_bytes", offer.Bytes * percent / 100 }, { "total_bytes", offer.Bytes } }), cancel, root).ConfigureAwait(false);
+                if (package == null) package = downloaded;
+                else { package.Work = downloaded.Work; package.Zip = downloaded.Zip; package.Sha = downloaded.Sha; }
+                progress(new Dictionary<string, object> { { "phase", "checking" } });
+                await PrepareAsync(root, package, cancel).ConfigureAwait(false);
+                return package;
+            }
+            catch { Discard(package); cancel.ThrowIfCancellationRequested(); throw; }
+        }
+
         internal static async Task<Package> PlanV2Async(string root, Offer offer, Action<Dictionary<string, object>> progress, CancellationToken cancel)
         {
             var package = await BootstrapV2Async(root, offer, progress, cancel).ConfigureAwait(false);
@@ -548,7 +611,7 @@ namespace WindowsClaude.Launcher
             if (action == "prepare") args.AddRange(new[] { "--stage", package.Stage });
             if (action == "prepare" && package.Offline) args.Add("--offline");
             var info = new ProcessStartInfo(Path.Combine(package.Tools, "py", "python.exe"), String.Join(" ", args.Select(Bridge.Quote)))
-                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = package.Work, RedirectStandardOutput = true, RedirectStandardError = true };
+                { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = package.Work, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
             using (var process = Process.Start(info))
             {
                 var output = ReadV2Output(process.StandardOutput, progress); var error = ReadHelperError(process.StandardError);

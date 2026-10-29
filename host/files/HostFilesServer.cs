@@ -7,6 +7,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Web.Script.Serialization;
 using SMBLibrary;
 using SMBLibrary.Authentication.GSSAPI;
@@ -20,11 +21,34 @@ internal sealed class HostFilesServer : IDisposable
         internal LoopbackServer(SMBShareCollection shares,GSSProvider authentication) : base(shares,authentication) { }
         internal void Listen(int port) { Start(IPAddress.Loopback,SMBTransportType.DirectTCPTransport,port,false,true,true,null); }
     }
+    sealed class RecoveryOutput
+    {
+        internal volatile bool Failed;
+        readonly object gate=new object();long sequence;
+        void Write(object value,int limit)
+        {
+            try
+            {
+                string json=new JavaScriptSerializer{MaxJsonLength=262144,RecursionLimit=8}.Serialize(value);var ascii=new StringBuilder();
+                foreach(char item in json){if(item>127)ascii.Append("\\u"+((int)item).ToString("x4"));else ascii.Append(item);}
+                if(ascii.Length>limit)throw new IOException("Recovery output limit");
+                Console.Out.WriteLine(ascii.ToString());Console.Out.Flush();
+            }
+            catch(Exception){Failed=true;throw;}
+        }
+        internal void Ready(HostFilesServer value)
+        {lock(gate)Write(new{ok=true,schema=1,session_nonce=value.Nonce,port=value.Port,share_count=value.ShareCount},4096);}
+        internal void Record(string nonce,string share,ConfinedFileStore.RecoveryRecord value)
+        {
+            lock(gate)Write(new{t="files-recovery",schema=1,session_nonce=nonce,seq=++sequence,share=share,original=value.Original,backup=value.Backup,code=value.Code},262144);
+        }
+    }
     readonly LoopbackServer server;
+    readonly RecoveryOutput recovery;
     internal int Port { get; private set; }
     internal string Nonce { get; private set; }
     internal int ShareCount { get; private set; }
-    HostFilesServer(LoopbackServer value) { server=value; }
+    HostFilesServer(LoopbackServer value,RecoveryOutput output) { server=value;recovery=output; }
     static string Text(Dictionary<string,object> value,string key,string pattern)
     {
         object item;
@@ -57,19 +81,21 @@ internal sealed class HostFilesServer : IDisposable
             if(path==null||path.Length>32767||!Regex.IsMatch(path,"\\A[A-Za-z]:\\\\[^\\x00-\\x1f]*\\z",RegexOptions.CultureInvariant))throw new ArgumentException("Invalid session");
             protectedPaths.Add(path);
         }
-        var shares=new SMBShareCollection();var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var output=new RecoveryOutput();var shares=new SMBShareCollection();var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach(object entry in entries)
         {
             var item=entry as Dictionary<string,object>;Keys(item,"name","path");
             string name=Text(item,"name","\\APC_[A-Za-z0-9_]{1,48}\\z");
             if(!names.Add(name)||!(item["path"] is string))throw new ArgumentException("Invalid session");
-            var share=new FileSystemShare(name,new ConfinedFileStore((string)item["path"],protectedPaths),CachingPolicy.NoCaching);
+            var store=new ConfinedFileStore((string)item["path"],protectedPaths);
+            store.RecoveryRecorded=record=>output.Record(nonce,name,record);
+            var share=new FileSystemShare(name,store,CachingPolicy.NoCaching);
             share.AccessRequested+=delegate(object sender,AccessRequestArgs request){request.Allow=String.Equals(request.UserName,user,StringComparison.Ordinal);};
             shares.Add(share);
         }
         // An unknown user (including Guest) must never receive a password from the callback.
         var authentication=new IndependentNTLMAuthenticationProvider(name=>String.Equals(name,user,StringComparison.Ordinal)?password:null);
-        var result=new HostFilesServer(new LoopbackServer(shares,new GSSProvider(authentication))){Nonce=nonce,ShareCount=shares.Count};
+        var result=new HostFilesServer(new LoopbackServer(shares,new GSSProvider(authentication)),output){Nonce=nonce,ShareCount=shares.Count};
         try
         {
             using(var random=RandomNumberGenerator.Create())
@@ -102,9 +128,11 @@ internal sealed class HostFilesServer : IDisposable
         {
             using(var server=Start(ReadRequest()))
             {
-                Console.Out.WriteLine(new JavaScriptSerializer().Serialize(new{ok=true,schema=1,session_nonce=server.Nonce,port=server.Port,share_count=server.ShareCount}));Console.Out.Flush();
-                // Only the work controller owns the pipe; closing the panel does not close it.
-                while(Console.In.Read()>=0) { }
+                server.recovery.Ready(server);
+                // Keep stdin ownership, but observe an output failure instead of
+                // silently accepting mutations after the recovery channel is gone.
+                int inputEnded=0;var input=new Thread(()=>{try{while(Console.In.Read()>=0){}}finally{Interlocked.Exchange(ref inputEnded,1);}}){IsBackground=true};input.Start();
+                while(Volatile.Read(ref inputEnded)==0){if(server.recovery.Failed)return 3;Thread.Sleep(100);}
             }
             return 0;
         }

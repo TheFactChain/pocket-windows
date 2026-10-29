@@ -28,7 +28,7 @@ from runtime_config import load_settings
 from runtime_network_plan import arguments as network_arguments
 from runtime_logs import CappedWriter, start_capped_drain
 
-ENGINE_SHA256 = '63dc4e2f5fc131afe5ad2416c2d9627f26ae764eec3a03a86acb41eae71b2b2a'
+ENGINE_SHA256 = '93b16a220fdc7b6125ecd63758fa8cd45f0ec8329359ad27aa796325445f7738'
 SOURCE = 'images/workvm-empty.qcow2'
 VARS = 'state/workvm-vars.fd'
 CODE = 'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd'

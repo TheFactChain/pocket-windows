@@ -113,6 +113,18 @@ class PortableAppTests(unittest.TestCase):
             digest.assert_called_once()
             self.assertTrue(report['checks']['engine_identity']['passed'])
 
+    def test_legacy_invalid_selected_endpoint_stays_editable_but_cannot_start(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(app, 'ProfileStore') as store:
+            selected = {'profile_id': 'b' * 32, 'revision_id': 'c' * 32,
+                        'needs_credentials': False, 'needs_correction': True}
+            store.return_value.selected_summary.return_value = selected
+            report = app.preflight(Path(temporary), host=self.facts())
+        self.assertEqual(report['connection']['selected_profile'], selected)
+        self.assertFalse(report['checks']['connection']['passed'])
+        self.assertIn('Исправь адрес', report['checks']['connection']['detail'])
+        self.assertFalse(report['ok'])
+
     @contextlib.contextmanager
     def connection_boundary(self):
         with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as held:
@@ -150,6 +162,91 @@ class PortableAppTests(unittest.TestCase):
             self.assertEqual(popen.call_args.kwargs['stdout'], app.subprocess.DEVNULL)
             self.assertEqual(popen.call_args.kwargs['stderr'], app.subprocess.DEVNULL)
             inspect.assert_called_once_with(root)
+
+    def test_connection_draft_uses_ephemeral_identity_and_stdin_without_saving(self):
+        with self.connection_boundary() as (root, view, state, path, process, popen, inspect):
+            draft = {'name': 'Unsaved', 'protocol': 'http', 'host': '203.0.113.77', 'port': 8443}
+            secret = draft | {'credentials': {'username': 'fixture-user', 'password': 'draft-secret'}}
+            store = app.ProfileStore.return_value
+            store.prepare_draft.return_value = secret
+            ids = ['d' * 32, 'e' * 32]
+            path.write_text(json.dumps(state | {'profile_id': ids[0], 'profile_revision_id': ids[1]}))
+            with mock.patch.object(app.uuid, 'uuid4', side_effect=[mock.Mock(hex=item) for item in ids]):
+                reply = app.test_connection(root, {'profile': draft, 'profile_id': view['profile_id']})
+            self.assertTrue(reply['verified'])
+            self.assertEqual((reply['profile_id'], reply['revision_id']), tuple(ids))
+            self.assertIn('Сохрани', reply['message'])
+            store.prepare_draft.assert_called_once_with(draft, view['profile_id'])
+            store.save.assert_not_called(); store.select.assert_not_called(); store.get_view.assert_not_called()
+            argv = popen.call_args.args[0]
+            self.assertIn('--test-draft', argv)
+            self.assertNotIn('--test-profile', argv)
+            self.assertNotIn('draft-secret', json.dumps(argv))
+            self.assertEqual(popen.call_args.kwargs['stdin'], app.subprocess.PIPE)
+            self.assertEqual(json.loads(process.stdin.write.call_args.args[0]), {'profile': secret, 'profile_id': ids[0], 'revision_id': ids[1]})
+            process.stdin.close.assert_called_once_with()
+            process.wait.assert_called_once_with(timeout=300)
+            process.communicate.assert_not_called()
+            self.assertNotIn('draft-secret', json.dumps(reply))
+
+    def test_connection_draft_rejects_a_report_for_the_saved_revision(self):
+        with self.connection_boundary() as (root, view, state, path, process, popen, inspect):
+            draft = {'protocol': 'http', 'host': '203.0.113.77', 'port': 8080}
+            app.ProfileStore.return_value.prepare_draft.return_value = draft
+            reply = app.test_connection(root, {'profile': draft, 'profile_id': view['profile_id']})
+            self.assertFalse(reply['verified'])
+
+    def test_connection_draft_failed_stdin_cannot_certify_a_matching_report(self):
+        with self.connection_boundary() as (root, view, state, path, process, popen, inspect):
+            draft = {'protocol': 'http', 'host': '203.0.113.77', 'port': 8080}
+            app.ProfileStore.return_value.prepare_draft.return_value = draft
+            ids = ['d' * 32, 'e' * 32]
+            path.write_text(json.dumps(state | {'profile_id': ids[0], 'profile_revision_id': ids[1]}))
+            process.stdin.write.side_effect = BrokenPipeError('fixture')
+            with mock.patch.object(app.uuid, 'uuid4', side_effect=[mock.Mock(hex=item) for item in ids]):
+                reply = app.test_connection(root, {'profile': draft})
+            self.assertFalse(reply['verified'])
+            process.stdin.close.assert_called_once_with()
+
+    def test_connection_draft_timeout_preserves_the_running_child(self):
+        with self.connection_boundary() as (root, view, state, path, process, popen, inspect):
+            draft = {'protocol': 'http', 'host': '203.0.113.77', 'port': 8080}
+            app.ProfileStore.return_value.prepare_draft.return_value = draft
+            process.wait.side_effect = app.subprocess.TimeoutExpired('draft fixture', 300)
+            reply = app.test_connection(root, {'profile': draft})
+            self.assertEqual(reply['code'], 'test_pending')
+            process.kill.assert_not_called(); process.terminate.assert_not_called()
+
+    def test_connection_draft_timeout_does_not_wait_for_blocked_stdin(self):
+        with self.connection_boundary() as (root, view, state, path, process, popen, inspect):
+            draft = {'protocol': 'http', 'host': '203.0.113.77', 'port': 8080}
+            app.ProfileStore.return_value.prepare_draft.return_value = draft
+            writing, release, closed = threading.Event(), threading.Event(), threading.Event()
+            def write(value):
+                writing.set()
+                if not release.wait(5):
+                    raise AssertionError('test did not release writer')
+            def wait(timeout):
+                self.assertTrue(writing.wait(2))
+                raise app.subprocess.TimeoutExpired('blocked stdin fixture', timeout)
+            process.stdin.write.side_effect = write
+            process.stdin.close.side_effect = lambda: closed.set()
+            process.wait.side_effect = wait
+            try:
+                reply = app.test_connection(root, {'profile': draft})
+                self.assertEqual(reply['code'], 'test_pending')
+                self.assertFalse(closed.is_set())
+                process.kill.assert_not_called(); process.terminate.assert_not_called()
+            finally:
+                release.set()
+                self.assertTrue(closed.wait(2))
+
+    def test_connection_draft_size_is_checked_before_spawning(self):
+        with self.connection_boundary() as (root, view, state, path, process, popen, inspect):
+            app.ProfileStore.return_value.prepare_draft.return_value = {'padding': 'я' * 40000}
+            with self.assertRaisesRegex(ValueError, '64 KiB'):
+                app.test_connection(root, {'profile': {'protocol': 'http', 'host': '203.0.113.77', 'port': 8080}})
+            popen.assert_not_called()
 
     def test_connection_rejects_wrong_identity_revision_nonce_or_incomplete_cleanup(self):
         changes = [{'profile_revision_id': 'd' * 32}, {'nonce': 'e' * 32},
@@ -233,6 +330,34 @@ class PortableAppTests(unittest.TestCase):
             self.assertFalse(report['network_verified'])
             self.assertIn('Связь восстанавливается', report['network_warning'])
             self.assertFalse(report['secret_values_exposed'])
+
+    def test_bad_display_receipt_cannot_hide_a_healthy_gateway_or_live_controllers(self):
+        states = {'work': {'status': 'running', 'generation': 1, 'windows_display': {
+            'status': 'applied', 'generation': 1, 'requested': {'width': 'invalid'}}},
+                  'gateway': {'status': 'running'}}
+        guests = {role: {'state': role} for role in states}
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(app.runtime, 'discover_guests', return_value=guests), \
+                mock.patch.object(app.runtime, 'read_json', side_effect=lambda path: states[str(path)]), \
+                mock.patch.object(app.runtime, 'controller_live', return_value=True), \
+                mock.patch.object(app.runtime, 'gateway_ready', return_value=True) as ready:
+            report = app.runtime_status(Path(temporary), host=self.facts())
+        self.assertTrue(report['runtime']['control_available'])
+        self.assertTrue(report['network_verified'])
+        self.assertEqual(report['windows_display']['status'], 'unconfirmed')
+        ready.assert_called_once()
+
+    def test_failed_control_observation_cannot_skip_the_independent_gateway_check(self):
+        states = {'work': {'status': 'running'}, 'gateway': {'status': 'running'}}
+        guests = {role: {'state': role} for role in states}
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(app.runtime, 'discover_guests', return_value=guests), \
+                mock.patch.object(app.runtime, 'read_json', side_effect=lambda path: states[str(path)]), \
+                mock.patch.object(app.runtime, 'controller_live', side_effect=RuntimeError('fixture')), \
+                mock.patch.object(app.runtime, 'gateway_ready', return_value=True):
+            report = app.runtime_status(Path(temporary), host=self.facts())
+        self.assertFalse(report['runtime']['control_available'])
+        self.assertTrue(report['network_verified'])
 
     def test_gateway_without_windows_is_not_ready_for_another_start(self):
         with tempfile.TemporaryDirectory() as temporary, \

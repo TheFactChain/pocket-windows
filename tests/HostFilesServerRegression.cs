@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Text;
 using System.Web.Script.Serialization;
 using SMBLibrary;
@@ -10,6 +12,8 @@ using SMBLibrary.Client;
 
 internal static class HostFilesServerRegression
 {
+    [DllImport("kernel32.dll",EntryPoint="CreateFileW",CharSet=CharSet.Unicode,SetLastError=true)]
+    static extern SafeFileHandle OpenNative(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
     sealed class Client : SMB2Client
     {
         internal Client() : base(4000) { }
@@ -92,6 +96,8 @@ internal static class HostFilesServerRegression
         try
         {
             string directory=Path.Combine(args[0],"server-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
+            if(args.Length>1&&args[1]=="--ads-only")
+            {using(var server=HostFilesServer.Start(Input(directory)))Streams(server.Port,directory);return 0;}
             string outside=Path.Combine(Path.GetDirectoryName(directory),"outside.txt");File.WriteAllText(outside,"unchanged");
             Reject("{}");Reject(Input(directory).Replace("\"schema\":1","\"schema\":true"));
             Reject(Input(directory).Replace("\"PC_TEST\"","\"../escape\""));
@@ -101,13 +107,46 @@ internal static class HostFilesServerRegression
             {
                 Assert(server.Port>=49152&&server.Port<=65535,"Server must use a high loopback port");
                 Authentication(server.Port,"Guest","");Authentication(server.Port,"WCP_fixture","wrong-password");
-                Files(server.Port,directory);FilesReconnect(server.Port);
+                Files(server.Port,directory);Streams(server.Port,directory);FilesReconnect(server.Port);
                 Tamper(server.Port,directory,false);Tamper(server.Port,directory,true);
                 Assert(File.ReadAllText(outside)=="unchanged","Outside contents must remain unchanged");
             }
             Console.WriteLine("PASS: loopback SMB2, NTLMv2, guest/wrong password denied, signed Unicode reads/writes over 1MB, flush, rename, share conflict, path confinement, protected program folder, reconnect.");return 0;
         }
         catch(Exception error){Console.Error.WriteLine(error);return 1;}
+    }
+    static void Streams(int port,string directory)
+    {
+        string path=Path.Combine(directory,"a");File.WriteAllText(path,"ordinary base remains");
+        var client=new Client();try
+        {
+            Assert(client.Open(port),"ADS loopback connection");Success(client.Login("","WCP_fixture","fixture_password_01234567890123456789"),"ADS login");
+            NTStatus status;var files=client.TreeConnect("PC_TEST",out status);Success(status,"ADS tree");object handle;FileStatus state;
+            Success(files.CreateFile(out handle,out state,"a:Zone.Identifier:$DATA",AccessMask.GENERIC_READ|AccessMask.GENERIC_WRITE,
+                SMBLibrary.FileAttributes.Normal,ShareAccess.Read|ShareAccess.Write|ShareAccess.Delete,CreateDisposition.FILE_OPEN_IF,
+                CreateOptions.FILE_NON_DIRECTORY_FILE,null),"Signed named stream create");
+            byte[] zone=Encoding.UTF8.GetBytes("[ZoneTransfer]\r\nZoneId=3\r\n"),read;int written;
+            try
+            {
+                Success(files.WriteFile(out written,handle,0,zone),"Signed stream write");Assert(written==zone.Length,"Stream write count");
+                Success(files.FlushFileBuffers(handle),"Signed stream flush");
+                Success(files.ReadFile(out read,handle,0,1024),"Signed stream read");Assert(Convert.ToBase64String(read)==Convert.ToBase64String(zone),"Stream bytes must match over SMB");
+            }
+            finally{Success(files.CloseFile(handle),"Stream close");}
+            FileSystemInformation information;Success(files.GetFileSystemInformation(out information,FileSystemInformationClass.FileFsAttributeInformation),"Signed filesystem capabilities");
+            var caps=((FileFsAttributeInformation)information).FileSystemAttributes;
+            Assert((caps&FileSystemAttributes.NamedStreams)!=0&&(caps&(FileSystemAttributes.SupportsHardLinks|FileSystemAttributes.SupportsReparsePoints|FileSystemAttributes.PersistentACLs))==0,"SMB advertises only supported stream/link/ACL contract");
+            Success(files.Disconnect(),"ADS tree disconnect");Success(client.Logoff(),"ADS logoff");
+            Assert(File.ReadAllText(path)=="ordinary base remains","Stream changed base bytes");
+            using(var native=OpenNative(path+":Zone.Identifier",0x80000000,7,IntPtr.Zero,3,0x00200000,IntPtr.Zero))
+            using(var stream=new FileStream(native,FileAccess.Read))
+            {
+                var saved=new byte[zone.Length];Assert(stream.Length==zone.Length&&stream.Read(saved,0,saved.Length)==saved.Length,"Host stream length");
+                Assert(Convert.ToBase64String(saved)==Convert.ToBase64String(zone),"Host Zone.Identifier must survive SMB transfer");
+            }
+            Console.WriteLine("PASS: signed SMB named stream/Zone.Identifier bytes and conservative capabilities, base unchanged.");
+        }
+        finally{client.Disconnect();}
     }
     static void FilesReconnect(int port)
     {

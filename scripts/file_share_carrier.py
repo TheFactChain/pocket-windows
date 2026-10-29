@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from file_snapshot import locked_read
+from file_snapshot import locked_read, qemu_path
 import session_carrier as private
 
 
@@ -18,15 +18,18 @@ class Medium:
         self.path = self.base / nonce
         self.holds = 0
         self.identities = {}
-        self.files = {'HOSTFILS.JSN': json.dumps(config, ensure_ascii=False, separators=(',', ':')).encode('utf-8'),
+        payload = json.dumps(config, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        legacy = {key: value for key, value in config.items() if key != 'clipboard'}
+        self.files = {'HOSTFILS.JSN': json.dumps(legacy, ensure_ascii=False, separators=(',', ':')).encode('utf-8'),
                       'HOSTFILS.EXE': executable,
                       'RUNFILES.CMD': b'@echo off\r\n"%~dp0HOSTFILS.EXE" --install\r\n'}
-        if len(self.files['HOSTFILS.JSN']) > 65536:
+        if len(payload) > 65536:
             raise ValueError('Guest file-sharing config is too large')
-        if len(self.files['HOSTFILS.JSN']) > 32768:
+        if payload != self.files['HOSTFILS.JSN'] or len(payload) > 32768:
             # The installed 32KiB helper must parse a bootstrap before it can update itself.
-            self.files['HOSTFIL2.JSN'] = self.files['HOSTFILS.JSN']
-            self.files['HOSTFILS.JSN'] = json.dumps(dict(config, shares=[]), ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            self.files['HOSTFIL2.JSN'] = payload
+            if len(self.files['HOSTFILS.JSN']) > 32768:
+                self.files['HOSTFILS.JSN'] = json.dumps(dict(legacy, shares=[]), ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             if len(self.files['HOSTFILS.JSN']) > 32768:
                 raise ValueError('Guest file-sharing bootstrap is too large')
         kernel, _ = private._api()
@@ -66,7 +69,7 @@ class Medium:
                 stack.enter_context(private._open_private(self.path / name))
                 source = stack.enter_context(locked_read(self.path / name))
                 self._check_file(name, source.read(len(data) + 1))
-            block = {'driver': 'vvfat', 'dir': str(self.path), 'label': 'WCPFILES', 'fat-type': 16,
+            block = {'driver': 'vvfat', 'dir': qemu_path(self.path), 'label': 'WCPFILES', 'fat-type': 16,
                      'rw': False, 'read-only': True, 'node-name': 'wcfilesmedia'}
             self.holds += 1
             try:

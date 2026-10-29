@@ -143,7 +143,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(record['generation'],2)
 
     def setUp(self):
-        base = Path.home() / 'AppData/Local/Temp'
+        base = Path(os.environ['TEMP'])
         self.temporary = tempfile.TemporaryDirectory(prefix='runtime launcher test ', dir=base)
         self.addCleanup(self.temporary.cleanup)
         def settle():
@@ -660,6 +660,171 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(start.call_args.kwargs['stdin'], runtime.subprocess.DEVNULL)
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
+
+    def cancel_launch(self, *, before=False, no_pid=False, foreign=False, missing=False,
+                      pair=False, ready_race=False, early_exit=False):
+        import runtime_logs
+        record, state = self.gateway2(network_verified=False, status='running' if ready_race else 'starting')
+        if no_pid:
+            state.pop('pid')
+            state.pop('process')
+        if foreign:
+            state['controller'] = dict(record['controller'], created_filetime=self.created + 1)
+        runtime.atomic_json(Path(record['state']), state)
+        directory = self.root / ('logs/runtime-launch-cancel-' + ('missing' if missing else 'state'))
+        directory.mkdir()
+        report = {'receipt': str(directory / 'receipt.json'), 'guests': {}}
+        child = mock.Mock(pid=901)
+        child.stdout = io.BytesIO(b'' if missing else (json.dumps({'state': record['state']})+'\n').encode())
+        child.stderr = io.BytesIO()
+        child.poll.return_value = None
+        clock, spawned, saves, early, ready_cancel = [0.], [], [], [], [False]
+        def drain(source, destination):
+            destination.write(source.read())
+            return mock.Mock()
+        def sleep(seconds):
+            clock[0] += seconds
+            controls = list(Path(record['state']).parent.glob('control-runtime-*.json'))
+            early.extend(controls)
+            if no_pid and controls:
+                if early_exit:
+                    state.update(status='exited', exit_code=0)
+                else:
+                    state.update(pid=record['process']['pid'], process=record['process'])
+                runtime.atomic_json(Path(record['state']), state)
+        def ready(*unused):
+            ready_cancel[0] = True
+            return True
+        def powerdown(root, owned):
+            self.assertEqual(owned, record)
+            self.assertEqual(saves[-1], {'gateway': record})
+            return True
+        with mock.patch.object(runtime.subprocess, 'Popen', side_effect=lambda *a, **k: spawned.append(child) or child), \
+             mock.patch.object(runtime, 'process_identity', side_effect=lambda pid: record['controller'] if pid == 901 else record['process']), \
+             mock.patch.object(runtime, 'gateway_ready', side_effect=ready if ready_race else lambda *a: False), \
+             mock.patch.object(runtime.time, 'monotonic', side_effect=lambda: clock[0]), \
+             mock.patch.object(runtime.time, 'sleep', side_effect=sleep), \
+             mock.patch.object(runtime_logs, 'start_capped_drain', side_effect=drain), \
+             mock.patch.object(runtime, 'discover_guests', return_value={}), \
+             mock.patch.object(runtime, 'request_powerdown', side_effect=powerdown) as request:
+            with self.assertRaisesRegex(RuntimeError, 'Stop requested' if before or not (foreign or missing) else 'unknown'):
+                save = lambda: saves.append(dict(report['guests']))
+                cancel = lambda: before or (ready_cancel[0] if ready_race else bool(spawned))
+                if pair:
+                    runtime.start_pair(self.root, report, save, cancel)
+                else:
+                    runtime.launch_guest(self.root, 'gateway', report, save, cancel, startup_deadline=1.)
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+        return report, spawned, request.call_count, early, clock[0]
+
+    def test_launch_cancel_before_start_never_spawns_controller(self):
+        report, spawned, requests, early, elapsed = self.cancel_launch(before=True)
+        self.assertEqual((spawned, requests, early, elapsed), ([], 0, [], 0.))
+        self.assertFalse(report['guests'])
+
+    def test_launch_cancel_between_log_setup_and_popen_never_spawns(self):
+        directory = self.root / 'logs/runtime-launch-race'
+        directory.mkdir(parents=True)
+        checks = iter((False, True))
+        with mock.patch.object(runtime.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(RuntimeError, 'Stop requested'):
+                runtime.launch_guest(self.root, 'gateway', {'receipt': str(directory/'receipt.json')},
+                                     lambda: None, lambda: next(checks))
+        spawn.assert_not_called()
+
+    def test_start_pair_cancel_inside_gateway_poll_never_starts_windows(self):
+        report, spawned, requests, early, elapsed = self.cancel_launch(pair=True)
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(requests, 1)
+        self.assertEqual(set(report['guests']), {'gateway'})
+
+    def test_launch_cancel_after_state_records_before_graceful_request_without_ready(self):
+        report, spawned, requests, early, elapsed = self.cancel_launch()
+        self.assertEqual(requests, 1)
+        self.assertIn('gateway', report['guests'])
+        self.assertLess(elapsed, .4)
+
+    def test_cancelled_launch_record_remains_available_to_run_stop(self):
+        report, spawned, requests, early, elapsed = self.cancel_launch()
+        report['phase'] = 'error'
+        record = report['guests']['gateway']
+        records = {'work': [], 'gateway': [record]}
+        with mock.patch.object(runtime, 'require_runtime'), \
+             mock.patch.object(runtime, 'active_receipt', return_value=(Path(report['receipt']), report)), \
+             mock.patch.object(runtime, 'recovery_snapshot', return_value={'available': False}), \
+             mock.patch.object(runtime, 'owned_records', return_value=records), \
+             mock.patch.object(runtime, 'discover_guests', return_value={}), \
+             mock.patch.object(runtime, 'engine_processes', return_value={record['process']['pid']: record['process']}), \
+             mock.patch.object(runtime, 'stop_records') as stop, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runtime.run_stop(self.root), 0)
+        stop.assert_called_once_with(self.root, records)
+
+    def test_launch_cancel_racing_ready_check_still_records_and_requests_shutdown(self):
+        report, spawned, requests, early, elapsed = self.cancel_launch(ready_race=True)
+        self.assertEqual(requests, 1)
+        self.assertIn('gateway', report['guests'])
+        self.assertEqual(elapsed, 0.)
+
+    def test_launch_cancel_before_pid_requests_owned_session_then_accounts_child(self):
+        report, spawned, requests, early, elapsed = self.cancel_launch(no_pid=True)
+        self.assertEqual(requests, 1)
+        self.assertTrue(early)
+        self.assertEqual(runtime.read_json(early[0]), {'action': 'powerdown'})
+        self.assertIn('gateway', report['guests'])
+        self.assertLess(elapsed, .6)
+
+    def test_launch_cancel_before_pid_waits_for_controller_confirmed_exit(self):
+        report, spawned, requests, early, elapsed = self.cancel_launch(no_pid=True, early_exit=True)
+        self.assertEqual(requests, 0)
+        self.assertTrue(early)
+        self.assertFalse(report['guests'])
+        self.assertGreaterEqual(elapsed, .2)
+        self.assertLess(elapsed, .6)
+
+    def test_launch_cancel_foreign_state_or_missing_state_remains_unknown_bounded(self):
+        for foreign in (True, False):
+            with self.subTest(foreign=foreign):
+                # Each simulation uses fresh log sinks.
+                if foreign:
+                    report, spawned, requests, early, elapsed = self.cancel_launch(foreign=True)
+                else:
+                    report, spawned, requests, early, elapsed = self.cancel_launch(missing=True)
+                self.assertFalse(report['guests'])
+                self.assertEqual((requests, early), (0, []))
+                self.assertGreaterEqual(elapsed, 1.)
+
+    def test_stop_never_claims_stopped_while_unknown_startup_controller_is_alive(self):
+        record, _ = self.gateway2()
+        receipt = self.root/'logs/runtime-launch-cancel/receipt.json'
+        report = {'phase': 'error', 'guests': {},
+                  'controllers': {'gateway': {'pid': 901, 'identity': record['controller']}}}
+        with mock.patch.object(runtime, 'require_runtime'), \
+             mock.patch.object(runtime, 'active_receipt', return_value=(receipt, report)), \
+             mock.patch.object(runtime, 'atomic_json'), \
+             mock.patch.object(runtime, 'process_identity', return_value=record['controller']), \
+             mock.patch.object(runtime, 'stop_records') as stop:
+            with self.assertRaisesRegex(RuntimeError, 'unknown guest ownership'):
+                runtime.run_stop(self.root)
+        stop.assert_not_called()
+
+    def test_reused_controller_pid_does_not_block_stopping_recorded_guests(self):
+        record, _ = self.gateway2()
+        saved = record['controller']
+        foreign = dict(saved,created_filetime=saved['created_filetime']+1,image=str(self.root/'foreign.exe'))
+        receipt = self.root/'logs/runtime-launch-cancel/receipt.json'
+        report = {'phase':'error','guests':{},'controllers':{'gateway':{'pid':saved['pid'],'identity':saved}}}
+        with mock.patch.object(runtime,'require_runtime'), \
+                mock.patch.object(runtime,'active_receipt',return_value=(receipt,report)), \
+                mock.patch.object(runtime,'atomic_json'), \
+                mock.patch.object(runtime,'process_identity',return_value=foreign), \
+                mock.patch.object(runtime,'recovery_snapshot',return_value={'available':False}), \
+                mock.patch.object(runtime,'owned_records',return_value={'work':[],'gateway':[]}), \
+                mock.patch.object(runtime,'discover_guests',return_value={}), \
+                mock.patch.object(runtime,'engine_processes',return_value={}), \
+                mock.patch.object(runtime,'stop_records') as stop, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runtime.run_stop(self.root),0)
+        stop.assert_called_once()
 
     def test_missing_physical_network_reports_reason_before_guest_pid_exists(self):
         record, state = self.gateway2()

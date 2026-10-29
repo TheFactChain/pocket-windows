@@ -18,6 +18,8 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using Wpf.Ui.Controls;
 using TextBlock = System.Windows.Controls.TextBlock;
+using MessageBoxButton = System.Windows.MessageBoxButton;
+using MessageBoxResult = System.Windows.MessageBoxResult;
 using Forms = System.Windows.Forms;
 
 namespace WindowsClaude.Launcher
@@ -34,6 +36,7 @@ namespace WindowsClaude.Launcher
         static readonly int[,] Modes = { { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1366, 768 }, { 1440, 900 },
             { 1600, 900 }, { 1680, 1050 }, { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 } };
         const int DefaultMode = 8;
+        const string FileServerRestart = "Файловый сервер остановился. Проверь последние сохранённые файлы. Сохрани работу в Windows, выключи её в панели и запусти заново.";
         static readonly string[] Protocols = { "hysteria2", "socks5", "http", "https" };
 
         readonly DispatcherTimer lifecycleTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -53,7 +56,7 @@ namespace WindowsClaude.Launcher
         bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing,
             panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, checksOpen, pulsing;
         int operationRevision, attentionPolls; string shownStatus, lastAttention;
-        bool trayNoticeShown, displayNoticeShown, attentionNoticeShown, trayPromotionStarted;
+        bool trayNoticeShown, displayNoticeShown, attentionNoticeShown, trayPromotionStarted, runtimePollFailed;
         readonly List<string> folders = new List<string>();
 
         // Connection editor state
@@ -222,7 +225,7 @@ namespace WindowsClaude.Launcher
             ((TranslateTransform)Sheet.RenderTransform).BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(24, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = EaseOut });
         }
 
-        void ShowEditor(string title) { Show(EditorExtras, profileId != null); OpenSheet(title, EditorSheet); }
+        void ShowEditor(string title) { Show(EditorExtras, true); Show(ExportButton, profileId != null); OpenSheet(title, EditorSheet); }
 
         void CloseSheet()
         {
@@ -312,7 +315,7 @@ namespace WindowsClaude.Launcher
             foreach (UIElement button in new UIElement[] { RefreshButton, PrepareButton, RepairGatewayButton, NextActionButton, AddLinkButton, SaveProfileButton, ProfileList })
                 button.IsEnabled = !value;
             PrepareHostButton.IsEnabled = !value && !runtimeActive;
-            TestProfileButton.IsEnabled = !value && testAvailable && profiles.Any(item => Flag(item, "selected"));
+            TestProfileButton.IsEnabled = !value && testAvailable;
             ExportButton.IsEnabled = !value && profiles.Count > 0;
             SettingsBody.IsEnabled = settingsLoaded && !value && !runtimeActive && !outcomeUnknown && !updating;
             ConnectionsPane.IsEnabled = !updating; EditorSheet.IsEnabled = !updating; AddSheet.IsEnabled = !updating;
@@ -370,7 +373,7 @@ namespace WindowsClaude.Launcher
                 if (action != "diagnose") operationResult = completed;
                 if ((action == "recover-session" || action == "force-stop") && Bridge.Ok(completed) && (pendingOutcome == null || pendingOutcome.IsCompleted)) { outcomeUnknown = false; pendingOutcome = null; pendingStartReceipt = null; }
                 Display(completed);
-                SetOperation(action == "diagnose" && completed.ContainsKey("checks") ? "" : Friendly(Bridge.Message(completed)));
+                SetOperation(action == "diagnose" && completed.ContainsKey("checks") ? "" : Friendly(completed));
                 if (action == "prepare-components" || action == "prepare-host" || action == "repair-gateway" || action == "recover-session" || action == "force-stop" || action == "stop" || action == "start")
                     await RefreshAfterAsync(completed);
                 if (action == "prepare-host" && Flag(completed, "restart_required")) SetOperation("Подготовка завершена. Перезагрузи ПК самостоятельно, затем нажми «Проверить снова».");
@@ -424,18 +427,20 @@ namespace WindowsClaude.Launcher
                     Show(NextActionButton, !stopAvailable);
                 }
             }
-            SetOperation(Friendly(Bridge.Message(completed)));
+            SetOperation(Friendly(completed));
             CheckedAtText.Text = "Проверено в " + DateTime.Now.ToString("HH:mm");
         }
 
         // Supervisor messages are written for logs; the full text stays in the copied report.
-        static string Friendly(string message)
+        static string Friendly(Dictionary<string, object> result)
         {
+            string message = Bridge.Message(result);
             if (message == null) return "";
             // Start results end with the receipt path on a second line; only the first line is for people.
             int lineEnd = message.IndexOf('\n'); if (lineEnd >= 0) message = message.Substring(0, lineEnd).TrimEnd();
-            if (message.StartsWith("Supervisor", StringComparison.Ordinal))
-                return "Windows не запустилась: шлюз не смог подключиться к серверу. Проверь подключение и нажми «Запустить» ещё раз.";
+            string code = Text(result, "code", "");
+            if (code == "runtime_error" || code == "supervisor_exited")
+                return "Запуск Windows не подтверждён. Открой раздел «Проверка», чтобы узнать причину.";
             return message;
         }
 
@@ -494,7 +499,8 @@ namespace WindowsClaude.Launcher
             if (App.UpdateProbePending || runtimeActive || busy || outcomeUnknown) return;
             try
             {
-                if (AppUpdate.HasV2Catalog(Bridge.Root)) { Navigate(AppPage.Updates); OnOfflineRepair(sender, e); return; }
+                var saved = AppUpdate.SavedOffer(Bridge.Root);
+                if (saved != null) { updateOffer = saved; Navigate(AppPage.Updates); OnUpdate(sender, e); return; }
                 var task = RunAction("prepare-components", false);
             }
             catch (Exception error) { SetOperation("Не удалось прочитать каталог восстановления: " + error.Message); }
@@ -550,7 +556,40 @@ namespace WindowsClaude.Launcher
         }
 
         static string DisplayState(Dictionary<string, object> report) { return Text(Child(report, "windows_display"), "status", ""); }
-        static string FileSharingState(Dictionary<string, object> report) { var files = Child(report, "host_files"); return files == null ? "" : Text(files, "status", ""); }
+        static List<string> UnavailableFolders(Dictionary<string, object> report)
+        {
+            var files = Child(report, "host_files");
+            var items = files != null && files.ContainsKey("unavailable") ? files["unavailable"] as IEnumerable : null;
+            return (items ?? new object[0]).Cast<object>().OfType<Dictionary<string, object>>()
+                .Select(item => Text(item, "label", "Папка ПК") + ": " + (Text(item, "status", "") == "protected" ? "защищённая папка" : "папка недоступна")).ToList();
+        }
+        static string FileSharingState(Dictionary<string, object> report)
+        {
+            string state = Text(Child(report, "host_files"), "status", "");
+            return state == "ready" && UnavailableFolders(report).Count > 0 ? "partial" : state;
+        }
+
+        static string ClipboardStatusDetail(Dictionary<string, object> report)
+        {
+            var clipboard = Child(report, "clipboard");
+            string state = Text(clipboard, "status", "off"), code = Text(clipboard, "code", "");
+            if (state == "off") return "Выключен";
+            if (state == "waiting" || state == "connecting") return "Ожидается помощник Windows";
+            if (state == "ready")
+            {
+                DateTimeOffset confirmed;
+                return DateTimeOffset.TryParse(Text(clipboard, "last_transfer_utc", ""), out confirmed)
+                    ? "Последняя передача подтверждена в " + confirmed.ToLocalTime().ToString("HH:mm:ss")
+                    : "Связь есть. Передача ещё не подтверждена";
+            }
+            if (code.Contains("BUSY")) return "Буфер занят. Копирование повторится автоматически";
+            if (code.Contains("RESTORING")) return "Восстанавливается предыдущая копия. Дождись завершения";
+            if (code.Contains("TEXT_TOO_LARGE")) return "Текст слишком большой. Передай его файлом или скопируй частями";
+            if (code.Contains("SOURCE") || code.Contains("FILES_FAILED") || code.Contains("TRANSFER_FAILED")) return "Файлы передать не удалось. Скопируй их ещё раз";
+            if (code.Contains("CLEANUP")) return "Не удалось очистить временную копию. Проверь свободное место";
+            if (code == "GUEST_STATUS_STALE") return "Помощник Windows давно не подтверждал состояние";
+            return "Общий буфер не готов. Сохрани работу и перезапусти Windows из панели";
+        }
 
         Dictionary<string, object> MergeRuntimeStatus(Dictionary<string, object> update)
         {
@@ -603,6 +642,7 @@ namespace WindowsClaude.Launcher
             bool isReadiness = result.ContainsKey("checks");
             if (isReadiness)
             {
+                runtimePollFailed = false;
                 readinessReport = result;
                 if (!settingsLoaded && result.ContainsKey("settings")) LoadSettings(result);
                 if (result.ContainsKey("host")) { settingsHost = Child(result, "host"); }
@@ -624,7 +664,9 @@ namespace WindowsClaude.Launcher
                 {
                     string protocol = Text(selected, "protocol", ""); protocol = protocol == "hysteria2" ? "Hysteria2" : protocol.ToUpperInvariant();
                     ConnectionValue.Text = Text(selected, "name", "Профиль");
-                    ConnectionDetail.Text = protocol + ", " + (Flag(selected, "needs_credentials") ? "нужно ввести пароль заново" : Flag(connection, "verified") ? "подключено и проверено" : "проверится при запуске");
+                    ConnectionDetail.Text = protocol + ", " + (Flag(selected, "needs_correction") ? "нужно исправить адрес" : Flag(selected, "needs_credentials") ? "нужно ввести пароль заново" : Flag(connection, "verified") ? "подключено и проверено" : "проверится при запуске")
+                        + Environment.NewLine + (Text(selected, "protocol", "") == "hysteria2" ? "TCP и UDP. Интернет: только IPv4." : "Только TCP. Интернет: только IPv4.");
+                    ConnectionDetail.ToolTip = "Внешний IPv6 недоступен. Локальная сеть Windows сохраняет IPv6. Для программ с UDP выбери Hysteria2.";
                     ProxyPrice.BeginAnimation(OpacityProperty, null); ProxyPrice.Opacity = 1;
                 }
             }
@@ -635,6 +677,25 @@ namespace WindowsClaude.Launcher
             }
             var report = readinessReport ?? result;
             var checks = Checks(report);
+            var unavailable = UnavailableFolders(report);
+            var clipboard = Child(report, "clipboard");
+            string clipboardState = Text(clipboard, "status", "off"), clipboardDetail = ClipboardStatusDetail(report);
+            ClipboardDetail.Text = clipboardDetail;
+            bool fileServerStopped = FileSharingState(report) == "failed" && Text(Child(report, "host_files"), "code", "") == "FILE_SERVER_STOPPED";
+            var hostFiles = Child(report, "host_files");
+            bool fileRecovery = Flag(hostFiles, "recovery_required") || Flag(hostFiles, "recovery_log_failed") || Flag(hostFiles, "recovery_channel_failed");
+            string recoveryDetail = Flag(hostFiles, "recovery_log_failed") ? "Не удалось записать журнал восстановления. Открой «Проверка» и сохрани отчёт." :
+                "Открой журнал восстановления: " + Text(hostFiles, "recovery_log", "подробности в отчёте проверки");
+            if (Flag(hostFiles, "recovery_channel_failed")) recoveryDetail = "Канал отчёта файлового сервера недоступен. Сохрани работу в Windows, выключи её в панели и запусти заново. " + recoveryDetail;
+            if (unavailable.Count > 0) checks.Add(new Dictionary<string, object> { { "passed", false },
+                { "title", FileSharingState(report) == "partial" ? "Часть папок ПК недоступна" : "Папки ПК недоступны" },
+                { "detail", String.Join(Environment.NewLine, unavailable) } });
+            if (fileServerStopped) checks.Add(new Dictionary<string, object> { { "passed", false },
+                { "title", "Файловый сервер остановился" }, { "detail", FileServerRestart } });
+            if (fileRecovery) checks.Add(new Dictionary<string, object> { { "passed", false },
+                { "title", "Операция с файлами требует проверки" }, { "detail", recoveryDetail } });
+            if (clipboardState == "failed" || clipboardState == "unconfirmed") checks.Add(new Dictionary<string, object> { { "passed", false },
+                { "title", "Общий буфер обмена недоступен" }, { "detail", clipboardDetail } });
             bool setupRequired = checks.Any(item => !Flag(item, "passed") && Flag(item, "setup_required"));
             int failed = checks.Count(item => !Flag(item, "passed") && !Flag(item, "setup_required"));
             DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
@@ -654,11 +715,11 @@ namespace WindowsClaude.Launcher
                 if (blockers != null) blocker = blockers.Cast<object>().OfType<Dictionary<string, object>>().OrderBy(item => Flag(item, "setup_required")).FirstOrDefault();
                 if (blocker == null && isReadiness) blocker = checks.FirstOrDefault(item => !Flag(item, "passed"));
             }
-            StatusText.Text = blocker == null ? Friendly(Bridge.Message(result)) : Text(blocker, "title", Bridge.Message(result));
+            StatusText.Text = blocker == null ? Friendly(result) : Text(blocker, "title", Bridge.Message(result));
             if (StatusText.Text.Length > 56) StatusText.Text = "Нужна проверка";
-            if (blocker == null && !Bridge.Ok(result) && Friendly(Bridge.Message(result)) != Bridge.Message(result)) StatusText.Text = "Windows не запустилась";
+            if (blocker == null && !Bridge.Ok(result) && (Text(result, "code", "") == "runtime_error" || Text(result, "code", "") == "supervisor_exited")) StatusText.Text = "Запуск не подтверждён";
             if (isReadiness && Bridge.Ok(result)) StatusText.Text = RuntimeHeading(workState, gatewayState);
-            NextStepText.Text = blocker == null ? (Bridge.Ok(result) ? "Сначала поднимется защищённое подключение, затем Windows." : Friendly(Bridge.Message(result))) : Text(blocker, "detail", Bridge.Message(result));
+            NextStepText.Text = blocker == null ? (Bridge.Ok(result) ? "Сначала поднимется защищённое подключение, затем Windows." : Friendly(result)) : Text(blocker, "detail", Bridge.Message(result));
             if (isReadiness && Bridge.Ok(result) && runtimeActive) NextStepText.Text = "Windows: " + VmState(workState) + ". Шлюз: " + VmState(gatewayState, true) + ".";
             suggestedAction = blocker == null ? "retry" : Text(blocker, "action", "retry");
             NextActionButton.Content = blocker == null ? "Проверить снова" : Text(blocker, "action_label", "Проверить снова");
@@ -687,10 +748,13 @@ namespace WindowsClaude.Launcher
                 NextStepText.Text = displayState == "failed" ? "Windows не применила выбранное разрешение. Выбери другое после выключения." : "Windows ещё не подтвердила разрешение.";
             string filesState = FileSharingState(report);
             if (blocker == null && (filesState == "failed" || filesState == "unavailable")) NextStepText.Text = "Проверь доступность выбранных папок ПК. Windows подключит их снова при следующем входе.";
+            if (blocker == null && fileServerStopped) NextStepText.Text = FileServerRestart;
+            if (blocker == null && filesState == "partial") NextStepText.Text = "Часть папок ПК недоступна. Открой «Проверка», чтобы узнать какие и почему.";
+            if (blocker == null && fileRecovery) NextStepText.Text = (fileServerStopped ? FileServerRestart + " " : "") + recoveryDetail;
             UpdateHero(report, filesState);
             if (StatusText.Text != shownStatus) { shownStatus = StatusText.Text; Rise(StatusText, 0); Rise(NextStepText, 60); }
             string warning = runtimeActive ? Text(report, "network_warning", "") : "";
-            NetworkText.Text = "Проверь подключение. Подробности в «Проверка»."; Show(NetworkText, warning.Length > 0 && Bridge.Ok(result));
+            NetworkText.Text = warning; Show(NetworkText, warning.Length > 0);
 
             string signature = new JavaScriptSerializer().Serialize(checks.Select(item => new object[] { Flag(item, "passed"), Flag(item, "setup_required"), Text(item, "title", ""), Text(item, "detail", "") }).ToArray()) + Bridge.Message(result);
             if (signature != displayedChecks)
@@ -711,6 +775,7 @@ namespace WindowsClaude.Launcher
             if (operationResult != null && !Bridge.Ok(operationResult))
                 lines.Insert(0, Bridge.Message(operationResult) + Environment.NewLine + Text(operationResult, "detail", ""));
             if (warning.Length > 0) lines.Add(warning);
+            if (clipboardState != "off") lines.Add("Общий буфер обмена: " + clipboardDetail + Environment.NewLine + Text(clipboard, "code", ""));
             string reportPath = Text(report, "diagnostic_report", "");
             if (reportPath.Length > 0) lines.Add("Отчёт: " + reportPath);
             ReportLocation.Text = reportPath.Length > 0 ? "Отчёт: " + reportPath : Text(report, "diagnostic_report_error", "");
@@ -787,8 +852,6 @@ namespace WindowsClaude.Launcher
         }
         // ---------- Updates from GitHub Releases ----------
         AppUpdate.Offer updateOffer;
-        AppUpdate.Package updatePlan;
-        bool fullUpdateRequested;
         bool updating, checkingUpdate, updateHandedOff, closeAfterUpdateCancel;
         CancellationTokenSource updateCancel;
 
@@ -831,16 +894,23 @@ namespace WindowsClaude.Launcher
             {
                 var result = await AppUpdate.CheckAsync(ReleaseInfo.Read(Bridge.Root).ReleaseId);
                 if (closing) return;
-                AppUpdate.Discard(updatePlan); updatePlan = null; fullUpdateRequested = false;
                 updateOffer = result.Offer; UpdateStatusText.Text = result.Message;
+                if (updateOffer == null) { try { updateOffer = AppUpdate.SavedOffer(Bridge.Root); } catch (Exception) { } }
                 UpdateStatusTitle.Text = result.Title;
                 UpdateCaption.Text = updateOffer == null ? result.Title : updateOffer.Repair ? "Можно восстановить файлы" : "Доступна версия " + updateOffer.Id;
+                if (updateOffer != null && updateOffer.Offline) UpdateStatusText.Text += " Сохранённые файлы можно восстановить кнопкой «Обновить».";
             }
             catch (Exception)
             {
                 UpdateStatusTitle.Text = "Не удалось проверить";
                 UpdateStatusText.Text = "Не удалось проверить обновления. Проверь интернет и повтори попытку.";
                 UpdateCaption.Text = "Не удалось проверить обновления";
+                try { updateOffer = AppUpdate.SavedOffer(Bridge.Root); } catch (Exception) { updateOffer = null; }
+                if (updateOffer != null)
+                {
+                    UpdateStatusText.Text = "Нет связи с сервером. Кнопка «Обновить» восстановит файлы из сохранённой копии.";
+                    UpdateCaption.Text = "Можно восстановить файлы";
+                }
             }
             finally { checkingUpdate = false; ShowUpdateOffer(); }
         }
@@ -849,58 +919,10 @@ namespace WindowsClaude.Launcher
         {
             bool offered = updateOffer != null;
             Show(UpdatePill, offered && !updating && !updateOffer.Repair);
-            Show(InstallUpdateButton, offered || updating);
-            Show(UpdatePackageText, offered);
             Show(UpdateProgress, updating);
-            CheckUpdatesButton.IsEnabled = !checkingUpdate && !updating && !updateHandedOff;
-            OfflineRepairButton.IsEnabled = !App.UpdateProbePending && !checkingUpdate && !updating && !updateHandedOff && !busy && !runtimeActive && !outcomeUnknown;
-            InstallUpdateButton.Content = updating ? "Отменить" : updatePlan != null ? (updatePlan.Offline ? "Восстановить файлы" : "Скачать и установить") : updateOffer != null && updateOffer.Repair ? "Восстановить файлы" : updateOffer != null && updateOffer.V2 && !fullUpdateRequested ? "Подготовить обновление" : "Обновить";
-            InstallUpdateButton.IsEnabled = !checkingUpdate && !updateHandedOff && (updating || (!busy && !runtimeActive && !outcomeUnknown));
-            Show(FullUpdateButton, offered && updateOffer.IndexUrl != null && !fullUpdateRequested && !updating);
-            FullUpdateButton.IsEnabled = InstallUpdateButton.IsEnabled;
-            if (offered)
-            {
-                FullUpdateButton.Content = "Полный пакет: " + BytesText(updateOffer.Bytes);
-                UpdatePackageText.Text = updatePlan != null ? "Скачать: " + BytesText(updatePlan.DownloadBytes) + ". Свободное место, верхняя оценка: " + BytesText(updatePlan.RequiredFreeBytes)
-                    : updateOffer.V2 && !fullUpdateRequested ? "Для подготовки скачается обновлятор: " + BytesText(updateOffer.ToolkitBytes) + ". Затем покажем объём изменённых файлов."
-                    : fullUpdateRequested || updateOffer.IndexUrl == null ? "Полный пакет: " + BytesText(updateOffer.Bytes) + (fullUpdateRequested && updateOffer.V2 ? ". Независимый обновлятор: " + BytesText(updateOffer.ToolkitBytes) : "") : "Загружаются только изменённые файлы";
-            }
-        }
-
-        static string BytesText(long bytes) { return bytes.ToString("N0", CultureInfo.CurrentCulture) + " байт (" + Math.Ceiling(bytes / 1048576.0).ToString("0") + " МБ)"; }
-
-        async void OnOfflineRepair(object sender, RoutedEventArgs e)
-        {
-            if (App.UpdateProbePending || updating || checkingUpdate || runtimeActive || busy || outcomeUnknown || closing) return;
-            Keyboard.ClearFocus(); if (!await CommitPendingSettingsAsync()) return;
-            if (runtimeActive || busy || outcomeUnknown || closing) return;
-            AppUpdate.Discard(updatePlan); updatePlan = null;
-            updating = true; updateCancel = new CancellationTokenSource(); Busy(true); ShowUpdateOffer();
-            UpdateStatusTitle.Text = "Проверяем сохранённые файлы";
-            try
-            {
-                updatePlan = await AppUpdate.PlanOfflineAsync(Bridge.Root, UpdateBytesProgress, updateCancel.Token);
-                updateOffer = new AppUpdate.Offer { Id = updatePlan.Id, V2 = true, Repair = true };
-                fullUpdateRequested = false;
-                UpdateStatusTitle.Text = "Восстановление без интернета готово";
-                UpdateStatusText.Text = "Сохранённые части проверены. Нажми «Восстановить файлы». Подключение к интернету не требуется.";
-            }
-            catch (OperationCanceledException) { UpdateStatusTitle.Text = "Проверка отменена"; UpdateStatusText.Text = "Файлы программы не изменены."; }
-            catch (Exception error) { UpdateStatusTitle.Text = "Не удалось подготовить восстановление"; UpdateStatusText.Text = error.Message + " Для загрузки недостающих файлов нажми «Проверить» и выбери подготовку обновления."; }
-            finally
-            {
-                updateCancel.Dispose(); updateCancel = null; updating = false; Busy(false); ShowUpdateOffer();
-                if (closeAfterUpdateCancel) Close();
-            }
-        }
-
-        void OnFullUpdate(object sender, RoutedEventArgs e)
-        {
-            if (App.UpdateProbePending || checkingUpdate || updating || updateOffer == null || runtimeActive || busy || outcomeUnknown) return;
-            AppUpdate.Discard(updatePlan); updatePlan = null; fullUpdateRequested = true;
-            UpdateStatusTitle.Text = "Выбран полный пакет";
-            UpdateStatusText.Text = "Для установки будет загружен весь пакет. Нажми «Обновить», чтобы продолжить.";
-            ShowUpdateOffer();
+            CheckUpdatesButton.IsEnabled = !App.UpdateProbePending && !checkingUpdate && !busy && !updating && !updateHandedOff;
+            InstallUpdateButton.Content = updating ? "Отменить" : "Обновить";
+            InstallUpdateButton.IsEnabled = !App.UpdateProbePending && !checkingUpdate && !updateHandedOff && (updating || (offered && !busy && !runtimeActive && !outcomeUnknown));
         }
 
         void UpdateBytesProgress(Dictionary<string, object> value)
@@ -908,12 +930,12 @@ namespace WindowsClaude.Launcher
             Dispatcher.Invoke(delegate
             {
                 string phase = Text(value, "phase", "");
-                string title = phase == "bootstrap" ? "Загружаем обновлятор" : phase == "planned" ? "План готов" : phase == "prepared" ? "Файлы готовы" : phase == "downloading" ? "Скачиваем изменения" : phase == "assembling" ? "Собираем изменённые файлы" : "Проверяем файлы";
+                string title = phase == "bootstrap" || phase == "planned" ? "Готовим обновление" : phase == "prepared" ? "Файлы готовы" : phase == "downloading" ? "Скачиваем обновление" : phase == "assembling" ? "Готовим файлы" : "Проверяем файлы";
                 UpdateStatusTitle.Text = title; UpdateCaption.Text = title;
                 long done = 0, total = 0;
                 bool measured = Int64.TryParse(Text(value, "done_bytes", ""), out done) && Int64.TryParse(Text(value, "total_bytes", ""), out total) && total > 0;
                 UpdateProgress.IsIndeterminate = !measured;
-                if (measured) { UpdateProgress.Value = Math.Min(100, done * 100.0 / total); UpdateStatusText.Text = BytesText(done) + " из " + BytesText(total) + ". Можно отменить."; }
+                if (measured) { UpdateProgress.Value = Math.Min(100, done * 100.0 / total); UpdateStatusText.Text = UpdateProgress.Value.ToString("0") + "%. Можно отменить."; }
                 else UpdateStatusText.Text = title + ". Можно отменить.";
             });
         }
@@ -935,31 +957,17 @@ namespace WindowsClaude.Launcher
             AppUpdate.Package package = null;
             try
             {
-                if (updateOffer.V2 && !fullUpdateRequested && updatePlan == null)
+                try { package = await AppUpdate.PrepareOfferAsync(Bridge.Root, updateOffer, UpdateBytesProgress, updateCancel.Token); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception)
                 {
-                    updatePlan = await AppUpdate.PlanV2Async(Bridge.Root, updateOffer, UpdateBytesProgress, updateCancel.Token);
-                    UpdateStatusTitle.Text = "Обновление подготовлено к загрузке";
-                    UpdateStatusText.Text = "Проверь объём загрузки и свободного места. Для продолжения нажми «Скачать и установить».";
-                    return;
-                }
-                if (updatePlan != null)
-                {
-                    package = updatePlan; updatePlan = null;
-                    await AppUpdate.PrepareV2Async(package, UpdateBytesProgress, updateCancel.Token);
-                }
-                else
-                {
-                if (fullUpdateRequested && updateOffer.V2)
-                    package = await AppUpdate.BootstrapV2Async(Bridge.Root, updateOffer, UpdateBytesProgress, updateCancel.Token);
-                var downloaded = await AppUpdate.DownloadAsync(fullUpdateRequested ? AppUpdate.FullOffer(updateOffer) : updateOffer, percent => Dispatcher.Invoke(delegate
-                    { UpdateProgress.Value = percent; UpdateCaption.Text = "Загрузка: " + percent + "%"; UpdateStatusText.Text = "Загружено " + percent + "%. Можно отменить."; }), updateCancel.Token);
-                if (package == null) package = downloaded;
-                else { package.Work = downloaded.Work; package.Zip = downloaded.Zip; package.Sha = downloaded.Sha; }
-                UpdateCaption.Text = "Проверяем файлы и готовим установку…";
-                UpdateStatusTitle.Text = "Проверяем файлы";
-                UpdateStatusText.Text = "После проверки панель закроется для установки и откроется снова.";
-                UpdateProgress.IsIndeterminate = true;
-                await AppUpdate.PrepareAsync(Bridge.Root, package, updateCancel.Token);
+                    updateCancel.Token.ThrowIfCancellationRequested();
+                    if (updateOffer.Offline || updateOffer.IndexUrl == null || updateOffer.Bytes <= 0 || runtimeActive || outcomeUnknown || closing) throw;
+                    string size = Math.Ceiling(updateOffer.Bytes / 1048576.0).ToString("0") + " МБ";
+                    if (System.Windows.MessageBox.Show(this, "Не удалось загрузить только изменения. Скачать полный пакет объёмом " + size + "?",
+                        "Обновление Pocket Windows", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) throw;
+                    updateCancel.Token.ThrowIfCancellationRequested();
+                    package = await AppUpdate.PrepareDownloadAsync(Bridge.Root, updateOffer, true, UpdateBytesProgress, updateCancel.Token);
                 }
                 updateCancel.Token.ThrowIfCancellationRequested();
                 if (runtimeActive || outcomeUnknown) throw new InvalidOperationException("Сначала выключи Windows.");
@@ -980,7 +988,6 @@ namespace WindowsClaude.Launcher
             finally
             {
                 if (!updateHandedOff) AppUpdate.Discard(package);
-                if (!updateHandedOff && package != null && package.Offline) updateOffer = null;
                 updateCancel.Dispose(); updateCancel = null; updating = false;
                 if (!closing)
                 {
@@ -1136,7 +1143,6 @@ namespace WindowsClaude.Launcher
 
         void FinishClosing()
         {
-            AppUpdate.Discard(updatePlan); updatePlan = null;
             closing = true; lifecycleTimer.Stop(); saveTimer.Stop(); toastTimer.Stop();
             if (trayIcon != null) { trayIcon.Visible = false; trayIcon.Dispose(); trayIcon = null; }
         }
@@ -1151,6 +1157,7 @@ namespace WindowsClaude.Launcher
                 if (closing || busy || revision != operationRevision) return;
                 if (report == null || !report.ContainsKey("checks"))
                 {
+                    runtimePollFailed = true;
                     UiLog("poll: status not readable: " + Bridge.Message(report));
                     Attention(AttentionPolicy.Classify(false, workState, gatewayState, outcomeUnknown));
                     if (IsVisible) { StatusText.Text = "Состояние Windows не подтверждено"; NextStepText.Text = Bridge.Message(report); CheckedAtText.Text = "Состояние не обновилось. Повтори проверку."; }
@@ -1158,13 +1165,16 @@ namespace WindowsClaude.Launcher
                 }
                 report = MergeRuntimeStatus(report);
                 var state = Child(report, "runtime");
-                bool changed = readinessReport == null || state == null || pendingStartReceipt != null
+                bool changed = runtimePollFailed || readinessReport == null || state == null || pendingStartReceipt != null
                     || workState != Text(state, "work", "unknown") || gatewayState != Text(state, "gateway", "unknown")
                     || Bridge.Ok(report) != Bridge.Ok(readinessReport) || Flag(report, "network_verified") != Flag(readinessReport, "network_verified")
-                    || DisplayState(report) != DisplayState(readinessReport) || FileSharingState(report) != FileSharingState(readinessReport)
+                    || DisplayState(report) != DisplayState(readinessReport)
+                    || new JavaScriptSerializer().Serialize(Child(report, "host_files")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "host_files"))
+                    || new JavaScriptSerializer().Serialize(Child(report, "clipboard")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "clipboard"))
                     || new JavaScriptSerializer().Serialize(Child(report, "checks")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "checks"))
                     || new JavaScriptSerializer().Serialize(Child(report, "capabilities")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "capabilities"))
                     || new JavaScriptSerializer().Serialize(Child(report, "force_stop")) != new JavaScriptSerializer().Serialize(Child(readinessReport, "force_stop"))
+                    || Text(report, "network_warning", "") != Text(readinessReport, "network_warning", "")
                     || Text(report, "message", "") != Text(readinessReport, "message", "") || (pendingOutcome != null && pendingOutcome.IsCompleted);
                 if (changed) { Display(report); Busy(false); }
                 Attention(AttentionPolicy.Classify(true, workState, gatewayState, outcomeUnknown));
@@ -1179,7 +1189,8 @@ namespace WindowsClaude.Launcher
             catch (Exception error)
             {
                 UiLog("poll: exception " + error.GetType().Name);
-                if (!closing && !busy && revision == operationRevision) Attention(AttentionPolicy.Classify(false, workState, gatewayState, outcomeUnknown));
+                if (!closing && !busy && revision == operationRevision)
+                { runtimePollFailed = true; Attention(AttentionPolicy.Classify(false, workState, gatewayState, outcomeUnknown)); }
             }
             finally { runtimePolling = false; }
         }
@@ -1264,7 +1275,7 @@ namespace WindowsClaude.Launcher
             if (FilesSwitch.IsChecked == true && FilesSelected.IsChecked != true) FilesAll.IsChecked = true;
             UpdateFilesRows(); ScheduleSave();
         }
-        void OnFilesMode(object sender, RoutedEventArgs e) { UpdateFilesRows(); if (FilesSelected.IsChecked != true || folders.Count > 0) ScheduleSave(); }
+        void OnFilesMode(object sender, RoutedEventArgs e) { UpdateFilesRows(); ScheduleSave(); }
         void OnAddFolder(object sender, RoutedEventArgs e)
         {
             using (var dialog = new Forms.FolderBrowserDialog { Description = "Папка ПК, которая будет видна в Windows" })
@@ -1279,12 +1290,14 @@ namespace WindowsClaude.Launcher
         void StepMemory(decimal delta)
         {
             decimal gib; if (!TryGiB(MemoryInput.Text, out gib)) gib = 4;
+            gib = Math.Min(MemoryLimitGiB(), Math.Max(1, gib));
             gib = Math.Min(MemoryLimitGiB(), Math.Max(1, Math.Round((gib + delta) * 2, MidpointRounding.AwayFromZero) / 2));
             MemoryInput.Text = gib.ToString("0.#", CultureInfo.CurrentCulture); ScheduleSave();
         }
         void StepCpu(int delta)
         {
             int cpus; if (!Int32.TryParse(CpuInput.Text.Trim(), out cpus)) cpus = 2;
+            cpus = Math.Min(CpuLimit(), Math.Max(1, cpus));
             CpuInput.Text = Math.Min(CpuLimit(), Math.Max(1, cpus + delta)).ToString(CultureInfo.InvariantCulture); ScheduleSave();
         }
         void OnMemoryDown(object sender, RoutedEventArgs e) { StepMemory(-0.5m); }
@@ -1418,7 +1431,7 @@ namespace WindowsClaude.Launcher
                 DockPanel.SetDock(badge, Dock.Left); row.Children.Add(badge);
                 row.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 9, 0, 9), Children = {
                     new TextBlock { Text = Text(item, "name", "Профиль"), Style = (Style)FindResource("RowText"), FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal, TextTrimming = TextTrimming.CharacterEllipsis },
-                    new TextBlock { Text = protocol + ", " + Text(item, "host", "") + (Flag(item, "needs_credentials") ? ", нужен пароль" : ""), Style = (Style)FindResource("Caption"), TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap } } });
+                    new TextBlock { Text = protocol + ", " + Text(item, "host", "") + (Flag(item, "needs_correction") ? ", нужно исправить адрес" : Flag(item, "needs_credentials") ? ", нужен пароль" : ""), Style = (Style)FindResource("Caption"), TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap } } });
                 var button = new System.Windows.Controls.Button { Style = (Style)FindResource("RowNoScale"), Content = row, Padding = new Thickness(0), ToolTip = selected ? "Используется для запуска" : "Использовать для запуска" };
                 button.Click += async delegate { if (!selected) await ProfileAction("select-profile", new Dictionary<string, object> { { "profile_id", id } }); };
                 Rise(row, ProfileList.Children.Count * 45); ProfileList.Children.Add(button);
@@ -1475,7 +1488,7 @@ namespace WindowsClaude.Launcher
         void OnSecretChanged(object sender, RoutedEventArgs e) { if (TypeHttps != null) UpdateHints(); }
         void OnTypeClick(object sender, RoutedEventArgs e) { ProtocolBox.SelectedIndex = Convert.ToInt32(((FrameworkElement)sender).Tag, CultureInfo.InvariantCulture); }
         void ProfileErrorText(string text) { ProfileError.Text = text ?? ""; Show(ProfileError, !String.IsNullOrEmpty(text)); EditorErrorText(text); }
-        void EditorErrorText(string text) { EditorError.Text = text ?? ""; Show(EditorError, !String.IsNullOrEmpty(text)); Show(EditorExtras, String.IsNullOrEmpty(text) && profileId != null); }
+        void EditorErrorText(string text) { EditorError.Text = text ?? ""; Show(EditorError, !String.IsNullOrEmpty(text)); Show(EditorExtras, String.IsNullOrEmpty(text)); Show(ExportButton, profileId != null); }
 
         bool CanReuseCredentials
         {
@@ -1528,9 +1541,8 @@ namespace WindowsClaude.Launcher
         async void OnSaveProfile(object sender, RoutedEventArgs e) { Dictionary<string, object> request; if (TryProfileRequest(out request)) await UseProfile(await ProfileAction("save-profile", request)); }
         async void OnTestProfile(object sender, RoutedEventArgs e)
         {
-            var selected = profiles.FirstOrDefault(item => Flag(item, "selected"));
-            string id = profileId ?? (selected != null ? Text(selected, "profile_id", null) : null);
-            if (id != null) await ProfileAction("test-profile", new Dictionary<string, object> { { "profile_id", id } });
+            Dictionary<string, object> request;
+            if (TryProfileRequest(out request)) await ProfileAction("test-profile", request);
         }
         void OnLinkKey(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) OnAddLink(sender, e); }
         async void OnAddLink(object sender, RoutedEventArgs e)

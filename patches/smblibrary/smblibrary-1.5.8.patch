@@ -1,0 +1,546 @@
+--- a/SMBLibrary/Server/ConnectionState/SMB2AsyncContext.cs
++++ b/SMBLibrary/Server/ConnectionState/SMB2AsyncContext.cs
+@@ -18,5 +18,15 @@
+         public ulong SessionID;
+         public uint TreeID;
+         public object IORequest;
++        public ulong MessageID;
++        public SMB2CommandName CommandName;
++        public ushort CreditCharge;
++        public uint Reserved;
++        public bool SigningRequired;
++        public byte[] SigningKey;
++        public ISMBShare Share;
++        public bool InterimQueued, Completed;
++        public NTStatus? CompletionStatus;
++        public byte[] CompletionBuffer;
+     }
+ }
+--- a/SMBLibrary/Server/ConnectionState/SMB2ConnectionState.cs
++++ b/SMBLibrary/Server/ConnectionState/SMB2ConnectionState.cs
+@@ -126,22 +126,34 @@
+ 
+         public SMB2AsyncContext CreateAsyncContext(FileID fileID, SMB2ConnectionState connection, ulong sessionID, uint treeID)
+         {
+-            ulong? asyncID = AllocateAsyncID();
+-            if (asyncID == null)
+-            {
+-                return null;
+-            }
+-            SMB2AsyncContext context = new SMB2AsyncContext();
+-            context.AsyncID = asyncID.Value;
+-            context.FileID = fileID;
+-            context.Connection = connection;
+-            context.SessionID = sessionID;
+-            context.TreeID = treeID;
+             lock (m_pendingRequests)
+             {
++                int count = 0;
++                foreach (SMB2AsyncContext pending in m_pendingRequests.Values)
++                    if (pending.SessionID == sessionID) count++;
++                if (count >= 64) return null;
++                ulong? asyncID = AllocateAsyncID();
++                if (asyncID == null)
++                {
++                    return null;
++                }
++                SMB2AsyncContext context = new SMB2AsyncContext();
++                context.AsyncID = asyncID.Value;
++                context.FileID = fileID;
++                context.Connection = connection;
++                context.SessionID = sessionID;
++                context.TreeID = treeID;
+                 m_pendingRequests.Add(asyncID.Value, context);
++                return context;
+             }
+-            return context;
++        }
++
++        public SMB2AsyncContext GetAsyncContextByMessageID(ulong sessionID, ulong messageID)
++        {
++            lock (m_pendingRequests)
++                foreach (SMB2AsyncContext pending in m_pendingRequests.Values)
++                    if (pending.SessionID == sessionID && pending.MessageID == messageID) return pending;
++            return null;
+         }
+ 
+         public SMB2AsyncContext GetAsyncContext(ulong asyncID)
+--- a/SMBLibrary/Server/SMB2/CancelHelper.cs
++++ b/SMBLibrary/Server/SMB2/CancelHelper.cs
+@@ -4,10 +4,7 @@
+  * the GNU Lesser Public License as published by the Free Software Foundation,
+  * either version 3 of the License, or (at your option) any later version.
+  */
+-using System;
+-using System.Collections.Generic;
+ using SMBLibrary.SMB2;
+-using Utilities;
+ 
+ namespace SMBLibrary.Server.SMB2
+ {
+@@ -15,47 +12,14 @@
+     {
+         internal static SMB2Command GetCancelResponse(CancelRequest request, SMB2ConnectionState state)
+         {
+-            SMB2Session session = state.GetSession(request.Header.SessionID);
+-            if (request.Header.IsAsync)
+-            {
+-                SMB2AsyncContext context = state.GetAsyncContext(request.Header.AsyncID);
+-                if (context != null)
+-                {
+-                    ISMBShare share = session.GetConnectedTree(context.TreeID);
+-                    OpenFileObject openFile = session.GetOpenFileObject(context.FileID);
+-                    NTStatus status = share.FileStore.Cancel(context.IORequest);
+-                    if (openFile != null)
+-                    {
+-                        state.LogToServer(Severity.Information, "Cancel: Requested cancel on '{0}{1}'. NTStatus: {2}, AsyncID: {3}.", share.Name, openFile.Path, status, context.AsyncID);
+-                    }
+-                    if (status == NTStatus.STATUS_SUCCESS ||
+-                        status == NTStatus.STATUS_CANCELLED ||
+-                        status == NTStatus.STATUS_NOT_SUPPORTED) // See ChangeNotifyHelper.cs
+-                    {
+-                        state.RemoveAsyncContext(context);
+-                        // [MS-SMB2] If the target request is successfully canceled, the target request MUST be failed by sending
+-                        // an ERROR response packet [..] with the status field of the SMB2 header set to STATUS_CANCELLED.
+-                        ErrorResponse response = new ErrorResponse(request.CommandName, NTStatus.STATUS_CANCELLED);
+-                        response.Header.IsAsync = true;
+-                        response.Header.AsyncID = context.AsyncID;
+-                        return response;
+-                    }
+-                    // [MS-SMB2] If the target request is not successfully canceled [..] no response is sent.
+-                    // Note: Failing to respond might cause the client to disconnect the connection as per [MS-SMB2] 3.2.6.1 Request Expiration Timer Event
+-                    return null;
+-                }
+-                else
+-                {
+-                    // [MS-SMB2] If a request is not found [..] no response is sent.
+-                    return null;
+-                }
+-            }
+-            else
+-            {
+-                // [MS-SMB2] the SMB2 CANCEL Request MUST use an ASYNC header for canceling requests that have received an interim response.
+-                // [MS-SMB2] If the target request is not successfully canceled [..] no response is sent.
+-                return null;
+-            }
++            SMB2AsyncContext context = request.Header.IsAsync ? state.GetAsyncContext(request.Header.AsyncID) :
++                state.GetAsyncContextByMessageID(request.Header.SessionID, request.Header.MessageID);
++            if (context != null && context.SessionID == request.Header.SessionID)
++                lock (context)
++                    if (!context.Completed && context.IORequest != null)
++                        context.Share.FileStore.Cancel(context.IORequest);
++            // MS-SMB2 3.3.5.16: CANCEL has no response. Only the original operation completes.
++            return null;
+         }
+     }
+ }
+--- a/SMBLibrary/Server/SMB2/ChangeNotifyHelper.cs
++++ b/SMBLibrary/Server/SMB2/ChangeNotifyHelper.cs
+@@ -5,97 +5,103 @@
+  * either version 3 of the License, or (at your option) any later version.
+  */
+ using System;
+-using System.Collections.Generic;
+ using SMBLibrary.SMB2;
+-using Utilities;
+ 
+ namespace SMBLibrary.Server.SMB2
+ {
+     internal class ChangeNotifyHelper
+     {
+-        /// <remarks>
+-        /// 'NoRemoteChangeNotify' can be set in the registry to prevent the client from sending ChangeNotify requests altogether.
+-        /// </remarks>
+         internal static SMB2Command GetChangeNotifyInterimResponse(ChangeNotifyRequest request, ISMBShare share, SMB2ConnectionState state)
+         {
+             SMB2Session session = state.GetSession(request.Header.SessionID);
+             OpenFileObject openFile = session.GetOpenFileObject(request.FileId);
+-            bool watchTree = (request.Flags & ChangeNotifyFlags.WatchTree) > 0;
+-            SMB2AsyncContext asyncContext = state.CreateAsyncContext(request.FileId, state, request.Header.SessionID, request.Header.TreeID);
+-            // We have to make sure that we don't send an interim response after the final response.
+-            lock (asyncContext)
++            if (openFile == null) return new ErrorResponse(request.CommandName, NTStatus.STATUS_FILE_CLOSED);
++            if (request.OutputBufferLength == 0 || request.OutputBufferLength > 65536)
++                return new ErrorResponse(request.CommandName, NTStatus.STATUS_INVALID_PARAMETER);
++            SMB2AsyncContext context = state.CreateAsyncContext(request.FileId, state, request.Header.SessionID, request.Header.TreeID);
++            if (context == null) return new ErrorResponse(request.CommandName, NTStatus.STATUS_INSUFFICIENT_RESOURCES);
++            lock (context)
+             {
+-                NTStatus status = share.FileStore.NotifyChange(out asyncContext.IORequest, openFile.Handle, request.CompletionFilter, watchTree, (int)request.OutputBufferLength, OnNotifyChangeCompleted, asyncContext);
++                context.CommandName = request.CommandName;
++                context.MessageID = request.Header.MessageID;
++                context.CreditCharge = request.Header.CreditCharge;
++                context.Reserved = request.Header.Reserved;
++                context.SigningRequired = session.SigningRequired || request.Header.IsSigned;
++                context.SigningKey = session.SigningKey == null ? null : (byte[])session.SigningKey.Clone();
++                context.Share = share;
++                NTStatus status;
++                try
++                {
++                    status = share.FileStore.NotifyChange(out context.IORequest, openFile.Handle, request.CompletionFilter,
++                        (request.Flags & ChangeNotifyFlags.WatchTree) != 0, (int)request.OutputBufferLength, OnNotifyChangeCompleted, context);
++                }
++                catch
++                {
++                    context.Completed = true; state.RemoveAsyncContext(context); throw;
++                }
++                var response = new ErrorResponse(request.CommandName, status);
+                 if (status == NTStatus.STATUS_PENDING)
+                 {
+-                    state.LogToServer(Severity.Verbose, "NotifyChange: Monitoring of '{0}{1}' started. AsyncID: {2}.", share.Name, openFile.Path, asyncContext.AsyncID);
+-                }
+-                else if (status == NTStatus.STATUS_NOT_SUPPORTED)
+-                {
+-                    // [MS-SMB2] If the underlying object store does not support change notifications, the server MUST fail this request with STATUS_NOT_SUPPORTED.
+-                    // Unfortunately, Windows 7 / 8 / 10 will immediately retry sending another ChangeNotify request upon getting STATUS_NOT_SUPPORTED,
+-                    // To prevent flooding, we must return a valid interim response (Status set to STATUS_PENDING and SMB2_FLAGS_ASYNC_COMMAND bit is set in Flags).
+-                    status = NTStatus.STATUS_PENDING;
++                    response.Header.IsAsync = true;
++                    response.Header.AsyncID = context.AsyncID;
+                 }
+                 else
+                 {
+-                    state.RemoveAsyncContext(asyncContext);
+-                }
+-
+-                ErrorResponse response = new ErrorResponse(request.CommandName, status);
+-                if (status == NTStatus.STATUS_PENDING)
+-                {
+-                    response.Header.IsAsync = true;
+-                    response.Header.AsyncID = asyncContext.AsyncID;
++                    context.Completed = true; state.RemoveAsyncContext(context);
+                 }
+                 return response;
+             }
+         }
+ 
+-        private static void OnNotifyChangeCompleted(NTStatus status, byte[] buffer, object context)
++        internal static void InterimResponseQueued(SMB2ConnectionState connection, SMB2Command response)
+         {
+-            SMB2AsyncContext asyncContext = (SMB2AsyncContext)context;
+-            // Wait until the interim response has been sent
+-            lock (asyncContext)
++            if (!response.Header.IsAsync || response.Header.Status != NTStatus.STATUS_PENDING) return;
++            SMB2AsyncContext context = connection.GetAsyncContext(response.Header.AsyncID);
++            if (context == null) return;
++            lock (context)
+             {
+-                SMB2ConnectionState connection = asyncContext.Connection;
+-                connection.RemoveAsyncContext(asyncContext);
+-                SMB2Session session = connection.GetSession(asyncContext.SessionID);
+-                if (session != null)
+-                {
+-                    OpenFileObject openFile = session.GetOpenFileObject(asyncContext.FileID);
+-                    if (openFile != null)
+-                    {
+-                        connection.LogToServer(Severity.Verbose, "NotifyChange: Monitoring of '{0}{1}' completed. NTStatus: {2}. AsyncID: {3}", openFile.ShareName, openFile.Path, status, asyncContext.AsyncID);
+-                    }
++                context.InterimQueued = true;
++                if (context.CompletionStatus.HasValue) Complete(context);
++            }
++        }
+ 
+-                    if (status == NTStatus.STATUS_SUCCESS ||
+-                        status == NTStatus.STATUS_NOTIFY_CLEANUP ||
+-                        status == NTStatus.STATUS_NOTIFY_ENUM_DIR)
+-                    {
+-                        ChangeNotifyResponse response = new ChangeNotifyResponse();
+-                        response.Header.Status = status;
+-                        response.Header.IsAsync = true;
+-                        response.Header.IsSigned = session.SigningRequired;
+-                        response.Header.AsyncID = asyncContext.AsyncID;
+-                        response.Header.SessionID = asyncContext.SessionID;
+-                        response.OutputBuffer = buffer;
++        private static void OnNotifyChangeCompleted(NTStatus status, byte[] buffer, object value)
++        {
++            var context = (SMB2AsyncContext)value;
++            lock (context)
++            {
++                if (context.Completed) return;
++                context.CompletionStatus = status;
++                context.CompletionBuffer = buffer;
++                // A callback can beat the helper return; enqueue the interim packet first.
++                if (context.InterimQueued) Complete(context);
++            }
++        }
+ 
+-                        SMBServer.EnqueueResponse(connection, response);
+-                    }
+-                    else
+-                    {
+-                        // [MS-SMB2] If the object store returns an error, the server MUST fail the request with the error code received.
+-                        ErrorResponse response = new ErrorResponse(SMB2CommandName.ChangeNotify);
+-                        response.Header.Status = status;
+-                        response.Header.IsAsync = true;
+-                        response.Header.IsSigned = session.SigningRequired;
+-                        response.Header.AsyncID = asyncContext.AsyncID;
+-
+-                        SMBServer.EnqueueResponse(connection, response);
+-                    }
+-                }
+-            }
++        private static void Complete(SMB2AsyncContext context)
++        {
++            if (context.Completed) return;
++            context.Completed = true;
++            context.Connection.RemoveAsyncContext(context);
++            NTStatus status = context.CompletionStatus.Value;
++            SMB2Command response;
++            if (status == NTStatus.STATUS_SUCCESS || status == NTStatus.STATUS_NOTIFY_CLEANUP || status == NTStatus.STATUS_NOTIFY_ENUM_DIR)
++                response = new ChangeNotifyResponse { OutputBuffer = context.CompletionBuffer };
++            else
++                response = new ErrorResponse(context.CommandName, status);
++            response.Header.Status = status;
++            response.Header.IsAsync = true;
++            response.Header.AsyncID = context.AsyncID;
++            response.Header.MessageID = context.MessageID;
++            response.Header.SessionID = context.SessionID;
++            response.Header.TreeID = context.TreeID;
++            response.Header.Reserved = context.Reserved;
++            response.Header.CreditCharge = context.CreditCharge;
++            response.Header.Credits = 0;
++            response.Header.IsSigned = context.SigningRequired;
++            SMBServer.EnqueueResponse(context.Connection, response, context.SigningKey);
++            context.IORequest = null;
++            context.CompletionBuffer = null;
+         }
+     }
+ }
+--- a/SMBLibrary/Server/SMB2/NegotiateHelper.cs
++++ b/SMBLibrary/Server/SMB2/NegotiateHelper.cs
+@@ -46,7 +46,7 @@
+             {
+                 throw new ArgumentException("SMB2 dialect is not present");
+             }
+-            response.SecurityMode = SecurityMode.SigningEnabled;
++            response.SecurityMode = SecurityMode.SigningEnabled | SecurityMode.SigningRequired;
+             response.ServerGuid = serverGuid;
+             if (state.Dialect != SMBDialect.SMB202 && transportType == SMBTransportType.DirectTCPTransport)
+             {
+@@ -96,7 +96,7 @@
+                 state.LogToServer(Severity.Verbose, "Negotiate failure: None of the requested SMB2 dialects is supported");
+                 return new ErrorResponse(request.CommandName, NTStatus.STATUS_NOT_SUPPORTED);
+             }
+-            response.SecurityMode = SecurityMode.SigningEnabled;
++            response.SecurityMode = SecurityMode.SigningEnabled | SecurityMode.SigningRequired;
+             response.ServerGuid = serverGuid;
+             if (state.Dialect != SMBDialect.SMB202 && transportType == SMBTransportType.DirectTCPTransport)
+             {
+--- a/SMBLibrary/Server/SMB2/QueryDirectoryHelper.cs
++++ b/SMBLibrary/Server/SMB2/QueryDirectoryHelper.cs
+@@ -32,11 +32,26 @@
+ 
+             FileSystemShare fileSystemShare = (FileSystemShare)share;
+ 
++            int fixedLength;
++            switch (request.FileInformationClass)
++            {
++                case FileInformationClass.FileDirectoryInformation: fixedLength = FileDirectoryInformation.FixedLength; break;
++                case FileInformationClass.FileFullDirectoryInformation: fixedLength = FileFullDirectoryInformation.FixedLength; break;
++                case FileInformationClass.FileBothDirectoryInformation: fixedLength = FileBothDirectoryInformation.FixedLength; break;
++                case FileInformationClass.FileIdFullDirectoryInformation: fixedLength = FileIdFullDirectoryInformation.FixedLength; break;
++                case FileInformationClass.FileIdBothDirectoryInformation: fixedLength = FileIdBothDirectoryInformation.FixedLength; break;
++                case FileInformationClass.FileNamesInformation: fixedLength = FileNamesInformation.FixedLength; break;
++                default: return new ErrorResponse(request.CommandName, NTStatus.STATUS_INVALID_INFO_CLASS);
++            }
++            // MS-FSA 2.1.5.6.3: the fixed portion must fit before any enumeration state changes.
++            if (request.OutputBufferLength < fixedLength)
++                return new ErrorResponse(request.CommandName, NTStatus.STATUS_INFO_LENGTH_MISMATCH);
++
+             FileID fileID = request.FileId;
+             OpenSearch openSearch = session.GetOpenSearch(fileID);
+-            if (openSearch == null || request.Reopen)
++            if (openSearch == null || request.Reopen || request.Restart)
+             {
+-                if (request.Reopen)
++                if (request.Reopen || request.Restart)
+                 {
+                     session.RemoveOpenSearch(fileID);
+                 }
+@@ -89,6 +104,16 @@
+                 }
+                 else
+                 {
++                    if (page.Count == 0)
++                    {
++                        // Return the fixed record and fitting filename bytes, retaining this entry for retry.
++                        byte[] complete = fileInformation.GetBytes();
++                        byte[] partial = new byte[(int)request.OutputBufferLength];
++                        Array.Copy(complete, partial, partial.Length);
++                        Array.Clear(partial, 0, 4);
++                        return new QueryDirectoryResponse { OutputBuffer = partial,
++                            Header = { Status = NTStatus.STATUS_BUFFER_OVERFLOW } };
++                    }
+                     break;
+                 }
+ 
+--- a/SMBLibrary/Server/SMB2/SessionSetupHelper.cs
++++ b/SMBLibrary/Server/SMB2/SessionSetupHelper.cs
+@@ -80,7 +80,7 @@
+                 if (!isGuest.HasValue || !isGuest.Value)
+                 {
+                     state.LogToServer(Severity.Information, "Session Setup: User '{0}' authenticated successfully (Domain: '{1}', Workstation: '{2}', OS version: '{3}').", userName, domainName, machineName, osVersion);
+-                    bool signingRequired = (request.SecurityMode & SecurityMode.SigningRequired) > 0;
++                    bool signingRequired = true;
+                     SMB2Dialect smb2Dialect = SMBServer.ToSMB2Dialect(state.Dialect);
+                     byte[] signingKey = SMB2Cryptography.GenerateSigningKey(sessionKey, smb2Dialect, null);
+                     state.CreateSession(sessionID, userName, machineName, sessionKey, accessToken, signingRequired, signingKey);
+--- a/SMBLibrary/Server/SMBServer.cs
++++ b/SMBLibrary/Server/SMBServer.cs
+@@ -403,6 +403,12 @@
+                         return;
+                     }
+                     state.LogToServer(Severity.Verbose, "SMB2 request chain received: {0} requests, First request: {1}, Packet length: {2}", requestChain.Count, requestChain[0].CommandName.ToString(), packet.Length);
++                    if (!ValidateIncomingSignatures(packet.Trailer, requestChain, state))
++                    {
++                        state.ClientSocket.Close();
++                        state.ReceiveBuffer.Dispose();
++                        return;
++                    }
+                     ProcessSMB2RequestChain(requestChain, ref state);
+                 }
+                 else
+--- a/SMBLibrary/Server/SMBServer.SMB2.cs
++++ b/SMBLibrary/Server/SMBServer.SMB2.cs
+@@ -18,12 +18,27 @@
+         private void ProcessSMB2RequestChain(List<SMB2Command> requestChain, ref ConnectionState state)
+         {
+             List<SMB2Command> responseChain = new List<SMB2Command>();
++            byte[] responseSigningKey = null;
+             FileID? fileID = null;
+             NTStatus? fileIDStatus = null;
++            ulong relatedSessionID = 0;
++            uint relatedTreeID = 0;
+             foreach (SMB2Command request in requestChain)
+             {
+-                SMB2Command response;
+-                if (request.Header.IsRelatedOperations && RequestContainsFileID(request))
++                if (request.Header.IsRelatedOperations)
++                {
++                    request.Header.SessionID = relatedSessionID;
++                    request.Header.TreeID = relatedTreeID;
++                }
++                else
++                {
++                    fileID = null;
++                    fileIDStatus = null;
++                }
++                SMB2Session originalSession = state is SMB2ConnectionState ? ((SMB2ConnectionState)state).GetSession(request.Header.SessionID) : null;
++                if (responseChain.Count == 0 && originalSession != null && originalSession.SigningKey != null)
++                    responseSigningKey = (byte[])originalSession.SigningKey.Clone();
++                SMB2Command response;                if (request.Header.IsRelatedOperations && RequestContainsFileID(request))
+                 {
+                     if (fileIDStatus != null && fileIDStatus != NTStatus.STATUS_SUCCESS && fileIDStatus != NTStatus.STATUS_BUFFER_OVERFLOW)
+                     {
+@@ -55,6 +70,10 @@
+                 if (response != null)
+                 {
+                     UpdateSMB2Header(response, request, state);
++                    relatedSessionID = response.Header.SessionID;
++                    relatedTreeID = response.Header.TreeID;
++                    if (response is LogoffResponse && originalSession != null && originalSession.SigningRequired)
++                        response.Header.IsSigned = true;
+                     responseChain.Add(response);
+                     if (GeneratesFileID(response))
+                     {
+@@ -69,7 +88,10 @@
+             }
+             if (responseChain.Count > 0)
+             {
+-                EnqueueResponseChain(state, responseChain);
++                EnqueueResponseChain(state, responseChain, responseSigningKey);
++                if (state is SMB2ConnectionState)
++                    foreach (SMB2Command response in responseChain)
++                        ChangeNotifyHelper.InterimResponseQueued((SMB2ConnectionState)state, response);
+             }
+         }
+ 
+@@ -117,6 +139,8 @@
+ 
+         private SMB2Command ProcessSMB2Command(SMB2Command command, SMB2ConnectionState state)
+         {
++            if (command is CancelRequest)
++                return CancelHelper.GetCancelResponse((CancelRequest)command, state);
+             if (command is SessionSetupRequest)
+             {
+                 return SessionSetupHelper.GetSessionSetupResponse((SessionSetupRequest)command, m_securityProvider, state);
+@@ -219,17 +243,17 @@
+             return new ErrorResponse(command.CommandName, NTStatus.STATUS_NOT_SUPPORTED);
+         }
+ 
+-        internal static void EnqueueResponse(ConnectionState state, SMB2Command response)
++        internal static void EnqueueResponse(ConnectionState state, SMB2Command response, byte[] signingKey = null)
+         {
+             List<SMB2Command> responseChain = new List<SMB2Command>();
+             responseChain.Add(response);
+-            EnqueueResponseChain(state, responseChain);
+-        }
+-
+-        private static void EnqueueResponseChain(ConnectionState state, List<SMB2Command> responseChain)
+-        {
+-            byte[] signingKey = null;
+-            if (state is SMB2ConnectionState)
++            EnqueueResponseChain(state, responseChain, signingKey);
++        }
++
++        private static void EnqueueResponseChain(ConnectionState state, List<SMB2Command> responseChain, byte[] fallbackSigningKey = null)
++        {
++            byte[] signingKey = fallbackSigningKey;
++            if (signingKey == null && state is SMB2ConnectionState)
+             {
+                 // Note: multiple sessions MAY be multiplexed on the same connection, so theoretically
+                 // we could have compounding unrelated requests from different sessions.
+--- a/SMBLibrary/SMB2/Commands/SMB2Command.cs
++++ b/SMBLibrary/SMB2/Commands/SMB2Command.cs
+@@ -409,7 +409,7 @@
+                         if (structureSize == QueryDirectoryResponse.DeclaredSize)
+                         {
+                             NTStatus status = (NTStatus)LittleEndianConverter.ToUInt32(buffer, offset + 8);
+-                            if (status == NTStatus.STATUS_SUCCESS)
++                            if (status == NTStatus.STATUS_SUCCESS || status == NTStatus.STATUS_BUFFER_OVERFLOW)
+                             {
+                                 return new QueryDirectoryResponse(buffer, offset);
+                             }
+--- a/SMBLibrary.Win32/NTFileStore/NTDirectoryFileSystem.cs
++++ b/SMBLibrary.Win32/NTFileStore/NTDirectoryFileSystem.cs
+@@ -157,9 +157,17 @@
+             UNICODE_STRING objectName = new UNICODE_STRING(nativePath);
+             OBJECT_ATTRIBUTES objectAttributes = InitializeObjectAttributes(objectName);
+             IO_STATUS_BLOCK ioStatusBlock;
+-            NTStatus status = NtCreateFile(out handle, (uint)desiredAccess, ref objectAttributes, out ioStatusBlock, ref allocationSize, fileAttributes, shareAccess, createDisposition, createOptions, IntPtr.Zero, 0);
+-            fileStatus = (FileStatus)ioStatusBlock.Information;
+-            return status;
++            try
++            {
++                NTStatus status = NtCreateFile(out handle, (uint)desiredAccess, ref objectAttributes, out ioStatusBlock, ref allocationSize, fileAttributes, shareAccess, createDisposition, createOptions, IntPtr.Zero, 0);
++                fileStatus = (FileStatus)ioStatusBlock.Information;
++                return status;
++            }
++            finally
++            {
++                Marshal.FreeHGlobal(objectAttributes.ObjectName);
++                objectName.Dispose();
++            }
+         }
+ 
+         private string ToNativePath(string path)
+@@ -264,6 +272,8 @@
+             IO_STATUS_BLOCK ioStatusBlock;
+             byte[] buffer = new byte[QueryDirectoryBufferSize];
+             UNICODE_STRING fileNameStructure = new UNICODE_STRING(fileName);
++            try
++            {
+             result = new List<QueryDirectoryFileInformation>();
+             bool restartScan = true;
+             while (true)
+@@ -282,8 +292,9 @@
+                 result.AddRange(page);
+                 restartScan = false;
+             }
+-            fileNameStructure.Dispose();
+             return NTStatus.STATUS_SUCCESS;
++            }
++            finally { fileNameStructure.Dispose(); }
+         }
+ 
+         public NTStatus GetFileInformation(out FileInformation result, object handle, FileInformationClass informationClass)

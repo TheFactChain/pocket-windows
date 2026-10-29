@@ -18,13 +18,12 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly:System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]
-
 namespace WindowsClaude.GuestFiles
 {
-    public sealed class Config { public string Nonce,Username,Password;public readonly List<Share> Shares=new List<Share>(); }
+    public sealed class Config { public string Nonce,Username,Password,ClipboardNonce;public bool ClipboardEnabled;public int ClipboardPort=27844;public readonly List<Share> Shares=new List<Share>(); }
     public sealed class Share { public string Name,Label,PreferredLetter; }
     public sealed class Mapping { public string Name,Letter; }
+    public sealed class NetworkConnection { public string Remote,Letter; }
     public sealed class NicState { public string Id,Mac;public bool Up,HasGateway,HasDns;public string[] Addresses=new string[0],Masks=new string[0],Gateways=new string[0],DnsServers=new string[0]; }
     public interface INicConfiguration { NicState[] Read();void Configure(string id); }
     public sealed class Outcome
@@ -36,6 +35,7 @@ namespace WindowsClaude.GuestFiles
     public interface INetwork
     {
         IEnumerable<string> UsedLetters();
+        int Enumerate(out List<NetworkConnection> connections);
         int GetConnection(string letter,out string remote);
         int Add(string remote,string letter,string username,string password,uint flags);
         int Cancel(string letter,uint flags,bool force);
@@ -90,6 +90,8 @@ namespace WindowsClaude.GuestFiles
                     int start=offset;offset++;if(current!='0')while(offset<text.Length&&text[offset]>='0'&&text[offset]<='9')offset++;
                     int number;if(!Int32.TryParse(text.Substring(start,offset-start),NumberStyles.None,CultureInfo.InvariantCulture,out number))throw Invalid();return number;
                 }
+                if(current=='t'&&offset+4<=text.Length&&text.Substring(offset,4)=="true"){offset+=4;return true;}
+                if(current=='f'&&offset+5<=text.Length&&text.Substring(offset,5)=="false"){offset+=5;return false;}
                 throw Invalid();
             }
             internal object Read(){object value=Value(0);Space();if(offset!=text.Length)throw Invalid();return value;}
@@ -102,10 +104,19 @@ namespace WindowsClaude.GuestFiles
         static bool Name(string name){return Matches(name,"PC_[A-Za-z0-9_]{1,48}");}
         public static Config ParseConfig(string text)
         {
-            var values=Object(new Reader(text).Read(),"schema","session_nonce","username","password","shares");
+            var raw=new Reader(text).Read() as Dictionary<string,object>;
+            var values=raw!=null&&raw.ContainsKey("clipboard")?Object(raw,"schema","session_nonce","username","password","shares","clipboard"):Object(raw,"schema","session_nonce","username","password","shares");
             if(!(values["schema"] is int)||(int)values["schema"]!=1)throw Invalid();
             var config=new Config{Nonce=Text(values,"session_nonce"),Username=Text(values,"username"),Password=Text(values,"password")};
             if(!Matches(config.Nonce,"[A-Fa-f0-9]{32}")||!Matches(config.Username,"WCP_[A-Za-z0-9_]{1,32}")||!Matches(config.Password,"[A-Za-z0-9_-]{32,128}"))throw Invalid();
+            if(values.ContainsKey("clipboard"))
+            {
+                var clipboard=Object(values["clipboard"],"enabled","port","nonce");
+                if(!(clipboard["enabled"] is bool)||!(clipboard["port"] is int)||(int)clipboard["port"]!=27844)throw Invalid();
+                config.ClipboardNonce=Text(clipboard,"nonce");
+                if(!Matches(config.ClipboardNonce,"[a-f0-9]{32}")||String.Equals(config.ClipboardNonce,config.Nonce,StringComparison.OrdinalIgnoreCase))throw Invalid();
+                config.ClipboardEnabled=(bool)clipboard["enabled"];
+            }
             var shares=values["shares"] as List<object>;if(shares==null)throw Invalid();var names=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach(object entry in shares)
             {
@@ -178,26 +189,92 @@ namespace WindowsClaude.GuestFiles
                 bool available=false;for(int attempt=0;attempt<=60;attempt++){if(ready()){available=true;break;}if(attempt<60)wait();}
                 if(!available){result.Code="NIC_NOT_READY";return result;}
             }
+            List<NetworkConnection> current;
+            if(!Connections(network,out current)){result.Code="CONNECTION_INSPECTION_FAILED";return result;}
             foreach(Mapping old in previous)
             {
-                if(old.Letter.Length==0){result.Code="UNLETTERED_CONNECTION_REMAINS";continue;}
-                string remote;int status=network.GetConnection(old.Letter,out remote);
-                if(status!=0&&status!=2250){result.Code="CONNECTION_INSPECTION_FAILED";return result;}
-                if(status==0&&String.Equals(remote,Server+"\\"+old.Name,StringComparison.OrdinalIgnoreCase))
-                {if(network.Cancel(old.Letter,0,false)!=0){result.Code="OWN_MAPPING_BUSY";return result;}}
-                result.Owned.Remove(old);try{persist(result.Owned);}catch{result.Code="OWN_RECEIPT_WRITE_FAILED";return result;}
+                bool connected;
+                if(old.Letter.Length==0)
+                {
+                    if(!Connections(network,out current)){result.Code="CONNECTION_INSPECTION_FAILED";return result;}
+                    connected=current.Any(item=>MatchesConnection(item,old));
+                    if(connected&&UnownedLetter(current,old,result.Owned)){result.Code="UNOWNED_CONNECTION_REMAINS";return result;}
+                }
+                else
+                {
+                    string remote;int status=network.GetConnection(old.Letter,out remote);
+                    if(status!=0&&status!=2250){result.Code="CONNECTION_INSPECTION_FAILED";return result;}
+                    connected=status==0&&String.Equals(remote,Remote(old),StringComparison.OrdinalIgnoreCase);
+                }
+                if(connected)
+                {
+                    int cancelled=network.Cancel(old.Letter.Length==0?Remote(old):old.Letter,0,false);
+                    if(cancelled!=0&&cancelled!=2250){result.Code="OWN_MAPPING_BUSY";return result;}
+                }
+                if(!PersistOwned(result,result.Owned.Where(item=>!System.Object.ReferenceEquals(item,old)).ToList(),persist))return result;
             }
-            if(!result.Success)return result;
+            if(previous.Count>0&&!Connections(network,out current)){result.Code="CONNECTION_INSPECTION_FAILED";return result;}
+            if(current.Any(item=>ReservedRemote(item.Remote))){result.Code="UNOWNED_CONNECTION_REMAINS";return result;}
             if(config.Shares.Count==0)return result;
             var used=new HashSet<string>(network.UsedLetters(),StringComparer.OrdinalIgnoreCase);used.Add("C");
             foreach(Share share in config.Shares)
             {
-                string letter=ChooseLetter(share.PreferredLetter,used);int status=network.Add(Server+"\\"+share.Name,letter,config.Username,config.Password,4);
-                if(status!=0){result.Code=status==1219?"CREDENTIAL_CONFLICT":"MAPPING_FAILED";return result;}
-                var mapped=new Mapping{Name=share.Name,Letter=letter};result.Mappings.Add(mapped);result.Owned.Add(mapped);if(letter.Length>0)used.Add(letter);else result.NeedsShortcut=true;
-                try{persist(result.Owned);}catch{result.Code="OWN_RECEIPT_WRITE_FAILED";return result;}
+                string letter=ChooseLetter(share.PreferredLetter,used);var mapped=new Mapping{Name=share.Name,Letter=letter};
+                if(!PersistOwned(result,result.Owned.Concat(new[]{mapped}).ToList(),persist))return result;
+                int status;
+                try{status=network.Add(Remote(mapped),letter,config.Username,config.Password,4);}
+                catch{RollbackUncertain(result,mapped,network,persist);return result;}
+                if(status!=0)
+                {
+                    if(PersistOwned(result,result.Owned.Where(item=>!System.Object.ReferenceEquals(item,mapped)).ToList(),persist))result.Code=status==1219?"CREDENTIAL_CONFLICT":"MAPPING_FAILED";
+                    return result;
+                }
+                result.Mappings.Add(mapped);if(letter.Length>0)used.Add(letter);else result.NeedsShortcut=true;
             }
             return result;
+        }
+        static string Remote(Mapping mapping){return Server+"\\"+mapping.Name;}
+        static bool MatchesConnection(NetworkConnection connection,Mapping mapping){return String.Equals(connection.Letter,mapping.Letter,StringComparison.OrdinalIgnoreCase)&&String.Equals(connection.Remote,Remote(mapping),StringComparison.OrdinalIgnoreCase);}
+        static bool ReservedRemote(string remote){string prefix=Server+"\\PC_";return remote.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)&&Matches(remote.Substring(prefix.Length),"[A-Za-z0-9_]{1,48}");}
+        static bool UnownedLetter(IEnumerable<NetworkConnection> current,Mapping mapping,IEnumerable<Mapping> owned){return current.Any(item=>item.Letter.Length>0&&String.Equals(item.Remote,Remote(mapping),StringComparison.OrdinalIgnoreCase)&&!owned.Any(record=>MatchesConnection(item,record)));}
+        static bool Connections(INetwork network,out List<NetworkConnection> current)
+        {
+            current=null;
+            try{return network.Enumerate(out current)==0&&current!=null&&current.Count<=1024&&current.All(item=>item!=null&&!String.IsNullOrEmpty(item.Remote)&&item.Letter!=null&&Matches(item.Letter,"[A-Z]?"));}
+            catch{return false;}
+        }
+        static bool PersistOwned(Outcome result,List<Mapping> owned,Action<List<Mapping>> persist)
+        {
+            try{persist(owned);result.Owned.Clear();result.Owned.AddRange(owned);return true;}
+            catch{result.Code="OWN_RECEIPT_WRITE_FAILED";return false;}
+        }
+        static void RollbackUncertain(Outcome result,Mapping mapping,INetwork network,Action<List<Mapping>> persist)
+        {
+            result.Code="MAPPING_OUTCOME_UNKNOWN";
+            try
+            {
+                List<NetworkConnection> current;if(!Connections(network,out current))return;
+                bool connected;
+                if(mapping.Letter.Length==0)
+                {
+                    connected=current.Any(item=>MatchesConnection(item,mapping));
+                    if(connected&&UnownedLetter(current,mapping,result.Owned)){result.Code="UNOWNED_CONNECTION_REMAINS";return;}
+                }
+                else
+                {
+                    string remote;int status=network.GetConnection(mapping.Letter,out remote);
+                    if(status!=0&&status!=2250)return;
+                    if(status==0&&!String.Equals(remote,Remote(mapping),StringComparison.OrdinalIgnoreCase))return;
+                    connected=status==0;
+                }
+                if(connected)
+                {
+                    int cancelled=network.Cancel(mapping.Letter.Length==0?Remote(mapping):mapping.Letter,0,false);
+                    if(cancelled!=0&&cancelled!=2250){result.Code="OWN_MAPPING_BUSY";return;}
+                }
+                if(PersistOwned(result,result.Owned.Where(item=>!System.Object.ReferenceEquals(item,mapping)).ToList(),persist))result.Code="MAPPING_FAILED";
+            }
+            catch{result.Code="MAPPING_OUTCOME_UNKNOWN";}
         }
         public static string OwnedReceipt(IEnumerable<Mapping> mappings){return Json.Serialize(mappings.Select(item=>new{name=item.Name,letter=item.Letter}).ToArray());}
         public static Dictionary<string,string> ExplorerLabels(Config config,Outcome outcome)
@@ -219,6 +296,79 @@ namespace WindowsClaude.GuestFiles
             catch{if(outcome.Success)outcome.Code="EXPLORER_LABEL_FAILED";}
         }
         public static string Receipt(Config config,Outcome outcome){return Json.Serialize(new{schema=1,session_nonce=config==null?null:config.Nonce,success=outcome.Success,code=outcome.Code,mappings=outcome.Mappings.Select(item=>new{name=item.Name,letter=item.Letter}).ToArray()});}
+        public const long MaxReceiptSerial=9007199254740991L;
+        public static Outcome VerifyMappings(Config config,Outcome applied,INetwork network,Func<bool> ready)
+        {
+            if(applied==null)throw new ArgumentNullException("applied");
+            var result=new Outcome{Code=applied.Code,NeedsShortcut=applied.NeedsShortcut};
+            result.Mappings.AddRange(applied.Mappings.Select(item=>new Mapping{Name=item.Name,Letter=item.Letter}));
+            result.Owned.AddRange(applied.Owned.Select(item=>new Mapping{Name=item.Name,Letter=item.Letter}));
+            if(config==null){result.Code="CONFIG_INVALID";return result;}
+            List<NetworkConnection> current;
+            if(!Connections(network,out current)){result.Code="CONNECTION_INSPECTION_FAILED";return result;}
+            try{if(config.Shares.Count>0&&!ready()){result.Code="NIC_NOT_READY";return result;}}
+            catch(Exception){result.Code="NIC_NOT_READY";return result;}
+            // Rebuild only the current report. The original apply result and durable
+            // ownership stay untouched, so a later probe can recover without remap.
+            result.Mappings.Clear();
+            var expected=new HashSet<string>(config.Shares.Select(item=>item.Name),StringComparer.OrdinalIgnoreCase);
+            var owned=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if(expected.Count!=config.Shares.Count||result.Owned.Count!=expected.Count||result.Owned.Any(item=>!Name(item.Name)||!Matches(item.Letter,"[A-BD-Z]?")||!expected.Contains(item.Name)||!owned.Add(item.Name)))
+            {result.Code="OWN_RECEIPT_MISMATCH";return result;}
+            result.Code="OK";
+            foreach(Share share in config.Shares)
+            {
+                Mapping mapping=result.Owned.Single(item=>String.Equals(item.Name,share.Name,StringComparison.OrdinalIgnoreCase));
+                int matches=current.Count(item=>MatchesConnection(item,mapping));
+                if(matches!=1)
+                {
+                    result.Code=mapping.Letter.Length>0&&current.Any(item=>String.Equals(item.Letter,mapping.Letter,StringComparison.OrdinalIgnoreCase))?"MAPPING_CHANGED":"MAPPING_MISSING";
+                    return result;
+                }
+                if(mapping.Letter.Length>0&&current.Count(item=>String.Equals(item.Letter,mapping.Letter,StringComparison.OrdinalIgnoreCase))!=1)
+                {result.Code="MAPPING_CHANGED";return result;}
+                result.Mappings.Add(new Mapping{Name=share.Name,Letter=mapping.Letter});
+            }
+            return result;
+        }
+        public static string LiveReceipt(Config config,Outcome outcome,long serial,string clipboardCode=null)
+        {
+            if(config==null||!Matches(config.Nonce,"[a-f0-9]{32}")||outcome==null)throw new ArgumentException("Invalid live receipt");
+            if(serial<1||serial>MaxReceiptSerial)throw new ArgumentOutOfRangeException("serial");
+            string status="off",code="OFF";
+            if(config.ClipboardEnabled)
+            {
+                code=Matches(clipboardCode,"[A-Z_]{1,64}")?clipboardCode:"UNCONFIRMED";
+                switch(code)
+                {
+                    case "READY":case "FILES_READY":case "CONNECTED":status="ready";break;
+                    case "WAITING":case "RECONNECTING":case "NIC_UNAVAILABLE":status="connecting";break;
+                    case "START_FAILED":case "PROTOCOL_FAILED":case "FILES_FAILED":case "CLIPBOARD_READ_FAILED":case "CLIPBOARD_LISTENER_FAILED":case "CLEANUP_FAILED":status="failed";break;
+                    default:status="unconfirmed";break;
+                }
+            }
+            string fileCode=Matches(outcome.Code,"[A-Z_]{1,64}")?outcome.Code:"APPLY_FAILED";
+            return Json.Serialize(new{schema=2,session_nonce=config.Nonce,success=fileCode=="OK",code=fileCode,mappings=outcome.Mappings.Select(item=>new{name=item.Name,letter=item.Letter}).ToArray(),serial=serial,clipboard=new{status=status,code=code}});
+        }
+        public static long NextReceiptSerial(long previous,long clock)
+        {
+            if(previous<0||previous>=MaxReceiptSerial||clock<0||clock>MaxReceiptSerial)throw new ArgumentOutOfRangeException("serial");
+            return Math.Max(previous+1,clock);
+        }
+        public static long HeartbeatTick(Config config,Outcome applied,INetwork network,Func<bool> ready,long previous,Func<long> clock,Func<string> clipboardCode,Action<string> send)
+        {
+            long serial=NextReceiptSerial(previous,clock());
+            Outcome verified=VerifyMappings(config,applied,network,ready);string status=null;
+            try{status=clipboardCode();}catch(Exception){}
+            try{send(LiveReceipt(config,verified,serial,status));}catch(Exception){}
+            return serial;
+        }
+        public static int WithApplyMutex(Mutex mutex,Func<int> work)
+        {
+            bool held;try{held=mutex.WaitOne(0);}catch(AbandonedMutexException){held=true;}
+            if(!held)return 2;
+            try{return work();}finally{mutex.ReleaseMutex();}
+        }
         static void RequireGuest(){GuestEnvironment.Require();}
         static void NoReparse(string path){for(string item=Path.GetFullPath(path);!String.IsNullOrEmpty(item);item=Path.GetDirectoryName(item))if((File.Exists(item)||Directory.Exists(item))&&(File.GetAttributes(item)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("REPARSE_PATH_REFUSED");}
         static string ReadBounded(string path)
@@ -262,6 +412,45 @@ namespace WindowsClaude.GuestFiles
         }
         sealed class WinNet : INetwork
         {
+            public int Enumerate(out List<NetworkConnection> connections)
+            {
+                connections=new List<NetworkConnection>();IntPtr handle;int status=WNetOpenEnum(1,1,0,IntPtr.Zero,out handle);if(status!=0)return status;
+                try
+                {
+                    int capacity=16384,entrySize=Marshal.SizeOf(typeof(EnumeratedResource));
+                    for(int round=0;round<256;round++)
+                    {
+                        IntPtr buffer=Marshal.AllocHGlobal(capacity);
+                        try
+                        {
+                            uint count=UInt32.MaxValue;int size=capacity;status=WNetEnumResource(handle,ref count,buffer,ref size);
+                            if(status==259)return 0;
+                            if(status==234){if(size<=capacity||size>1048576)return 13;capacity=size;continue;}
+                            if(status!=0)return status;
+                            if(count==0||count>1024||count>(uint)(capacity/entrySize)||connections.Count+count>1024)return 13;
+                            for(int index=0;index<(int)count;index++)
+                            {
+                                var item=(EnumeratedResource)Marshal.PtrToStructure(IntPtr.Add(buffer,index*entrySize),typeof(EnumeratedResource));
+                                string local=ResourceString(item.Local,buffer,capacity),remote=ResourceString(item.Remote,buffer,capacity);
+                                if(String.IsNullOrEmpty(remote)||(!String.IsNullOrEmpty(local)&&!Matches(local,"[A-Za-z]:")))return 13;
+                                connections.Add(new NetworkConnection{Letter=String.IsNullOrEmpty(local)?"":local.Substring(0,1).ToUpperInvariant(),Remote=remote});
+                            }
+                        }
+                        catch(FormatException){return 13;}
+                        finally{Marshal.FreeHGlobal(buffer);}
+                    }
+                    return 13;
+                }
+                finally{WNetCloseEnum(handle);}
+            }
+            static string ResourceString(IntPtr pointer,IntPtr buffer,int capacity)
+            {
+                if(pointer==IntPtr.Zero)return null;
+                long offset=pointer.ToInt64()-buffer.ToInt64();if(offset<0||offset>=capacity||(offset&1)!=0)throw Invalid();
+                int length=0,maximum=Math.Min((capacity-(int)offset)/2,32768);
+                while(length<maximum&&Marshal.ReadInt16(pointer,length*2)!=0)length++;
+                if(length==maximum)throw Invalid();return Marshal.PtrToStringUni(pointer,length);
+            }
             public IEnumerable<string> UsedLetters()
             {
                 var result=new HashSet<string>(Environment.GetLogicalDrives().Select(path=>path.Substring(0,1)),StringComparer.OrdinalIgnoreCase);
@@ -269,7 +458,7 @@ namespace WindowsClaude.GuestFiles
             }
             public int GetConnection(string letter,out string remote){var value=new StringBuilder(1024);int size=value.Capacity;int result=WNetGetConnection(letter+":",value,ref size);remote=result==0?value.ToString():null;return result;}
             public int Add(string remote,string letter,string username,string password,uint flags){var resource=new NetResource{Type=1,Local=letter.Length==0?null:letter+":",Remote=remote};return WNetAddConnection2(ref resource,password,username,flags);}
-            public int Cancel(string letter,uint flags,bool force){return WNetCancelConnection2(letter+":",flags,force);}
+            public int Cancel(string target,uint flags,bool force){return WNetCancelConnection2(target.Length==1?target+":":target,flags,force);}
         }
         sealed class WindowsNic : INicConfiguration
         {
@@ -423,7 +612,10 @@ namespace WindowsClaude.GuestFiles
                 case "OK":return "Диски и папки ПК подключены. Они появятся в Проводнике. Подключение запускается автоматически при входе.";
                 case "ORDINARY_TOKEN_REQUIRED":return "Помощник запущен от имени администратора, и диски не появятся в Проводнике. Выйди из учётной записи Windows и войди снова.";
                 case "OWN_MAPPING_BUSY":return "Закрой файлы и окна папок ПК в Windows, затем повтори подключение. Открытые файлы принудительно не отключены.";
-                case "UNLETTERED_CONNECTION_REMAINS":return "Осталось временное подключение без буквы. Выйди из учётной записи Windows и войди снова, чтобы очистить его.";
+                case "UNOWNED_CONNECTION_REMAINS":return "Найдено подключение к папкам ПК без квитанции помощника. Отключи его вручную и повтори подключение. Оно не было изменено.";
+                case "MAPPING_OUTCOME_UNKNOWN":return "Не удалось проверить результат подключения. Квитанция сохранена для следующей попытки. Чужие подключения не отключены.";
+                case "OWN_RECEIPT_WRITE_FAILED":return "Не удалось сохранить квитанцию подключения. Проверь свободное место и доступ к профилю Windows, затем повтори попытку.";
+                case "CONNECTION_INSPECTION_FAILED":return "Windows не предоставила полный список подключений. Повтори попытку; непроверенные подключения не изменены.";
                 case "CREDENTIAL_CONFLICT":return "Windows уже подключена к ПК с другими учётными данными. Выйди из учётной записи Windows и войди снова. Чужие подключения не отключены.";
                 case "NIC_NOT_READY":return "Изолированная сеть папок ПК не готова. Проверь подключение в панели и перезапусти Windows.";
                 case "NIC_NOT_CONFIGURED":return "Отдельная сеть папок ПК ещё не настроена. Перезапусти Windows и подтверди запрос разрешения.";
@@ -433,6 +625,34 @@ namespace WindowsClaude.GuestFiles
                 case "EXPLORER_LABEL_FAILED":return "Папки ПК подключены, но Проводник не принял их понятные названия. Перезапусти Windows.";
                 case "ISOLATED_NIC_NOT_UNIQUE":return "Не найден единственный отдельный сетевой адаптер папок ПК. Проверь конфигурацию виртуальной машины.";
                 default:return "Подключение папок ПК не завершено. Код: "+code+". Передай этот код для диагностики.";
+            }
+        }
+        static string FailureCode(Exception error)
+        {return error is InvalidOperationException&&Matches(error.Message,"[A-Z_]{1,64}")?error.Message:error is FormatException?"CONFIG_INVALID":"APPLY_FAILED";}
+        static bool InitialReceipt(Config config,Outcome outcome)
+        {try{SendReceipt(Receipt(config,outcome));return true;}catch{return false;}}
+        static void InitialMessage(Outcome outcome,bool installed)
+        {
+            string detail=outcome.Code=="NIC_NOT_READY"&&nicDetail!=null?Environment.NewLine+Environment.NewLine+"Состояние сети папок ПК: "+nicDetail+".":"";
+            if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code)+detail,"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
+        }
+        static void Resident(Config config,Outcome applied,Thread clipboard)
+        {
+            var network=new WinNet();long serial=0;bool sending=false;
+            Action tick=()=>
+            {
+                if(sending)return;sending=true;
+                try{serial=HeartbeatTick(config,applied,network,Ready,serial,()=>DateTime.UtcNow.Ticks/TimeSpan.TicksPerMillisecond,
+                    ()=>!config.ClipboardEnabled?null:clipboard==null||!clipboard.IsAlive?"START_FAILED":GuestClipboard.StatusCode,SendReceipt);}
+                catch(Exception){} // A failed read/report expires on the host; it never triggers a remap.
+                finally{sending=false;}
+            };
+            using(var timer=new System.Windows.Forms.Timer{Interval=3000})
+            {
+                timer.Tick+=delegate{tick();};tick();timer.Start();
+                // This STA pump keeps one serial writer alive even with clipboard
+                // disabled; its timer also runs inside the initial modal error box.
+                InitialMessage(applied,false);Application.Run();
             }
         }
         [STAThread]
@@ -455,41 +675,42 @@ namespace WindowsClaude.GuestFiles
                 if(!handoff&&args[0]=="--apply"&&UpdateFromMedium())return 0;
                 using(var mutex=new Mutex(false,@"Local\WindowsClaude.HostFiles."+WindowsIdentity.GetCurrent().User.Value))
                 {
-                    bool held;try{held=mutex.WaitOne(0);}catch(AbandonedMutexException){held=true;}if(!held)throw new InvalidOperationException("APPLY_ALREADY_RUNNING");
-                    try
+                    return WithApplyMutex(mutex,()=>
                     {
-                        // No user-visible changes until the old helper has committed this exact process.
-                        if(handoff){if(!ConfirmHandoff(args[2]))return 2;acceptedHandoff=true;}
-                        // The shared clipboard runs beside everything below, so a file-sharing notice never delays it.
-                        if(args[0]=="--apply")clipboard=GuestClipboard.StartBackground(config.Nonce);
-                        string displaySettings=ReadDisplaySettings();FitDisplay(RequestedSize(displaySettings));ReportDisplay(displaySettings);
-                        if(config.Shares.Count>0)
+                        try
                         {
-                            // The host keeps the file NIC unplugged until asked, so it is asked only for a static adapter.
-                            bool remembered=NicRemembered();
-                            if(remembered)RequestLink(config);
-                            // First time only: Windows asks for administrator consent once to give the file adapter its fixed address, no script to run.
-                            EnsureNic(Ready,ElevateNic,()=>RequestLink(config),()=>Thread.Sleep(1000),remembered?20:0);
+                            // No user-visible changes until the old helper committed this exact process.
+                            if(handoff){if(!ConfirmHandoff(args[2]))return 2;acceptedHandoff=true;}
+                            string displaySettings=ReadDisplaySettings();FitDisplay(RequestedSize(displaySettings));ReportDisplay(displaySettings);
+                            if(config.Shares.Count>0||config.ClipboardEnabled)
+                            {
+                                bool remembered=NicRemembered();
+                                if(remembered)RequestLink(config);
+                                EnsureNic(Ready,ElevateNic,()=>RequestLink(config),()=>Thread.Sleep(1000),remembered?20:0);
+                            }
+                            if(args[0]=="--apply"&&config.ClipboardEnabled)clipboard=GuestClipboard.StartBackground(config.ClipboardNonce,config.ClipboardPort,Ready);
+                            if(args[0]=="--install"){Install();installed=true;}
+                            string state=StatePath();List<Mapping> previous;
+                            try{previous=File.Exists(state)?ParseOwned(ReadBounded(state)):new List<Mapping>();}catch(FormatException){throw new InvalidOperationException("OWN_RECEIPT_INVALID");}
+                            outcome=ApplyMappings(config,previous,new WinNet(),Ready,()=>Thread.Sleep(1000),false,true,owned=>SaveOwned(state,owned));
+                            if(outcome.Success&&config.Shares.Count>0)RememberNic();
+                            SetExplorerLabels(config,outcome);
+                            if(outcome.NeedsShortcut)Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Диски и папки ПК.lnk"),Server,"");
                         }
-                        if(args[0]=="--install"){Install();installed=true;}
-                        string state=StatePath();List<Mapping> previous;
-                        try{previous=File.Exists(state)?ParseOwned(ReadBounded(state)):new List<Mapping>();}catch(FormatException){throw new InvalidOperationException("OWN_RECEIPT_INVALID");}
-                        outcome=ApplyMappings(config,previous,new WinNet(),Ready,()=>Thread.Sleep(1000),false,true,owned=>SaveOwned(state,owned));
-                        if(outcome.Success&&config.Shares.Count>0)RememberNic();
-                        SetExplorerLabels(config,outcome);
-                        if(outcome.NeedsShortcut)Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Диски и папки ПК.lnk"),Server,"");
-                    }
-                    finally{mutex.ReleaseMutex();}
+                        catch(Exception error){outcome.Code=FailureCode(error);}
+                        if(handoff&&!acceptedHandoff)return 2;
+                        bool sent=InitialReceipt(config,outcome);
+                        if(args[0]=="--apply")Resident(config,outcome,clipboard);else InitialMessage(outcome,installed);
+                        return !sent?3:outcome.Success?0:2;
+                    });
                 }
             }
-            catch(Exception error){outcome.Code=error is InvalidOperationException&&Matches(error.Message,"[A-Z_]{1,64}")?error.Message:error is FormatException?"CONFIG_INVALID":"APPLY_FAILED";}
+            catch(Exception error){outcome.Code=FailureCode(error);}
             if(handoff&&!acceptedHandoff)return 2;
-            bool sent=true;try{SendReceipt(Receipt(config,outcome));}catch{sent=false;}
-            string detail=outcome.Code=="NIC_NOT_READY"&&nicDetail!=null?Environment.NewLine+Environment.NewLine+"Состояние сети папок ПК: "+nicDetail+".":"";
-            if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code)+detail,"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
-            // Stay resident while the clipboard channel works; without a channel the thread ends and so does the helper.
-            if(clipboard!=null)clipboard.Join();
-            return !sent?3:outcome.Success?0:2;
+            // Initial config/token failures retain the old schema, but do not race
+            // an already resident helper for COM2.
+            using(var mutex=new Mutex(false,@"Local\WindowsClaude.HostFiles."+WindowsIdentity.GetCurrent().User.Value))
+                return WithApplyMutex(mutex,()=>{bool sent=InitialReceipt(config,outcome);InitialMessage(outcome,installed);return !sent?3:2;});
         }
         public static int NativeMode(IList<int[]> modes)
         {
@@ -681,6 +902,10 @@ namespace WindowsClaude.GuestFiles
         [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern bool EnumDisplaySettings(string device,int mode,ref DevMode settings);
         [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int ChangeDisplaySettingsEx(string device,ref DevMode settings,IntPtr window,uint flags,IntPtr parameter);
         [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]struct NetResource {public uint Scope,Type,DisplayType,Usage;public string Local,Remote,Comment,Provider;}
+        [StructLayout(LayoutKind.Sequential)]struct EnumeratedResource {public uint Scope,Type,DisplayType,Usage;public IntPtr Local,Remote,Comment,Provider;}
+        [DllImport("mpr.dll",CharSet=CharSet.Unicode)]static extern int WNetOpenEnum(uint scope,uint type,uint usage,IntPtr resource,out IntPtr handle);
+        [DllImport("mpr.dll",CharSet=CharSet.Unicode)]static extern int WNetEnumResource(IntPtr handle,ref uint count,IntPtr buffer,ref int size);
+        [DllImport("mpr.dll")]static extern int WNetCloseEnum(IntPtr handle);
         [DllImport("mpr.dll",CharSet=CharSet.Unicode)]static extern int WNetAddConnection2(ref NetResource resource,string password,string username,uint flags);
         [DllImport("mpr.dll",CharSet=CharSet.Unicode)]static extern int WNetGetConnection(string local,StringBuilder remote,ref int length);
         [DllImport("mpr.dll",CharSet=CharSet.Unicode)]static extern int WNetCancelConnection2(string name,uint flags,bool force);

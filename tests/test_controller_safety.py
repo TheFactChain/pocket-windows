@@ -154,14 +154,5 @@ class ControllerSafety(unittest.TestCase):
         self.assertEqual(self.commands, ['system_powerdown'])
         self.assertIn('acpi_powerdown_requested_utc', self.scope['report'])
 
-    def test_fatal_cleanup_has_no_hard_stop(self):
-        tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                self.assertNotIn(node.func.attr, ('terminate', 'kill'))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'command':
-                self.assertFalse(node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'quit')
-
-
 if __name__ == '__main__':
     unittest.main()

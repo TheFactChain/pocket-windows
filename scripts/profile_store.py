@@ -6,6 +6,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import uuid
 
@@ -75,6 +76,20 @@ def _exclusive_file(path, create=True):
 
 
 @contextmanager
+def _revision_lease(path):
+    kernel = _winapi()
+    _plain(path)
+    # A fresh, exclusively held lease disappears even when its owning controller crashes.
+    handle = kernel.CreateFileW(str(path), 0xC0010000, 0, None, 1, 0x04200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise StoreError('Cannot pin the selected profile revision')
+    try:
+        yield
+    finally:
+        kernel.CloseHandle(handle)
+
+
+@contextmanager
 def _pinned_directory(directory, create=True):
     """Deny directory deletion/rename while traversing and writing the store."""
     kernel = _winapi()
@@ -85,7 +100,8 @@ def _pinned_directory(directory, create=True):
                 if current != directory or not create:
                     raise StoreError('Profile parent directory must already exist')
                 current.mkdir()
-            handle = kernel.CreateFileW(str(current), 0x80, 3, None, 3, 0x02200000, None)
+            # Metadata-only access does not enforce Windows sharing restrictions on rename.
+            handle = kernel.CreateFileW(str(current), 0x81, 3, None, 3, 0x02200000, None)
             if handle == ctypes.c_void_p(-1).value:
                 raise StoreError('Cannot access profile directory')
             stack.callback(kernel.CloseHandle, handle)
@@ -206,7 +222,7 @@ class ProfileStore:
                     _identifier(revision_id)
                     if not isinstance(revision, dict) or set(revision) != {'config', 'credentials_blob'}:
                         raise ValueError()
-                    if 'credentials' in revision['config'] or validate_profile(revision['config']) != revision['config']:
+                    if 'credentials' in revision['config'] or validate_profile(revision['config'], allow_legacy_endpoint=True) != revision['config']:
                         raise ValueError()
                     blob = revision['credentials_blob']
                     if blob is not None:
@@ -219,7 +235,7 @@ class ProfileStore:
     def _write(self, data):
         payload = json.dumps(data, ensure_ascii=False, sort_keys=True).encode('utf-8')
         if len(payload) > MAX_STORE_BYTES:
-            raise StoreError('Profile history exceeds 8 MiB; export profiles before continuing')
+            raise StoreError('Profile storage is full of current or active revisions; changes were not saved')
         temporary = self.directory / ('profiles-' + uuid.uuid4().hex + '.tmp')
         try:
             with temporary.open('xb') as stream:
@@ -242,18 +258,63 @@ class ProfileStore:
             raise ValueError('Profile revision does not exist')
         return revision_id, item['revisions'][revision_id]
 
+    def _prune_revisions(self, data):
+        active = set()
+        leases = self.directory / 'leases'
+        _plain(leases)
+        if leases.exists():
+            with _pinned_directory(leases, create=False):
+                for path in leases.iterdir():
+                    match = re.fullmatch(r'([a-f0-9]{32})-([a-f0-9]{32})-[a-f0-9]{32}\.lease', path.name)
+                    if not match:
+                        raise StoreError('Invalid profile revision lease')
+                    try:
+                        with _exclusive_file(path, create=False):
+                            pass
+                    except StoreBusy:
+                        active.add((match[1], match[2]))
+                    except StoreError:
+                        if path.exists():
+                            raise
+        for profile_id, item in data['profiles'].items():
+            item['revisions'] = {revision: value for revision, value in item['revisions'].items()
+                                 if revision == item['current_revision_id'] or (profile_id, revision) in active}
+
+    @contextmanager
+    def session_profile(self, profile_id=None):
+        """Atomically snapshot one revision, retaining it without locking future profile edits."""
+        with ExitStack() as live:
+            with self._transaction():
+                data = self._read()
+                profile_id = data['selected_profile_id'] if profile_id is None else profile_id
+                if profile_id is None:
+                    raise ValueError('Select a connection before starting the gateway')
+                revision_id, revision = self._revision(data, profile_id)
+                profile = self._secret_revision(revision)
+                leases = self.directory / 'leases'
+                live.enter_context(_pinned_directory(leases))
+                live.enter_context(_revision_lease(leases / (profile_id + '-' + revision_id + '-' + uuid.uuid4().hex + '.lease')))
+                selected = {'profile_id': profile_id, 'revision_id': revision_id}
+            yield selected, profile
+
     def _view(self, data, profile_id):
         revision_id, revision = self._revision(data, profile_id)
         available = True
+        needs_correction = False
+        try:
+            validate_profile(revision['config'])
+        except ValueError:
+            needs_correction = True
         if revision['credentials_blob'] is not None:
             try:
-                validate_profile(revision['config'] | {'credentials': _unprotect(revision['credentials_blob'])})
+                validate_profile(revision['config'] | {'credentials': _unprotect(revision['credentials_blob'])}, allow_legacy_endpoint=True)
             except (SecretsUnavailable, ValueError):
                 available = False
         required = revision['config']['protocol'] == 'hysteria2'
         present = revision['credentials_blob'] is not None
         return revision['config'] | {'profile_id': profile_id, 'revision_id': revision_id,
                 'auth_present': present, 'secrets_available': available,
+                'needs_correction': needs_correction,
                 'needs_credentials': not available or (required and not present),
                 'selected': data['selected_profile_id'] == profile_id}
 
@@ -273,11 +334,25 @@ class ProfileStore:
                 return None
             view = self._view(data, profile_id)
             return {key: view[key] for key in ('name', 'protocol', 'profile_id', 'revision_id',
-                                              'auth_present', 'secrets_available', 'needs_credentials')} | {'state': 'pending'}
+                                              'auth_present', 'secrets_available', 'needs_credentials', 'needs_correction')} | {'state': 'pending'}
 
     def get_view(self, profile_id):
         with self._transaction():
             return self._view(self._read(), profile_id)
+
+    def prepare_draft(self, config, profile_id=None):
+        """Sensitive validated draft; reuse one pinned revision without persisting edits."""
+        config = validate_profile(config)
+        if profile_id is not None:
+            with self._transaction():
+                _, saved = self._revision(self._read(), profile_id)
+                if 'credentials' not in config and saved['credentials_blob'] is not None:
+                    if (saved['config']['protocol'], saved['config'].get('obfs')) != (config['protocol'], config.get('obfs')):
+                        raise ValueError('Enter credentials again when changing protocol or obfuscation')
+                    config['credentials'] = _unprotect(saved['credentials_blob'])
+        if config['protocol'] == 'hysteria2' and 'credentials' not in config:
+            raise ValueError('Hysteria2 authentication is required')
+        return validate_profile(config)
 
     def save(self, config, credentials=None, profile_id=None):
         config = validate_profile(config)
@@ -309,6 +384,7 @@ class ProfileStore:
             item = data['profiles'].setdefault(profile_id, {'current_revision_id': revision_id, 'revisions': {}})
             item['revisions'][revision_id] = {'config': config, 'credentials_blob': blob}
             item['current_revision_id'] = revision_id
+            self._prune_revisions(data)
             self._write(data)
             return self._view(data, profile_id)
 
@@ -370,12 +446,16 @@ class ProfileStore:
         """Sensitive result: pass only to the gateway; never include in logs or GUI responses."""
         with self._transaction():
             _, revision = self._revision(self._read(), profile_id, revision_id)
-            config = dict(revision['config'])
-            if revision['credentials_blob'] is not None:
-                config['credentials'] = _unprotect(revision['credentials_blob'])
-            elif config['protocol'] == 'hysteria2':
-                raise SecretsUnavailable('Enter Hysteria2 credentials before connecting')
-            try:
-                return validate_profile(config)
-            except ValueError:
-                raise SecretsUnavailable('Saved credentials are invalid; enter them again') from None
+            return self._secret_revision(revision)
+
+    @staticmethod
+    def _secret_revision(revision):
+        config = dict(revision['config'])
+        if revision['credentials_blob'] is not None:
+            config['credentials'] = _unprotect(revision['credentials_blob'])
+        elif config['protocol'] == 'hysteria2':
+            raise SecretsUnavailable('Enter Hysteria2 credentials before connecting')
+        try:
+            return validate_profile(config)
+        except ValueError:
+            raise SecretsUnavailable('Saved credentials are invalid; enter them again') from None

@@ -7,6 +7,7 @@
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <!-- Laid out once at 100%; Windows scales the whole window on larger displays, with crisp GDI text. -->
     <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">false</dpiAware>
       <gdiScaling xmlns="http://schemas.microsoft.com/SMI/2017/WindowsSettings">true</gdiScaling>
     </windowsSettings>

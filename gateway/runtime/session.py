@@ -18,6 +18,10 @@ from gateway_profile import closed_firewall, firewall, sing_box_config, validate
 
 RUN = Path('/run/wc-session')
 VERSION = Path('/etc/windowsclaude/gateway-version')
+DOH_PROVIDERS = (('1.1.1.1', 'cloudflare-dns.com', '/dns-query'),
+                 ('8.8.8.8', 'dns.google', '/resolve'))
+HEALTH_TARGETS = ('example.com', 'www.iana.org')
+FAILED_ROUNDS = 3
 
 
 def unique_object(pairs):
@@ -112,19 +116,59 @@ def proxy_https(address, hostname, path, accept='text/html', *, deadline=None):
     return body
 
 
-def health(deadline=None):
-    deadline = min(deadline, time.monotonic() + 25) if deadline is not None else time.monotonic() + 25
-    remaining(deadline)
-    answer = json.loads(proxy_https('1.1.1.1', 'cloudflare-dns.com',
-                                   '/dns-query?name=example.com&type=A', 'application/dns-json', deadline=deadline))
-    if answer.get('Status') != 0:
-        raise ValueError('DNS probe failed')
-    addresses = [str(ipaddress.IPv4Address(row['data'])) for row in answer.get('Answer', []) if row.get('type') == 1]
+def dns_addresses(payload):
+    try:
+        if len(payload) > 131072:
+            raise ValueError('DNS response too large')
+        answer = json.loads(payload, object_pairs_hook=unique_object)
+        if (type(answer) is not dict or type(answer.get('Status')) is not int or answer['Status'] != 0
+                or type(answer.get('Answer')) is not list):
+            raise ValueError('Invalid DNS response')
+        addresses = []
+        for row in answer['Answer']:
+            if type(row) is not dict or type(row.get('type')) is not int or row['type'] != 1 or type(row.get('data')) is not str:
+                continue
+            try:
+                address = ipaddress.IPv4Address(row['data'])
+            except ipaddress.AddressValueError:
+                continue
+            if address.is_global and not address.is_multicast and str(address) not in addresses:
+                addresses.append(str(address))
+    except (ValueError, TypeError, RecursionError):
+        raise ValueError('Invalid DNS probe response') from None
     if not addresses:
         raise ValueError('DNS returned no IPv4')
-    remaining(deadline)
-    proxy_https(addresses[0], 'example.com', '/', deadline=deadline)
-    remaining(deadline)
+    return addresses
+
+
+def health(deadline=None):
+    deadline = min(deadline, time.monotonic() + 25) if deadline is not None else time.monotonic() + 25
+    # Different providers and targets get their own share of the one round deadline.
+    attempts = ((0, 0), (1, 1), (1, 0), (0, 1))
+    for index, (provider, target) in enumerate(attempts):
+        remaining(deadline)
+        now = time.monotonic()
+        attempt_deadline = now + (deadline - now) / (len(attempts) - index)
+        address, resolver, path = DOH_PROVIDERS[provider]
+        hostname = HEALTH_TARGETS[target]
+        try:
+            addresses = dns_addresses(proxy_https(address, resolver, path + '?name=' + hostname + '&type=A',
+                'application/dns-json', deadline=now + (attempt_deadline - now) / 2))
+        except (OSError, ValueError):
+            continue
+        for offset, address in enumerate(addresses):
+            now = time.monotonic()
+            if now >= attempt_deadline:
+                break
+            address_deadline = now + (attempt_deadline - now) / (len(addresses) - offset)
+            try:
+                proxy_https(address, hostname, '/', deadline=address_deadline)
+                remaining(address_deadline)
+                remaining(deadline)
+                return
+            except (OSError, ValueError):
+                continue
+    raise ValueError('No independent DNS and HTTPS probe succeeded')
 
 
 def wait_nics(stopping):
@@ -271,7 +315,7 @@ def main():
         failure_code = 'PROXY_SERVICE_FAILED'
         start_services(config, children)
         deadline = time.monotonic() + 75
-        ever_ready, connected, retry = False, False, 2
+        ever_ready, connected, retry, failed_rounds = False, False, 2, 0
         while not stopping:
             failure_code = 'CONNECTION_LOST' if ever_ready else 'CONNECTION_FAILED'
             if any(child.poll() is not None for child in children):
@@ -280,7 +324,7 @@ def main():
                     raise ValueError('Service stopped before first readiness')
                 failure_code = 'NFT_RULES_FAILED'
                 apply_rules(firewall(session, connected=False))
-                connected = False
+                connected, failed_rounds = False, 0
                 emit('RECONNECTING', session, 'CONNECTION_LOST')
                 failure_code = 'PROXY_SERVICE_FAILED'
                 stop_children(children)
@@ -294,9 +338,11 @@ def main():
             probe_deadline = time.monotonic() + 25
             if not ever_ready:
                 probe_deadline = min(deadline, probe_deadline)
+            probe_passed = False
             try:
                 health(probe_deadline)
                 remaining(probe_deadline)
+                probe_passed, failed_rounds, retry = True, 0, 2
                 if stopping:
                     break
                 if not connected:
@@ -319,6 +365,14 @@ def main():
             except (OSError, ValueError):
                 if stopping:
                     break
+                if connected and ever_ready and not probe_passed:
+                    failed_rounds += 1
+                    if failed_rounds < FAILED_ROUNDS:
+                        emit('DEGRADED', session, 'PROBE_FAILED_' + str(failed_rounds))
+                        if not wait_delay(retry, lambda: stopping):
+                            break
+                        retry = min(15, retry * 2)
+                        continue
                 if connected or ever_ready:
                     failure_code = 'NFT_RULES_FAILED'
                     apply_rules(firewall(session, connected=False))

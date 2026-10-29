@@ -19,6 +19,9 @@ import pack_existing_runtime
 ORIGINAL = b'MZ\0original fixture engine'
 APPROVED = b'MZ\0rebuilt fixture engine with a different size and fixed SDL backend'
 APPROVED_SHA256 = hashlib.sha256(APPROVED).hexdigest()
+ORIGINAL_IMG = b'MZ\0original fixture qemu-img'
+APPROVED_IMG = b'MZ\0approved fixture qemu-img with UTF-8 manifest'
+APPROVED_IMG_SHA256 = hashlib.sha256(APPROVED_IMG).hexdigest()
 
 
 class PatchQemuEngine(unittest.TestCase):
@@ -28,11 +31,17 @@ class PatchQemuEngine(unittest.TestCase):
         self.project = Path(temporary.name)
         self.candidate = self.project / 'approved.exe'
         self.candidate.write_bytes(APPROVED)
+        self.img_candidate = self.project / 'approved-img.exe'
+        self.img_candidate.write_bytes(APPROVED_IMG)
         approved = mock.patch.object(engine, 'ENGINE_SHA256', APPROVED_SHA256, create=True)
         approved.start(); self.addCleanup(approved.stop)
+        img_approved = mock.patch.object(engine, 'QEMU_IMG_SHA256', APPROVED_IMG_SHA256)
+        img_approved.start(); self.addCleanup(img_approved.stop)
         processes = mock.patch.object(engine.runtime, 'engine_processes', return_value=[])
         processes.start(); self.addCleanup(processes.stop)
-        files = {engine.ENGINE: ORIGINAL, engine.bundle.PYTHON + '/python.exe': b'python'}
+        self.write_components({engine.ENGINE: ORIGINAL, engine.IMG: APPROVED_IMG, engine.bundle.PYTHON + '/python.exe': b'python'})
+
+    def write_components(self, files):
         rows = []
         for name, content in files.items():
             path = self.project / name
@@ -45,7 +54,134 @@ class PatchQemuEngine(unittest.TestCase):
                 archive.writestr(name, content)
 
     def snapshot(self):
-        return {name: (self.project / name).read_bytes() for name in (engine.ENGINE, engine.bundle.MANIFEST, engine.bundle.RECOVERY)}
+        return {name: (self.project / name).read_bytes() for name in (engine.ENGINE, engine.IMG, engine.bundle.MANIFEST, engine.bundle.RECOVERY)}
+
+    def make_img_outdated(self):
+        self.write_components({engine.ENGINE: ORIGINAL, engine.IMG: ORIGINAL_IMG, engine.bundle.PYTHON + '/python.exe': b'python'})
+
+    def assert_consistent(self):
+        records = engine.bundle._manifest(self.project)
+        with zipfile.ZipFile(self.project / engine.bundle.RECOVERY) as archive:
+            for name, digest in ((engine.ENGINE, APPROVED_SHA256), (engine.IMG, APPROVED_IMG_SHA256)):
+                content = (self.project / name).read_bytes()
+                self.assertEqual(hashlib.sha256(content).hexdigest(), digest)
+                self.assertEqual(records[name.casefold()]['sha256'], digest)
+                self.assertEqual(records[name.casefold()]['bytes'], len(content))
+                self.assertEqual(archive.read(name), content)
+
+    def test_both_approved_components_update_together_and_back_up_all_originals(self):
+        self.make_img_outdated()
+        before = self.snapshot()
+        replaced = []
+        replace = engine.os.replace
+        def record_replace(source, target):
+            replaced.append(Path(target).name)
+            return replace(source, target)
+        with mock.patch.object(engine.os, 'replace', side_effect=record_replace):
+            result = engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        self.assertTrue(result['changed'])
+        self.assert_consistent()
+        self.assertEqual(replaced, [Path(engine.bundle.RECOVERY).name, Path(engine.bundle.MANIFEST).name,
+                                    Path(engine.ENGINE).name, Path(engine.IMG).name])
+        for name, content in before.items():
+            self.assertEqual((Path(result['backup']) / Path(name).name).read_bytes(), content)
+        before = self.snapshot()
+        self.assertFalse(engine.update_project(self.project)['changed'])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_invalid_or_missing_second_candidate_leaves_every_component_unchanged(self):
+        self.make_img_outdated()
+        before = self.snapshot()
+        for arguments in ({'engine_source': self.candidate}, {'qemu_img_source': self.img_candidate}):
+            with self.subTest(arguments=list(arguments)), self.assertRaises(ValueError):
+                engine.update_project(self.project, **arguments)
+            self.assert_no_update_artifacts(before)
+        self.img_candidate.write_bytes(APPROVED_IMG + b'tampered')
+        with self.assertRaises(ValueError):
+            engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        self.assert_no_update_artifacts(before)
+
+    def test_tampered_current_qemu_img_is_refused_before_engine_changes(self):
+        (self.project / engine.IMG).write_bytes(b'MZ\0tampered img')
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        self.assert_no_update_artifacts(before)
+
+    def test_only_outdated_qemu_img_needs_a_candidate(self):
+        self.write_components({engine.ENGINE: APPROVED, engine.IMG: ORIGINAL_IMG,
+                               engine.bundle.PYTHON + '/python.exe': b'python'})
+        replaced = []
+        replace = engine.os.replace
+        def record_replace(source, target):
+            replaced.append(Path(target).name)
+            return replace(source, target)
+        with mock.patch.object(engine.os, 'replace', side_effect=record_replace):
+            result = engine.update_project(self.project, qemu_img_source=self.img_candidate)
+        self.assertTrue(result['changed'])
+        self.assert_consistent()
+        self.assertEqual(replaced, [Path(engine.bundle.RECOVERY).name, Path(engine.bundle.MANIFEST).name,
+                                    Path(engine.IMG).name])
+
+    def test_qemu_img_candidate_mz_type_size_and_plain_file_checks_precede_writes(self):
+        before = self.snapshot()
+        self.img_candidate.write_bytes(b'XZfixture')
+        with mock.patch.object(engine, 'QEMU_IMG_SHA256', hashlib.sha256(b'XZfixture').hexdigest()):
+            with self.assertRaises(ValueError):
+                engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        self.img_candidate.write_bytes(APPROVED_IMG)
+        with self.assertRaises(ValueError):
+            engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.project)
+        original_stat, original_lstat = Path.stat, Path.lstat
+        def large(path, *args, **kwargs):
+            value = original_stat(path, *args, **kwargs)
+            if path == self.img_candidate and kwargs.get('follow_symlinks', True):
+                fields = list(value); fields[6] = engine.MAX_ENGINE_BYTES + 1
+                return engine.os.stat_result(fields)
+            return value
+        def linked(path, *args, **kwargs):
+            value = original_lstat(path, *args, **kwargs)
+            if path == self.img_candidate:
+                return mock.Mock(st_mode=value.st_mode, st_nlink=2, st_file_attributes=0)
+            return value
+        for patch in (mock.patch.object(Path, 'stat', large), mock.patch.object(Path, 'lstat', linked)):
+            with patch, self.assertRaises(ValueError):
+                engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        self.assert_no_update_artifacts(before)
+
+    def test_interruption_after_recovery_zip_can_be_completed_by_rerun(self):
+        self.make_img_outdated()
+        before = self.snapshot()
+        replace = engine.os.replace
+        def interrupt(source, target):
+            if Path(target).name == Path(engine.bundle.MANIFEST).name:
+                raise OSError('fixture interruption after recovery replacement')
+            return replace(source, target)
+        with mock.patch.object(engine.os, 'replace', side_effect=interrupt), self.assertRaises(OSError):
+            engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        for name in (engine.ENGINE, engine.IMG, engine.bundle.MANIFEST):
+            self.assertEqual((self.project / name).read_bytes(), before[name])
+        self.assertFalse(list(self.project.rglob('*.patching')))
+        engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        self.assert_consistent()
+
+    def test_interruption_after_manifest_preserves_repair_payload_for_both_exes(self):
+        self.make_img_outdated()
+        replace = engine.os.replace
+        def interrupt(source, target):
+            if Path(target).name == Path(engine.ENGINE).name:
+                raise OSError('fixture interruption after manifest replacement')
+            return replace(source, target)
+        with mock.patch.object(engine.os, 'replace', side_effect=interrupt), self.assertRaises(OSError):
+            engine.update_project(self.project, engine_source=self.candidate, qemu_img_source=self.img_candidate)
+        records = json.loads((self.project / engine.bundle.MANIFEST).read_text())['files']
+        with (self.project / engine.bundle.RECOVERY).open('rb') as source:
+            pack_existing_runtime._validate_component_recovery(source, records)
+        with zipfile.ZipFile(self.project / engine.bundle.RECOVERY) as archive:
+            for name in (engine.ENGINE, engine.IMG):
+                (self.project / name).write_bytes(archive.read(name))
+        self.assert_consistent()
+        self.assertFalse(engine.update_project(self.project)['changed'])
 
     def test_approved_rebuild_different_size_and_repair_contract_consistent(self):
         before = self.snapshot()
@@ -143,7 +279,7 @@ class PatchQemuEngine(unittest.TestCase):
         self.assert_no_update_artifacts(before)
 
     def test_recovery_member_set_and_other_member_hash_must_match(self):
-        for members in ({engine.ENGINE: ORIGINAL}, {engine.ENGINE: ORIGINAL, engine.bundle.PYTHON + '/python.exe': b'corrupt'}):
+        for members in ({engine.ENGINE: ORIGINAL}, {engine.ENGINE: ORIGINAL, engine.IMG: APPROVED_IMG, engine.bundle.PYTHON + '/python.exe': b'corrupt'}):
             with self.subTest(members=list(members)):
                 with zipfile.ZipFile(self.project / engine.bundle.RECOVERY, 'w') as archive:
                     for name, content in members.items():
@@ -161,7 +297,7 @@ class PatchQemuEngine(unittest.TestCase):
         with mock.patch.object(engine.runtime.ProjectLock, '__enter__', return_value=False):
             with self.assertRaises(RuntimeError):
                 engine.update_project(self.project, engine_source=self.candidate)
-        for name in (engine.ENGINE, engine.bundle.MANIFEST, engine.bundle.RECOVERY):
+        for name in (engine.ENGINE, engine.IMG, engine.bundle.MANIFEST, engine.bundle.RECOVERY):
             leftover = self.project / (name + '.patching')
             leftover.write_bytes(b'left by an interrupted run')
             with self.assertRaises(FileExistsError):
@@ -172,6 +308,12 @@ class PatchQemuEngine(unittest.TestCase):
 
 
 class PinnedEngine(unittest.TestCase):
+    def test_pinned_qemu_img_hash_matches_component_manifest(self):
+        manifest = ROOT / engine.bundle.MANIFEST
+        if manifest.exists():
+            rows = json.loads(manifest.read_text(encoding='utf-8-sig'))['files']
+            self.assertEqual(engine.QEMU_IMG_SHA256, next(row['sha256'] for row in rows if row['path'] == engine.IMG))
+
     def test_every_pinned_engine_hash_is_the_same_patched_engine(self):
         pinned = set()
         for name in ('portable_app.py', 'control_guest_install.py', 'reference_vm.py', 'patch_qemu_engine.py'):

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import secrets
 import subprocess
 import sys
 import threading
@@ -22,7 +23,7 @@ import windows_guest_settings as windows_settings
 import windows_hardware
 import host_file_sharing as file_sharing
 
-ENGINE_SHA256 = '63dc4e2f5fc131afe5ad2416c2d9627f26ae764eec3a03a86acb41eae71b2b2a'
+ENGINE_SHA256 = '93b16a220fdc7b6125ecd63758fa8cd45f0ec8329359ad27aa796325445f7738'
 
 def sha(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
@@ -135,6 +136,7 @@ normal_runtime = work_reboot_session and not args.work_test_media
 session_nonce=uuid.uuid4().hex if work_reboot_session else None
 files_session = None
 clipboard = clipboard_port = None
+clipboard_state = {'status': 'off', 'code': 'CLIPBOARD_OFF', 'last_transfer_utc': None}
 pointer_thread = threading.Thread()  # replaced once Windows runs; not started yet
 display_settings = None
 if normal_runtime:
@@ -160,10 +162,7 @@ if normal_runtime:
     arguments += ['-chardev', 'ringbuf,id=wcdisplay,size=8192']
     arguments[arguments.index('-serial') + 1] = 'chardev:wcdisplay'
     if viewer_settings.get('share_clipboard', False):
-        # Text clipboard shared with the guest helper through COM3 (loopback socket owned by this controller).
         import clipboard_bridge
-        clipboard_port = clipboard_bridge.reserve_port()
-        arguments += clipboard_bridge.arguments(clipboard_port)
     env['WCP_REFRESH_MS'] = str(DISPLAY_UPDATE_MS)  # read by the patched SDL engine
     # SDL's close button otherwise cuts guest power without an ACPI shutdown.
     arguments[arguments.index('-display') + 1] = ('sdl,gl=off,window-close=off'
@@ -200,6 +199,8 @@ def work_startup_info():
 
 def spawn_generation():
     global process, report, stderr_drain, inbox, qmp_events, qmp_reader, sequence
+    if '-S' not in arguments:
+        arguments.append('-S')
     if work_reboot_session:
         while True:
             with runtime.work_session_lock(output):
@@ -226,6 +227,11 @@ def spawn_generation():
         report['windows_display'] = {'status': 'pending', 'requested': display_settings}
     if files_session is not None:
         report['host_files'] = dict(files_session.public, generation=generation)
+        files_session.last_receipt_at = None
+        files_session.first_receipt_at = None
+        files_session.receipt_started_at = time.monotonic()
+    if normal_runtime:
+        report['clipboard'] = dict(clipboard.public() if clipboard is not None else clipboard_state)
     report['writers']=[report['process'],report['controller']]
     inbox=queue.Queue();qmp_events=deque(maxlen=64);sequence=0
     save()
@@ -526,7 +532,8 @@ def brand_work_window():
         title = ctypes.create_unicode_buffer(256)
         user.GetWindowTextW(window, title, 256)
         if title.value != WINDOW_TITLE:
-            user.SendMessageTimeoutW(window, 0x000C, 0, ctypes.cast(ctypes.c_wchar_p(WINDOW_TITLE), wintypes.LPVOID), 0x0002, 200, ctypes.byref(result))  # WM_SETTEXT
+            if not user.SendMessageTimeoutW(window, 0x000C, 0, ctypes.cast(ctypes.c_wchar_p(WINDOW_TITLE), wintypes.LPVOID), 0x0002, 200, ctypes.byref(result)):  # WM_SETTEXT
+                return False
     return bool(found)
 
 
@@ -647,9 +654,15 @@ def observe_work_window():
 def read_file_receipt():
     global files_buffer
     state = report['host_files']
+    recovery = {key: files_session.public[key] for key in ('recovery_required', 'recovery_log_failed',
+                'recovery_channel_failed', 'recovery_log', 'recovery_latest') if key in files_session.public}
+    if any(state.get(key) != value for key, value in recovery.items()):
+        state.update(recovery)
+        save()
     if not files_session.healthy():
-        if state['status'] != 'failed':
-            state.update(status='failed', code='FILE_SERVER_STOPPED')
+        code = 'RECOVERY_CHANNEL_FAILED' if files_session.public.get('recovery_channel_failed') else 'FILE_SERVER_STOPPED'
+        if state['status'] != 'failed' or state.get('code') != code:
+            state.update(status='failed', code=code)
             save()
         return
     if files_session.medium is None:
@@ -662,19 +675,61 @@ def read_file_receipt():
         while '\n' in files_buffer:
             line, files_buffer = files_buffer.split('\n', 1)
             receipt = file_sharing.validate_receipt(line.strip(), files_session.config)
+            if receipt['code'] != file_sharing.LINK_REQUEST and getattr(files_session, 'first_receipt_at', None) is None:
+                files_session.first_receipt_at = time.monotonic()
+            if receipt['schema'] == 2:
+                if receipt['serial'] <= state.get('last_serial', 0):
+                    continue
+                state['last_serial'] = receipt['serial']
+                files_session.last_receipt_at = time.monotonic()
+                state['confirmed_utc'] = datetime.now(timezone.utc).isoformat()
             if receipt['code'] == file_sharing.LINK_REQUEST and files_session.network:
                 # The guest has a static, gateway-free address on this NIC; only now may Windows see it.
                 command('set_link', {'name': 'wcfilesnic', 'up': True})
-                state.update(status='connecting', link='up', receipt=receipt)
+                state.update(status='connecting' if state['share_count'] else files_session.public['status'], link='up', receipt=receipt)
             else:
-                state.update(status=('ready' if state['share_count'] else files_session.public['status'])
-                             if receipt['success'] else 'failed', receipt=receipt)
+                state.update(status=(('partial' if state.get('unavailable') else 'ready') if state['share_count'] else files_session.public['status'])
+                             if receipt['success'] else 'failed', code=receipt['code'], receipt=receipt)
+                first = getattr(files_session, 'first_receipt_at', None)
+                if (receipt['schema'] == 1 and first is not None and time.monotonic() - first > 12
+                        and state['share_count']):
+                    state.update(status='unconfirmed', code='GUEST_STATUS_STALE')
             save()
+        seen = getattr(files_session, 'last_receipt_at', None)
+        if seen is None:
+            seen = getattr(files_session, 'first_receipt_at', None)
+        started = getattr(files_session, 'receipt_started_at', None)
+        expired = seen is not None and time.monotonic() - seen > 12
+        missing = seen is None and started is not None and time.monotonic() - started > 120
+        if (expired or missing) and state['share_count']:
+            if state['status'] != 'unconfirmed' or state.get('code') != 'GUEST_STATUS_STALE':
+                state.update(status='unconfirmed', code='GUEST_STATUS_STALE')
+                save()
     except (OSError, ValueError, RuntimeError, TimeoutError, queue.Empty):
         files_buffer = ''
         if state['status'] != 'unconfirmed':
             state['status'] = 'unconfirmed'
             save()
+
+
+def read_clipboard_status():
+    state = dict(clipboard.public() if clipboard is not None else clipboard_state)
+    files = report.get('host_files', {})
+    receipt = files.get('receipt', {})
+    guest = receipt.get('clipboard', {})
+    if state['status'] in ('ready', 'waiting', 'connecting') and guest.get('status') in ('failed', 'unconfirmed'):
+        state.update(status=guest['status'], code='GUEST_' + guest['code'])
+    seen = getattr(files_session, 'last_receipt_at', None)
+    if seen is None:
+        seen = getattr(files_session, 'first_receipt_at', None)
+    started = getattr(files_session, 'receipt_started_at', None)
+    if state['status'] in ('ready', 'waiting', 'connecting') and seen is not None and time.monotonic() - seen > 12:
+        state.update(status='unconfirmed', code='GUEST_STATUS_STALE')
+    if state['status'] in ('ready', 'waiting', 'connecting') and seen is None and started is not None and time.monotonic() - started > 120:
+        state.update(status='unconfirmed', code='GUEST_STATUS_MISSING')
+    if report.get('clipboard') != state:
+        report['clipboard'] = state
+        save()
 
 
 def handle_control(control):
@@ -731,23 +786,33 @@ def handle_control(control):
 try:
     if normal_runtime:
         taskbar_icon = prepare_taskbar_icon(root / 'state')
-        files_session = file_sharing.Session(root, session_nonce)
-        arguments += files_session.arguments
-        if clipboard_port is not None:
+        if viewer_settings.get('share_clipboard', False):
             try:
-                clipboard = clipboard_bridge.Bridge(clipboard_port, session_nonce, clipboard_bridge.WindowsClipboard())
+                clipboard = clipboard_bridge.Bridge(0, secrets.token_hex(16), clipboard_bridge.WindowsClipboard())
                 clipboard.start()
-            except OSError:
-                clipboard = None  # the guest keeps running without a shared clipboard
+                clipboard_port = clipboard.port
+            except (OSError, ValueError, RuntimeError):
+                if clipboard is not None:
+                    clipboard.stop()
+                clipboard = None
+                clipboard_state = {'status': 'failed', 'code': 'CLIPBOARD_START_FAILED', 'last_transfer_utc': None}
+        files_session = file_sharing.Session(root, session_nonce, clipboard_port=clipboard_port,
+                                             clipboard_nonce=clipboard.nonce if clipboard is not None else None)
+        arguments += files_session.arguments
     while True:
         if not spawn_generation():
             report.update(status='exited',stop_requested=True)
             save()
             break
         begin=time.monotonic()
+        resume_attempted=False
         try:
             greeting=inbox.get(timeout=15);assert 'QMP' in greeting,'Missing QMP greeting'
             command('qmp_capabilities')
+            initial_state=command('query-status')
+            if not isinstance(initial_state,dict) or initial_state.get('running') is not False or initial_state.get('status') not in ('prelaunch','paused'):
+                resume_attempted=True  # Unexpected runstate cannot be treated as a safely unstarted guest.
+                raise RuntimeError('Windows did not start paused; network setup refused')
             report['qemu_version']=greeting['QMP']['version']
             report['input_devices']=command('query-mice')
             report['blocks']=command('query-block');report['network_filters']=command('query-rx-filter')
@@ -760,11 +825,13 @@ try:
                     report['host_files']['link']='down'
                 except (RuntimeError,TimeoutError,queue.Empty):
                     report['host_files'].update(status='failed',code='LINK_CONTROL_FAILED',link='unknown')
+                    raise
             if normal_runtime:
                 # QEMU's SDL grabs the mouse and retitles its window from the vCPU thread when the guest
                 # first enables the tablet with the host cursor over the window; that SendMessage deadlocks
                 # with the UI thread. A minimized window never has the cursor, so keep it parked until then.
                 report['window_parked']=show_work_window(7)
+            resume_attempted=True  # A timed-out cont may already have started the guest.
             command('cont');report['status']='running';save()
             if normal_runtime and not pointer_thread.is_alive():
                 pointer_thread = threading.Thread(target=release_pointer_in_fullscreen, name='pointer-release', daemon=True)
@@ -785,18 +852,19 @@ try:
                         settled = pointer_settled() or time.monotonic() - begin >= 240
                     except (RuntimeError, TimeoutError, queue.Empty):
                         settled = False
-                    if settled:
-                        show_work_window(9)
+                    if settled and show_work_window(9):
                         report['window_parked'] = 'released'
                         save()
-                if display_settings is not None and time.monotonic() >= display_poll:
-                    read_display_receipt()
-                    if time.monotonic() - begin >= 120 and report['windows_display']['status'] == 'pending':
-                        report['windows_display'] = {'status': 'unconfirmed', 'requested': display_settings}
-                        save()
+                if normal_runtime and time.monotonic() >= display_poll:
+                    if display_settings is not None:
+                        read_display_receipt()
+                        if time.monotonic() - begin >= 120 and report['windows_display']['status'] == 'pending':
+                            report['windows_display'] = {'status': 'unconfirmed', 'requested': display_settings}
+                            save()
                     display_poll = time.monotonic() + 3
                     if files_session is not None:
                         read_file_receipt()
+                    read_clipboard_status()
                     try:
                         window_ready = observe_work_window()
                         brand_work_window()
@@ -827,6 +895,14 @@ try:
         except Exception as error:
             report['error']=type(error).__name__+': '+str(error)
         finally:
+            if not resume_attempted and process.poll() is None:
+                # This owned -S process has never received cont and cannot have guest writes.
+                try:
+                    command('quit')
+                    process.wait(timeout=15)
+                except (RuntimeError,TimeoutError,queue.Empty,OSError,subprocess.TimeoutExpired):
+                    process.terminate()
+                    process.wait(timeout=15)
             if process.poll() is None:
                 report['status']='control-unavailable-guest-running'
                 try:save()
