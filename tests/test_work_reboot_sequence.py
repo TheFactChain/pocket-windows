@@ -158,7 +158,7 @@ class WorkRebootSequence(unittest.TestCase):
         for child in children:
             command = child.command
             self.assertIn('-audiodev', command, 'Normal Windows needs a host audio output')
-            self.assertEqual(command[command.index('-audiodev') + 1], 'dsound,id=wcaudio')
+            self.assertEqual(command[command.index('-audiodev') + 1], 'sdl,id=wcaudio,in.voices=0')
             devices = [value for flag, value in zip(command, command[1:]) if flag == '-device']
             self.assertIn('intel-hda,id=wcsound', devices)
             self.assertIn('hda-output,id=wcaudioout,bus=wcsound.0,audiodev=wcaudio', devices)

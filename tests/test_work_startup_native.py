@@ -44,7 +44,10 @@ class WorkStartupNative(unittest.TestCase):
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         try:
-            self.assertIn('QMP', inbox.get(timeout=10))
+            greeting = inbox.get(timeout=10)
+            if 'QMP' not in greeting:
+                process.wait(timeout=10)
+                self.fail('QEMU exited before QMP greeting (code ' + str(process.returncode) + '): ' + process.stderr.read())
             replies = {}
             for index, (name, args) in enumerate(commands):
                 process.stdin.write(json.dumps({'execute': name, 'arguments': args, 'id': index}) + '\n')

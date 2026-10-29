@@ -13,6 +13,23 @@ CLIPBOARD = [ROOT / 'guest' / name for name in ('GuestClipboard.cs', 'ClipboardF
 
 class GuestEnvironmentTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows guest helper build')
+    def test_power_defaults_apply_once_and_retry_failures_without_host_power_changes(self):
+        compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+        with tempfile.TemporaryDirectory(prefix='guest-power-defaults-') as temporary:
+            executable = Path(temporary) / 'GuestPowerDefaultsRegression.exe'
+            build = subprocess.run([str(compiler), '/nologo', '/target:exe', '/platform:x64',
+                '/main:GuestPowerDefaultsRegression', '/reference:System.Web.Extensions.dll',
+                '/reference:System.Windows.Forms.dll', '/reference:Microsoft.CSharp.dll',
+                '/out:' + str(executable), str(ROOT / 'guest/files/GuestFiles.cs'),
+                str(ROOT / 'guest/GuestEnvironment.cs'), *map(str, CLIPBOARD),
+                str(ROOT / 'tests/GuestPowerDefaultsRegression.cs')], capture_output=True, timeout=45,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(build.returncode, 0, (build.stdout + build.stderr).decode(errors='replace'))
+            check = subprocess.run([str(executable)], capture_output=True, timeout=15,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(check.returncode, 0, (check.stdout + check.stderr).decode(errors='replace'))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows guest helper build')
     def test_both_helpers_recognize_branded_qemu_and_refuse_the_host(self):
         compiler = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
         with tempfile.TemporaryDirectory(prefix='guest-environment-') as temporary:

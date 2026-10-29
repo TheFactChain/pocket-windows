@@ -486,6 +486,29 @@ namespace WindowsClaude.GuestFiles
             using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"netsh.exe"),arguments){UseShellExecute=false,CreateNoWindow=true}))
             {if(process==null)throw new InvalidOperationException("NIC_CONFIGURATION_FAILED");if(!process.WaitForExit(30000)){process.Kill();process.WaitForExit();throw new InvalidOperationException("NIC_CONFIGURATION_FAILED");}if(process.ExitCode!=0)throw new InvalidOperationException("NIC_CONFIGURATION_FAILED");}
         }
+        public static void ApplyPowerDefaults(string directory,Action<string> run)
+        {
+            // This policy marker is independent of app versions, so later updates preserve manual choices.
+            string marker=Path.Combine(directory,"power-defaults-v1.ok");NoReparse(marker);
+            if(File.Exists(marker))return;
+            Directory.CreateDirectory(directory);NoReparse(marker);
+            foreach(string setting in new[]{"monitor-timeout-ac","monitor-timeout-dc","standby-timeout-ac","standby-timeout-dc"})
+                run("/change "+setting+" 0");
+            NoReparse(marker);
+            using(var stream=new FileStream(marker,FileMode.CreateNew,FileAccess.Write,FileShare.None))
+                stream.WriteByte(1);
+        }
+        static void Powercfg(string arguments)
+        {
+            RequireGuest();
+            using(var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"powercfg.exe"),arguments){UseShellExecute=false,CreateNoWindow=true}))
+            {
+                if(process==null)throw new InvalidOperationException("POWER_DEFAULTS_FAILED");
+                if(!process.WaitForExit(5000)){process.Kill();process.WaitForExit(5000);throw new InvalidOperationException("POWER_DEFAULTS_FAILED");}
+                if(process.ExitCode!=0)throw new InvalidOperationException("POWER_DEFAULTS_FAILED");
+            }
+        }
+        static bool powerDefaultsFailed;
         static string nicDetail;
         static bool Ready()
         {
@@ -633,6 +656,11 @@ namespace WindowsClaude.GuestFiles
         {try{SendReceipt(Receipt(config,outcome));return true;}catch{return false;}}
         static void InitialMessage(Outcome outcome,bool installed)
         {
+            if(powerDefaultsFailed)
+            {
+                powerDefaultsFailed=false;
+                MessageBox.Show("Не удалось применить или сохранить настройку экрана и сна. Открой Параметры Windows, Система, Питание и выбери «Никогда» для экрана и сна. При следующем запуске повторим настройку.","Настройки Windows",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+            }
             string detail=outcome.Code=="NIC_NOT_READY"&&nicDetail!=null?Environment.NewLine+Environment.NewLine+"Состояние сети папок ПК: "+nicDetail+".":"";
             if(installed||!outcome.Success)MessageBox.Show(Explanation(outcome.Code)+detail,"Диски и папки ПК",MessageBoxButtons.OK,outcome.Success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
         }
@@ -681,6 +709,7 @@ namespace WindowsClaude.GuestFiles
                         {
                             // No user-visible changes until the old helper committed this exact process.
                             if(handoff){if(!ConfirmHandoff(args[2]))return 2;acceptedHandoff=true;}
+                            try{ApplyPowerDefaults(DirectoryPath(),Powercfg);}catch(Exception){powerDefaultsFailed=true;}
                             string displaySettings=ReadDisplaySettings();FitDisplay(RequestedSize(displaySettings));ReportDisplay(displaySettings);
                             if(config.Shares.Count>0||config.ClipboardEnabled)
                             {

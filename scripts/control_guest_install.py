@@ -800,7 +800,8 @@ try:
                                              clipboard_nonce=clipboard.nonce if clipboard is not None else None)
         arguments += files_session.arguments
         # Append after the existing devices so their PCI addresses stay stable.
-        arguments += ['-audiodev', 'dsound,id=wcaudio',
+        # DirectSound initializes capture even for output-only cards; SDL needs no recording device.
+        arguments += ['-audiodev', 'sdl,id=wcaudio,in.voices=0',
                       '-device', 'intel-hda,id=wcsound',
                       '-device', 'hda-output,id=wcaudioout,bus=wcsound.0,audiodev=wcaudio']
     while True:
