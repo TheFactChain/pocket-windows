@@ -2,10 +2,26 @@
 
 # Pocket Windows
 
-<p align="center"><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="480" alt="Смотреть видеообзор Pocket Windows на YouTube" /></a><br />
-<a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><strong>Смотреть видеообзор на YouTube</strong></a></p>
+**Windows 11 в одной папке — с твоим подключением и подготовленными приложениями.**
+
+<p align="center">
+  <a href="https://t.me/TheFactChain"><img src="docs/assets/readme/badges/telegram.svg" width="180" alt="Telegram-канал TheFactChain" /></a>
+  <a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><img src="docs/assets/readme/badges/download-ru.svg" width="134" alt="Скачать полный комплект с Google Диска" /></a>
+</p>
+<p align="center">
+  <a href="#первый-запуск"><img src="docs/assets/readme/badges/first-ru.svg" width="124" alt="Инструкция по первому запуску" /></a>
+  <a href="docs/updating.md"><img src="docs/assets/readme/badges/update-ru.svg" width="156" alt="Инструкция по обновлению" /></a>
+  <a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="docs/assets/readme/badges/video-ru.svg" width="143" alt="Смотреть видеообзор на YouTube" /></a>
+  <a href="#%D0%B5%D1%81%D0%BB%D0%B8-%D1%87%D1%82%D0%BE-%D1%82%D0%BE-%D0%BD%D0%B5-%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82"><img src="docs/assets/readme/badges/help-ru.svg" width="137" alt="Помощь: если что-то не работает" /></a>
+</p>
 
 Переносимая Windows для доступа к заблокированным сервисам через готовый прокси. В одной папке находятся Windows 11, панель запуска и отдельное сетевое окружение. Распакуй комплект, добавь подключение и открой рабочий стол с подготовленными Claude Desktop и Firefox.
+
+<p align="center"><img src="docs/assets/readme/social-preview.png" width="720" alt="Pocket Windows и панель запуска версии 2026.10.24.13" /><br />
+<sub>На изображении — интерфейс версии 2026.10.24.13 и цены на тот момент. Учётные записи и подписки в комплект не входят.</sub></p>
+
+<p align="center"><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="640" alt="Смотреть видеообзор Pocket Windows на YouTube" /></a><br />
+<a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><strong>Смотреть видеообзор на YouTube</strong></a></p>
 
 ## С чего начать
 
@@ -21,7 +37,7 @@
 | Уже есть версия 2026.10.25.3 или новее | Штатно выключи гостевую Windows, открой **«Обновления»** в лаунчере и нажми **«Проверить»**, затем **«Обновить»**. |
 | Есть старая версия 2026.10.24.13 | Используй [отдельную инструкцию перехода](docs/updating.md#версия-2026102413), затем обновляйся из лаунчера. |
 
-**Быстрые ссылки:** [скачать и проверить файл](#скачать) | [первый запуск](#первый-запуск) | [обновление](docs/updating.md) | [требования](#что-нужно-компьютеру) | [известные ограничения](#известные-ограничения) | [помощь](#если-что-то-не-работает) | [новости](https://t.me/TheFactChain)
+**В руководстве:** [скачивание и SHA256](#скачать) | [требования к компьютеру](#что-нужно-компьютеру) | [известные ограничения](#известные-ограничения) | [документация](#документация-и-исходники)
 
 Интерфейс программы пока на русском. Инструкция доступна на [английском](README.en.md). Снимки ниже сделаны в версии 2026.10.24.13; новые функции описаны отдельно.
 

@@ -2,10 +2,26 @@
 
 # Pocket Windows
 
-<p align="center"><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="480" alt="Watch the Pocket Windows video overview on YouTube, in Russian" /></a><br />
-<a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><strong>Watch the video overview on YouTube (in Russian)</strong></a></p>
+**Windows 11 in one folder, with your own connection and prepared apps.**
+
+<p align="center">
+  <a href="https://t.me/TheFactChain"><img src="docs/assets/readme/badges/telegram.svg" width="180" alt="TheFactChain Telegram channel" /></a>
+  <a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><img src="docs/assets/readme/badges/download-en.svg" width="122" alt="Download the full bundle from Google Drive" /></a>
+</p>
+<p align="center">
+  <a href="#first-start"><img src="docs/assets/readme/badges/first-en.svg" width="106" alt="First start guide" /></a>
+  <a href="docs/updating.en.md"><img src="docs/assets/readme/badges/update-en.svg" width="136" alt="Update guide" /></a>
+  <a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="docs/assets/readme/badges/video-en.svg" width="138" alt="Watch the video overview on YouTube, in Russian" /></a>
+  <a href="#if-something-does-not-work"><img src="docs/assets/readme/badges/help-en.svg" width="92" alt="Help if something does not work" /></a>
+</p>
 
 Portable Windows for accessing blocked services through an existing proxy. One folder contains Windows 11, a launcher and a separate network environment. Extract the bundle, add your connection and open a desktop with Claude Desktop and Firefox already prepared.
+
+<p align="center"><img src="docs/assets/readme/social-preview.png" width="720" alt="Pocket Windows and the launcher in version 2026.10.24.13" /><br />
+<sub>The Russian-language interface and prices shown are from version 2026.10.24.13. Accounts and subscriptions are not included.</sub></p>
+
+<p align="center"><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="640" alt="Watch the Pocket Windows video overview on YouTube, in Russian" /></a><br />
+<a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><strong>Watch the video overview on YouTube (in Russian)</strong></a></p>
 
 ## Get started
 
@@ -21,7 +37,7 @@ Portable Windows for accessing blocked services through an existing proxy. One f
 | You have version 2026.10.25.3 or later | Shut down guest Windows normally, open **«Обновления» (Updates)** in the launcher, click **«Проверить» (Check)**, then **«Обновить» (Update)**. |
 | You have the older version 2026.10.24.13 | Follow the [separate transition instructions](docs/updating.en.md#version-2026102413), then update from the launcher. |
 
-**Quick links:** [download and verify](#download) | [first start](#first-start) | [updating](docs/updating.en.md) | [PC requirements](#pc-requirements) | [known limitations](#known-limitations) | [help](#if-something-does-not-work) | [news](https://t.me/TheFactChain)
+**In this guide:** [download and SHA256](#download) | [PC requirements](#pc-requirements) | [known limitations](#known-limitations) | [documentation](#documentation-and-source-code)
 
 The application interface is currently **in Russian**. This guide includes the Russian button labels and their English meanings. The screenshots below show version 2026.10.24.13; newer features are described separately.
 

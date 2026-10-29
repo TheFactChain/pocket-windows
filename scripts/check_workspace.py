@@ -8,7 +8,10 @@ from pathlib import Path
 SOURCE_DIRS = {'docs', 'gateway', 'guest', 'host', 'launcher-wpf', 'patches', 'scripts', 'tests', 'ui'}
 SOURCE_FILES = {'.gitattributes', '.gitignore', 'AGENTS.md', 'README.md', 'README.en.md', 'Start.cmd'}
 README_IMAGES = {'docs/assets/readme/' + name for name in (
-    'launcher.png', 'connection.png', 'settings.png', 'diagnostics.png', 'desktop.png', 'files.png', 'social-preview.png')}
+    'launcher.png', 'connection.png', 'settings.png', 'diagnostics.png', 'desktop.png', 'files.png', 'social-preview.png',
+    'badges/telegram.svg', 'badges/download-ru.svg', 'badges/first-ru.svg', 'badges/update-ru.svg',
+    'badges/video-ru.svg', 'badges/help-ru.svg', 'badges/download-en.svg', 'badges/first-en.svg',
+    'badges/update-en.svg', 'badges/video-en.svg', 'badges/help-en.svg')}
 BANNED_SUFFIXES = {'.zip', '.7z', '.exe', '.dll', '.qcow2', '.qcow', '.vhd', '.vhdx', '.vmdk', '.iso', '.img',
                    '.raw', '.fd', '.log', '.pcap', '.pcapng', '.pem', '.key', '.png', '.jpg', '.ppm', '.pyc'}
 BANNED_NAMES = {'.env'}
