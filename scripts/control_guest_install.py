@@ -799,11 +799,12 @@ try:
         files_session = file_sharing.Session(root, session_nonce, clipboard_port=clipboard_port,
                                              clipboard_nonce=clipboard.nonce if clipboard is not None else None)
         arguments += files_session.arguments
+        # SDL's DirectSound driver avoids slow retries when no capture endpoint exists.
+        env['SDL_AUDIODRIVER'] = 'directsound'
         # Append after the existing devices so their PCI addresses stay stable.
-        # DirectSound initializes capture even for output-only cards; SDL needs no recording device.
-        arguments += ['-audiodev', 'sdl,id=wcaudio,in.voices=0',
+        arguments += ['-audiodev', 'sdl,id=wcaudio,in.voices=1,out.voices=1',
                       '-device', 'intel-hda,id=wcsound',
-                      '-device', 'hda-output,id=wcaudioout,bus=wcsound.0,audiodev=wcaudio']
+                      '-device', 'hda-micro,id=wcaudioout,bus=wcsound.0,audiodev=wcaudio']
     while True:
         if not spawn_generation():
             report.update(status='exited',stop_requested=True)
