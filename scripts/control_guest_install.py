@@ -799,6 +799,10 @@ try:
         files_session = file_sharing.Session(root, session_nonce, clipboard_port=clipboard_port,
                                              clipboard_nonce=clipboard.nonce if clipboard is not None else None)
         arguments += files_session.arguments
+        # Append after the existing devices so their PCI addresses stay stable.
+        arguments += ['-audiodev', 'dsound,id=wcaudio',
+                      '-device', 'intel-hda,id=wcsound',
+                      '-device', 'hda-output,id=wcaudioout,bus=wcsound.0,audiodev=wcaudio']
     while True:
         if not spawn_generation():
             report.update(status='exited',stop_requested=True)

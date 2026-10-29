@@ -1,4 +1,5 @@
 """Check QEMU runstate on a diskless fixture, without booting Windows."""
+import ast
 import json
 import os
 from pathlib import Path
@@ -17,17 +18,17 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 
 @unittest.skipUnless(os.name == 'nt', 'requires bundled Windows QEMU')
 class WorkStartupNative(unittest.TestCase):
-    def exercise(self, nic, extra=(), engine=None):
+    def exercise(self, nic, extra=(), engine=None, checks=(), machine='pc', accelerator='tcg'):
         commands = [
             ('qmp_capabilities', {}), ('query-status', {}),
             ('set_link', {'name': nic, 'up': False}), ('query-status', {}),
         ]
         if nic == 'wcfilesnic':
             commands += [('cont', {}), ('query-status', {}), ('stop', {})]
-        commands += [('quit', {})]
+        commands += list(checks) + [('quit', {})]
         process = subprocess.Popen([
             str(engine or ROOT / 'runtime/qemu-11.1.0/qemu-system-x86_64.exe'),
-            '-machine', 'pc', '-accel', 'tcg', '-m', '32', '-S',
+            '-machine', machine, '-accel', accelerator, '-m', '32', '-S',
             '-L', 'runtime/qemu-11.1.0/share', '-display', 'none', '-nic', 'none',
             '-monitor', 'none', '-serial', 'none', '-qmp', 'stdio',
             '-netdev', 'user,id=wcfiles,restrict=on,ipv6=off',
@@ -79,6 +80,26 @@ class WorkStartupNative(unittest.TestCase):
         self.assertIn('error', replies[2])
         self.assertFalse(replies[3]['return']['running'])
         self.assertIn(replies[4].get('return'), ({}, []))
+
+    def test_production_audio_devices_load_without_changing_the_existing_nic(self):
+        tree = ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        audio = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AugAssign) and isinstance(node.value, ast.List):
+                values = [item.value for item in node.value.elts if isinstance(item, ast.Constant)]
+                if '-audiodev' in values:
+                    audio = ast.literal_eval(node.value)
+        checks = [('query-pci', {}), ('human-monitor-command', {'command-line': 'info qtree'})]
+        before = self.exercise('wcfilesnic', checks=checks, machine='q35', accelerator='whpx')
+        after = self.exercise('wcfilesnic', audio, checks=checks, machine='q35', accelerator='whpx')
+        self.assertIn('dev: intel-hda', after[8]['return'])
+        self.assertIn('dev: hda-output', after[8]['return'])
+        self.assertNotIn('dev: hda-duplex', after[8]['return'])
+        def nic_slot(reply):
+            return next((bus['bus'], device['slot'], device['function'])
+                        for bus in reply[7]['return'] for device in bus['devices']
+                        if device.get('qdev_id') == 'wcfilesnic')
+        self.assertEqual(nic_slot(before), nic_slot(after))
 
     def test_qemu_starts_with_unicode_file_medium_and_files_disabled(self):
         import file_share_carrier

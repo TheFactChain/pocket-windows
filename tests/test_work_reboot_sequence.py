@@ -152,6 +152,27 @@ class WorkRebootSequence(unittest.TestCase):
             child.kill.assert_not_called()
             child.terminate.assert_not_called()
 
+    def test_normal_windows_keeps_playback_only_audio_after_reboot(self):
+        _, children, _, failure = self.exercise()
+        self.assertIsNone(failure)
+        for child in children:
+            command = child.command
+            self.assertIn('-audiodev', command, 'Normal Windows needs a host audio output')
+            self.assertEqual(command[command.index('-audiodev') + 1], 'dsound,id=wcaudio')
+            devices = [value for flag, value in zip(command, command[1:]) if flag == '-device']
+            self.assertIn('intel-hda,id=wcsound', devices)
+            self.assertIn('hda-output,id=wcaudioout,bus=wcsound.0,audiodev=wcaudio', devices)
+            self.assertFalse(any(value.startswith(('hda-duplex', 'hda-micro')) for value in devices))
+
+    def test_noninteractive_controller_does_not_add_host_audio(self):
+        tree = ast.parse((ROOT / 'scripts/control_guest_install.py').read_text(encoding='utf-8'))
+        driver = next(node for node in tree.body if isinstance(node, ast.Try)
+                      and any(isinstance(child, ast.While) for child in node.body))
+        setup = driver.body[0]
+        scope = {'normal_runtime': False, 'arguments': ['-nic', 'none']}
+        exec(compile(ast.Module(body=[setup], type_ignores=[]), 'controller-setup', 'exec'), scope)
+        self.assertEqual(scope['arguments'], ['-nic', 'none'])
+
     def test_nonzero_unknown_or_no_guest_evidence_never_relaunches(self):
         for kwargs in ({'first_code':1},{'guest':False},{'reasons':('host-qmp-quit',)}):
             with self.subTest(kwargs=kwargs):
