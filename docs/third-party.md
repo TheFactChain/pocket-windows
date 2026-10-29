@@ -17,7 +17,8 @@ remain installed in the existing gateway disk. Windows remains in its existing d
 `Launcher.exe` is built from `launcher-wpf` (WPF, .NET Framework 4.8) and embeds
 WPF-UI 3.0.5 (lepoco/wpfui, MIT license) restored from NuGet at build time.
 
-This local copy is not a public software release or a grant of redistribution rights.
+The public source repository and release downloads do not grant additional rights to
+Windows or third-party components beyond their respective licenses.
 No new EULA is accepted by the packaging script. Confirm Windows licensing and any
 third-party license/source obligations before a separate redistribution decision.
 Tiny11 builder source and oscdimg are neither required for normal boot nor included.
