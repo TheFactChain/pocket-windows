@@ -245,7 +245,17 @@ internal static class AppUpdateRegression
             Assert(AppUpdate.RecoveryWork(root) == savedTools, "Offline planning preserves recovery marker B");
             AppUpdate.Discard(offline);
         }
-        finally { Directory.Delete(root, true); }
+        finally
+        {
+            // Windows can briefly retain the image of the exited fixture process.
+            for (int attempt = 0; ; attempt++)
+            {
+                try { Directory.Delete(root, true); break; }
+                catch (IOException) { if (attempt == 19) throw; }
+                catch (UnauthorizedAccessException) { if (attempt == 19) throw; }
+                Thread.Sleep(100);
+            }
+        }
     }
     static int Main(string[] args)
     {
