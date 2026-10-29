@@ -4,6 +4,10 @@
 
 # Pocket Windows
 
+<p><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="640" alt="Watch the Pocket Windows video overview on YouTube, in Russian" /></a></p>
+
+**[Watch the video overview on YouTube (in Russian)](https://www.youtube.com/watch?v=KAFEjYQKF1E)**
+
 Portable Windows for accessing blocked services through an existing proxy. One folder contains Windows 11, a launcher and a separate network environment. Extract the bundle, add your connection and open a desktop with Claude Desktop and Firefox already prepared.
 
 <p><a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><strong>Download the full 2026.10.25.7 bundle</strong></a></p>

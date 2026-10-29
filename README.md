@@ -4,6 +4,10 @@
 
 # Pocket Windows
 
+<p><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="640" alt="Смотреть видеообзор Pocket Windows на YouTube" /></a></p>
+
+**[Смотреть видеообзор на YouTube](https://www.youtube.com/watch?v=KAFEjYQKF1E)**
+
 Переносимая Windows для доступа к заблокированным сервисам через готовый прокси. В одной папке находятся Windows 11, панель запуска и отдельное сетевое окружение. Распакуй комплект, добавь подключение и открой рабочий стол с подготовленными Claude Desktop и Firefox.
 
 <p><a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><strong>Скачать полный комплект 2026.10.25.7</strong></a></p>
