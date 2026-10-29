@@ -1,17 +1,19 @@
 [Русский](README.md) | [English](README.en.md)
 
-![Pocket Windows: portable Windows with a separate network connection](docs/assets/readme/cover.svg)
-
 # Pocket Windows
 
-<p><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="640" alt="Watch the Pocket Windows video overview on YouTube, in Russian" /></a></p>
-
-**[Watch the video overview on YouTube (in Russian)](https://www.youtube.com/watch?v=KAFEjYQKF1E)**
+<p align="center"><a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><img src="https://i.ytimg.com/vi/KAFEjYQKF1E/maxresdefault.jpg" width="480" alt="Watch the Pocket Windows video overview on YouTube, in Russian" /></a><br />
+<a href="https://www.youtube.com/watch?v=KAFEjYQKF1E"><strong>Watch the video overview on YouTube (in Russian)</strong></a></p>
 
 Portable Windows for accessing blocked services through an existing proxy. One folder contains Windows 11, a launcher and a separate network environment. Extract the bundle, add your connection and open a desktop with Claude Desktop and Firefox already prepared.
 
-<p><a href="https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD"><strong>Download the full 2026.10.25.7 bundle</strong></a></p>
-<p><a href="https://github.com/nekontritce11123-lab/pocket-windows/releases/latest"><strong>Latest update for an existing installation</strong></a></p>
+## Get started
+
+**First time here:** [download the full 2026.10.25.7 bundle](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD).
+
+**Already have Pocket Windows:** [latest update for an existing installation](https://github.com/nekontritce11123-lab/pocket-windows/releases/latest).
+
+> **The full bundle and application updates are different downloads.** Google Drive contains the full **2026.10.25.7** bundle, about **17.0 GB** (15.8 GiB). It already includes the updater: after extraction, open «Обновления» (Updates) and install the current version. GitHub hosts updates **without the Windows disk**; they cannot run on their own.
 
 | Your situation | What to do |
 | --- | --- |
@@ -19,17 +21,17 @@ Portable Windows for accessing blocked services through an existing proxy. One f
 | You have version 2026.10.25.3 or later | Shut down guest Windows normally, open **«Обновления» (Updates)** in the launcher, click **«Проверить» (Check)**, then **«Обновить» (Update)**. |
 | You have the older version 2026.10.24.13 | Follow the [separate transition instructions](docs/updating.en.md#version-2026102413), then update from the launcher. |
 
-**The full bundle and application updates are different downloads.** Google Drive contains the full **2026.10.25.7** bundle, about **17.0 GB** (15.8 GiB). It already includes the updater: after extraction, open «Обновления» (Updates) and install the current version. GitHub hosts updates **without the Windows disk**; they cannot run on their own.
-
-**[Download and verify](#download)** · **[First start](#first-start)** · **[Updating](docs/updating.en.md)** · **[Known limitations](#known-limitations)** · **[Help](#if-something-does-not-work)** · **[News](https://t.me/TheFactChain)**
+**Quick links:** [download and verify](#download) | [first start](#first-start) | [updating](docs/updating.en.md) | [PC requirements](#pc-requirements) | [known limitations](#known-limitations) | [help](#if-something-does-not-work) | [news](https://t.me/TheFactChain)
 
 The application interface is currently **in Russian**. This guide includes the Russian button labels and their English meanings. The screenshots below show version 2026.10.24.13; newer features are described separately.
+
+## Features
 
 ![Windows desktop inside Pocket Windows with the prepared applications](docs/assets/readme/desktop.png)
 
 *A separate Windows desktop for a browser and applications that need your selected connection.*
 
-## A separate Windows for the services you need
+### A separate Windows for the services you need
 
 Browse in Firefox and run applications inside Pocket Windows. Their traffic uses the selected connection. There is no need to reconfigure the VPN on your main Windows system: the separate environment uses its own gateway.
 
@@ -37,7 +39,7 @@ The system and its installed applications stay in the bundle folder between sess
 
 Claude Desktop and Firefox are already prepared. Accounts, subscriptions and service availability depend on the services themselves and your connection; they are not provided by the bundle.
 
-## Start from one panel
+### Start from one panel
 
 The home screen shows the Windows status and selected connection. Start the desktop, return to a running Windows session or shut it down from here. The ready-to-run bundle does not require separate installations of QEMU, Python or Linux.
 
@@ -49,7 +51,7 @@ The panel minimizes to the system tray after startup. Closing it does not shut d
 
 Version **2026.10.25.7** also provides “Выключить Windows и выйти” (Shut down Windows and exit) in the tray. It waits for confirmed Windows and gateway shutdown before closing the panel. An unconfirmed shutdown may expose a separate “Принудительно выключить” (Force shut down) button. It requires confirmation: unsaved work may be lost and the guest Windows disk may be damaged.
 
-## Connect through an existing server or proxy
+### Connect through an existing server or proxy
 
 Add a connection URI or enter its parameters in the panel. You need a working server or proxy and valid credentials. Pocket Windows does not set up a server on an empty VPS.
 
@@ -61,7 +63,7 @@ Supported connections are **Hysteria2 for TCP and UDP**, and **SOCKS5, HTTP and 
 
 If the connection drops, Windows does not fall back to direct internet access. Network access stays blocked until the connection recovers. Saving or testing another profile does not switch the running session: changes take effect the next time you start Windows.
 
-## Memory, display and clipboard
+### Memory, display and clipboard
 
 The settings let you choose Windows memory, processor count and display resolution. Resource and window settings take effect on the next start.
 
@@ -75,7 +77,7 @@ The shared clipboard transfers **text** in both directions between your main and
 
 The current update implements file transfer with `Ctrl+C` / `Ctrl+V`, but copying in both directions through File Explorer has not completed live acceptance testing. Before updating, the full 25.7 bundle supports text only. Use [a shared PC folder](#choose-which-pc-files-to-share) to exchange files.
 
-## Choose which PC files to share
+### Choose which PC files to share
 
 File sharing is off by default. You can share selected folders or all accessible PC drives. The choice takes effect the next time Windows starts. When sharing is first enabled, the guest helper may request administrator permission inside the guest to configure the file connection.
 
@@ -224,3 +226,5 @@ Most technical documentation is currently in Russian; the third-party component 
 ## Licenses
 
 A license for Pocket Windows source code has not yet been selected. Windows and third-party components have their own licenses; the bundle does not provide a Windows license or application subscriptions. Component distribution terms and obligations are described in [third-party.md](docs/third-party.md). Check the applicable rights and terms before redistributing the bundle.
+
+![Pocket Windows: portable Windows with a separate network connection](docs/assets/readme/cover.svg)
