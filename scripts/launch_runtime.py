@@ -1003,6 +1003,9 @@ def launch_guest(root, role, report, save, cancelled, startup_deadline=None):
                 if ready:
                     return record
                 if state.get('status') == 'exited':
+                    # The panel maps this fixed gateway code to a readable cause; the raw message stays private.
+                    if role == 'gateway' and re.fullmatch('[A-Z_]{1,64}', str(state.get('error', ''))):
+                        report['gateway_error'] = state['error']
                     raise RuntimeError(role + ' controller reported an early exit; see ' + str(stderr_path))
             except (ValueError, OSError, KeyError):
                 continue

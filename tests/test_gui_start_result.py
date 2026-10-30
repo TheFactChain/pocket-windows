@@ -58,6 +58,15 @@ class GuiStartupResultTests(unittest.TestCase):
             self.assertEqual(result['code'], 'runtime_error')
             self.assertTrue((root / result['receipt']).is_file())
 
+    def test_known_gateway_error_names_its_cause(self):
+        for error, code in (('CONNECTION_FAILED', 'CONNECTION_FAILED'), ('NOT_A_KNOWN_CODE', 'runtime_error')):
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as temporary:
+                result, _, _ = self.simulate(Path(temporary), phase='error', change={'gateway_error': error})
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['code'], code)
+                if code != 'runtime_error':
+                    self.assertTrue(result['message'].startswith(app.CONNECTION_ERRORS[error] + '\n'))
+
     def test_foreign_or_invalid_receipt_cannot_confirm_success(self):
         for change in ({'project': 'C:/foreign'}, {'schema': True},
                        {'supervisor': {'pid': 999}}, {'phase': 'unknown'}):

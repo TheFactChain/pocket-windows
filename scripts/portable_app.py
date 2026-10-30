@@ -499,8 +499,12 @@ def start(root):
                 break
             time.sleep(.2)
     name = receipt.relative_to(root).as_posix()
+    message = START_MESSAGES[code]
+    if code == 'runtime_error' and value and value.get('gateway_error') in CONNECTION_ERRORS:
+        code = value['gateway_error']
+        message = CONNECTION_ERRORS[code]
     result = {'ok': code in ('ready', 'stopped'), 'code': code,
-              'message': START_MESSAGES[code] + '\n' + name, 'receipt': name}
+              'message': message + '\n' + name, 'receipt': name}
     if not result['ok'] and process.poll() is None:
         result['outcome_unknown'] = True
     result.update(network_verified=False,
