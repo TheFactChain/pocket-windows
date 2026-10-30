@@ -15,7 +15,7 @@ Find your installed version in **«Обновления» (Updates)** in the lau
 
 ## Version 2026.10.25.3 and later
 
-The full **2026.10.25.7** bundle on Google Drive already includes the updater. Use this normal flow for it, including immediately after the first extraction.
+The full **2026.10.30.1** bundle on Google Drive already includes the updater. Use this normal flow for it, including immediately after the first extraction.
 
 1. Open **«Обновления» (Updates)** in the launcher.
 2. Click **«Проверить» (Check)**, then **«Обновить» (Update)** and wait for completion. The panel may close and reopen during installation.

@@ -25,11 +25,11 @@ Portable Windows for accessing blocked services through an existing proxy. One f
 
 ## Get started
 
-**First time here:** [download the full 2026.10.25.7 bundle](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD).
+**First time here:** [download the full 2026.10.30.1 bundle](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD).
 
 **Already have Pocket Windows:** [latest update for an existing installation](https://github.com/TheFactChain/pocket-windows/releases/latest).
 
-> **The full bundle and application updates are different downloads.** Google Drive contains the full **2026.10.25.7** bundle, about **17.0 GB** (15.8 GiB). It already includes the updater: after extraction, open «Обновления» (Updates) and install the current version. GitHub hosts updates **without the Windows disk**; they cannot run on their own.
+> **The full bundle and application updates are different downloads.** Google Drive contains the full **2026.10.30.1** bundle, about **17.0 GB** (15.8 GiB). It already includes the updater: after extraction, open «Обновления» (Updates) and install the current version. GitHub hosts updates **without the Windows disk**; they cannot run on their own.
 
 | Your situation | What to do |
 | --- | --- |
@@ -91,7 +91,7 @@ Work in a window or toggle full screen with `Ctrl+Alt+F`. Use `Ctrl+Alt+G` to re
 
 The shared clipboard transfers **text** in both directions between your main and guest Windows systems. You can turn it off in settings before the next start. Copying images is not supported.
 
-The current update implements file transfer with `Ctrl+C` / `Ctrl+V`, but copying in both directions through File Explorer has not completed live acceptance testing. Before updating, the full 25.7 bundle supports text only. Use [a shared PC folder](#choose-which-pc-files-to-share) to exchange files.
+The current update implements file transfer with `Ctrl+C` / `Ctrl+V`, but copying in both directions through File Explorer has not completed live acceptance testing. Use [a shared PC folder](#choose-which-pc-files-to-share) to exchange files.
 
 ### Choose which PC files to share
 
@@ -107,14 +107,14 @@ These are the actual files on your PC. Editing or deleting a shared file inside 
 
 ### Full bundle for the first start
 
-Open the [Pocket Windows folder on Google Drive](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD) and download **`Pocket-Windows-2026.10.25.7.zip`**. Its size is **16,973,575,467 bytes**. The archive includes Windows, the launcher, the updater and its runtime; no separate installer is needed.
+Open the [Pocket Windows folder on Google Drive](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD) and download **`Pocket-Windows-2026.10.30.1.zip`**. Its size is **16,965,561,181 bytes**. The archive includes Windows, the launcher, the updater and its runtime; no separate installer is needed.
 
 No account sign-in is required. Google Drive may ask you to confirm the download because the archive is too large for its virus scan. After extraction, update the application from the launcher; you do not need to download the Windows disk again.
 
 SHA256:
 
 ```text
-e59cacf90eef062a7deb43ea25afce17d131f0ec7bda55b7773dc39d70f9c101
+059f00949dd693bf0b1e329c86d9164ae51a37235f286f30e1cfcc6140ed8851
 ```
 
 ### Updating an existing installation
@@ -144,7 +144,7 @@ The new updater downloads changed, verified chunks and resumes interrupted downl
 In PowerShell, run this command with the path to your downloaded file:
 
 ```powershell
-Get-FileHash -LiteralPath 'C:\Users\YOUR_NAME\Downloads\Pocket-Windows-2026.10.25.7.zip' -Algorithm SHA256
+Get-FileHash -LiteralPath 'C:\Users\YOUR_NAME\Downloads\Pocket-Windows-2026.10.30.1.zip' -Algorithm SHA256
 ```
 
 Compare `Hash` with the value for **the same version and filename** above or in the corresponding `.sha256` file. If the values differ, do not use the archive; download it again. SHA256 checks integrity against the published value; it is not a publisher's digital signature.
@@ -153,7 +153,7 @@ Compare `Hash` with the value for **the same version and filename** above or in 
 
 1. **Download the full bundle and verify SHA256.** Follow the [download instructions](#download). An application update or Source code archive is not suitable for the first start.
 2. **Extract the entire archive.** Use Windows File Explorer and a new writable folder. Do not run `Launcher.exe` from inside the archive or separate it from the other files.
-3. **Update the application.** Open `Launcher.exe`, then «Обновления» (Updates). Click «Проверить» (Check), then «Обновить» (Update) and wait for completion. The full 25.7 bundle already includes this feature; guest Windows does not need to be running to update.
+3. **Update the application.** Open `Launcher.exe`, then «Обновления» (Updates). Click «Проверить» (Check), then «Обновить» (Update) and wait for completion. The full 30.1 bundle already includes this feature; guest Windows does not need to be running to update.
 4. **Check your PC.** Open «Проверка» (Checks). If Windows Hypervisor Platform is disabled, use «Подготовить ПК» (Prepare PC), approve the administrator prompt and restart the PC if required.
 5. **Add a connection.** In «Подключения» (Connections), add an existing Hysteria2, SOCKS5, HTTP or HTTPS proxy and test it. Obtain the server credentials from your connection provider.
 6. **Start Windows.** Return to the home screen and press the start button. The network is prepared first, then the Windows desktop opens. Sign in to your applications and services.
@@ -197,7 +197,7 @@ The Checks section can restore Python and QEMU from the local archive, replace t
 
 ### Do application updates require downloading the whole Windows image again?
 
-No: the full 25.7 bundle already supports updates from the launcher. The application is updated while the Windows disk and your data are preserved. See the [update guide](docs/updating.en.md), including the separate transition from the older 24.13 release. Do not replace your Windows disk with one from another full bundle.
+No: the full 30.1 bundle already supports updates from the launcher. The application is updated while the Windows disk and your data are preserved. See the [update guide](docs/updating.en.md), including the separate transition from the older 24.13 release. Do not replace your Windows disk with one from another full bundle.
 
 ### Where can I report a problem?
 
@@ -216,7 +216,7 @@ Open an issue in [GitHub Issues](https://github.com/TheFactChain/pocket-windows/
 
 ## Known limitations
 
-- The full Google Drive bundle is version 25.7; install current fixes through «Обновления» (Updates) in the launcher.
+- The full Google Drive bundle is version 30.1; install current fixes through «Обновления» (Updates) in the launcher.
 - Clipboard file transfer, clipboard failure warnings, preservation of NTFS alternate data streams and folder status recovery after a polling failure still need completion of live testing. The service drives `WCPSETTINGS` / `WCPFILES` may be visible in File Explorer.
 - External internet uses IPv4; UDP requires Hysteria2. Access to files with multiple hard links and to reparse points is restricted to protect PC folders.
 - Release 29.3 adds audio and microphone support, but real recording, playback and display behavior after long idle periods still await owner verification. Select default audio devices before starting; recording requires microphone permissions in both host and guest Windows.
