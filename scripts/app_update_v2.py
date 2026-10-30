@@ -48,7 +48,7 @@ def _number(value, maximum=LIMIT, minimum=0):
 def _url(url, version, suffix):
     if type(url) is not str:
         return False
-    expected = ('https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v'
+    expected = ('https://github.com/TheFactChain/pocket-windows/releases/download/v'
                 + version + '/Pocket-Windows-' + version + suffix)
     if url == expected:
         return True
@@ -154,7 +154,7 @@ def build(release_path, toolkit_path, base_url=None):
     archive_path = root/(stem + '-chunks.zip')
     index_path = root/(stem + '-update-v2.json')
     toolkit_record = release.file_record(release.pack.file_under(toolkit.parent, toolkit.name), toolkit.name)
-    base_url = base_url or ('https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v' + info['release_id'])
+    base_url = base_url or ('https://github.com/TheFactChain/pocket-windows/releases/download/v' + info['release_id'])
     files, chunks = [], {}
     gateway = None
     with zipfile.ZipFile(archive_path, 'x', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:

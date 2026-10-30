@@ -17,8 +17,8 @@ namespace WindowsClaude.Launcher
 {
     internal static class AppUpdate
     {
-        const string GitHubApi = "https://api.github.com/repos/nekontritce11123-lab/pocket-windows/releases/latest";
-        const string AssetPrefix = "https://github.com/nekontritce11123-lab/pocket-windows/releases/download/";
+        const string GitHubApi = "https://api.github.com/repos/TheFactChain/pocket-windows/releases/latest";
+        const string AssetPrefix = "https://github.com/TheFactChain/pocket-windows/releases/download/";
         const long MaxPackage = 8L * 1024 * 1024 * 1024;
         internal sealed class Offer { public string Id, ZipUrl, ShaUrl, IndexUrl, IndexShaUrl, ToolkitUrl, ToolkitShaUrl; public long Bytes, ToolkitBytes; public bool V2, Repair, Offline; }
         internal sealed class CheckResult { public Offer Offer; public string Title, Message; }

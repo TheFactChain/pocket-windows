@@ -23,7 +23,7 @@ CHUNK = 65536
 
 
 def archive_url(url, version):
-    expected = ('https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v'
+    expected = ('https://github.com/TheFactChain/pocket-windows/releases/download/v'
                 + version + '/Pocket-Windows-' + version + '-app.zip')
     if url == expected:
         return True

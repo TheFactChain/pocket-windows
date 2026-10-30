@@ -1051,7 +1051,7 @@ def app_update_index(archive, manifest, digest):
                               'compressed_bytes': entry.compress_size, 'method': entry.compress_type})
     release_id = manifest['release_id']
     return {'schema': 1, 'release': manifest,
-            'archive': {'url': 'https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v'
+            'archive': {'url': 'https://github.com/TheFactChain/pocket-windows/releases/download/v'
                         + release_id + '/Pocket-Windows-' + release_id + '-app.zip',
                         'bytes': size, 'sha256': digest}, 'files': files}
 

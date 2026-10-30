@@ -545,7 +545,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(index['release']['common_files'], self.manifest['common_files'])
         self.assertEqual(index['release']['omitted'], [])
         self.assertEqual(index['archive'], {
-            'url': 'https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v'
+            'url': 'https://github.com/TheFactChain/pocket-windows/releases/download/v'
                    + self.info['release_id'] + '/' + Path(result['package']).name,
             'bytes': result['bytes'], 'sha256': result['sha256']})
         self.assertEqual({row['path'] for row in index['files']},

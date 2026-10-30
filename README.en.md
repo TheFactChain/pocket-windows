@@ -27,7 +27,7 @@ Portable Windows for accessing blocked services through an existing proxy. One f
 
 **First time here:** [download the full 2026.10.25.7 bundle](https://drive.google.com/drive/folders/1OnAncsF3BK5Mo6Vc245Z0D7sW1iBxKHD).
 
-**Already have Pocket Windows:** [latest update for an existing installation](https://github.com/nekontritce11123-lab/pocket-windows/releases/latest).
+**Already have Pocket Windows:** [latest update for an existing installation](https://github.com/TheFactChain/pocket-windows/releases/latest).
 
 > **The full bundle and application updates are different downloads.** Google Drive contains the full **2026.10.25.7** bundle, about **17.0 GB** (15.8 GiB). It already includes the updater: after extraction, open «Обновления» (Updates) and install the current version. GitHub hosts updates **without the Windows disk**; they cannot run on their own.
 
@@ -119,7 +119,7 @@ e59cacf90eef062a7deb43ea25afce17d131f0ec7bda55b7773dc39d70f9c101
 
 ### Updating an existing installation
 
-The current published release is **[2026.10.29.3](https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.29.3)**: microphone, audio, power defaults and accumulated fixes. The complete application update, `Pocket-Windows-2026.10.29.3-app.zip`, is **909,595,516 bytes** (about 910 MB). It does not include the Windows disk. You normally do not need to download it manually: use **«Обновления» (Updates)** in the launcher and follow the [instructions for your version](docs/updating.en.md).
+The current published release is **[2026.10.29.3](https://github.com/TheFactChain/pocket-windows/releases/tag/v2026.10.29.3)**: microphone, audio, power defaults and accumulated fixes. The complete application update, `Pocket-Windows-2026.10.29.3-app.zip`, is **909,595,516 bytes** (about 910 MB). It does not include the Windows disk. You normally do not need to download it manually: use **«Обновления» (Updates)** in the launcher and follow the [instructions for your version](docs/updating.en.md).
 
 The new updater downloads changed, verified chunks and resumes interrupted downloads. The amount depends on your installed version and saved cache; the first download can be large.
 
@@ -201,7 +201,7 @@ No: the full 25.7 bundle already supports updates from the launcher. The applica
 
 ### Where can I report a problem?
 
-Open an issue in [GitHub Issues](https://github.com/nekontritce11123-lab/pocket-windows/issues/new). Russian and English reports are welcome. Include your Pocket Windows version, host Windows version, the action, expected result and error text. For an update failure, include both the starting and target versions. Remove passwords, connection URIs and personal information from screenshots and logs before posting. [Telegram](https://t.me/TheFactChain) is the project's news channel.
+Open an issue in [GitHub Issues](https://github.com/TheFactChain/pocket-windows/issues/new). Russian and English reports are welcome. Include your Pocket Windows version, host Windows version, the action, expected result and error text. For an update failure, include both the starting and target versions. Remove passwords, connection URIs and personal information from screenshots and logs before posting. [Telegram](https://t.me/TheFactChain) is the project's news channel.
 
 ## If something does not work
 
@@ -222,11 +222,11 @@ Open an issue in [GitHub Issues](https://github.com/nekontritce11123-lab/pocket-
 - Release 29.3 adds audio and microphone support, but real recording, playback and display behavior after long idle periods still await owner verification. Select default audio devices before starting; recording requires microphone permissions in both host and guest Windows.
 - Full acceptance on another PC, with two monitors and in full screen is incomplete. An intermittent local file-server `AccessDenied` failure is also tracked.
 
-See each release's [GitHub notes](https://github.com/nekontritce11123-lab/pocket-windows/releases/latest) for its checks and limitations.
+See each release's [GitHub notes](https://github.com/TheFactChain/pocket-windows/releases/latest) for its checks and limitations.
 
 ## Documentation and source code
 
-The [Pocket Windows repository](https://github.com/nekontritce11123-lab/pocket-windows) contains launcher code, supporting scripts, tests and documentation. Windows and gateway images, the ready-to-run runtime and user data are not stored in Git. A `git clone` or GitHub Source code ZIP does not replace the [ready-to-run bundle](#download).
+The [Pocket Windows repository](https://github.com/TheFactChain/pocket-windows) contains launcher code, supporting scripts, tests and documentation. Windows and gateway images, the ready-to-run runtime and user data are not stored in Git. A `git clone` or GitHub Source code ZIP does not replace the [ready-to-run bundle](#download).
 
 | Document | Contents |
 | --- | --- |

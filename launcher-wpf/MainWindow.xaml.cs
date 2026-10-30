@@ -423,7 +423,7 @@ namespace WindowsClaude.Launcher
                 if (!Flag(Child(readinessReport, "capabilities"), "recover_session"))
                 {
                     StatusText.Text = "Действие не завершено";
-                    NextStepText.Text = "Повтори проверку. Подробности ошибки — в разделе «Проверка».";
+                    NextStepText.Text = "Повтори проверку. Подробности ошибки в разделе «Проверка».";
                     Show(NextActionButton, !stopAvailable);
                 }
             }
@@ -440,7 +440,7 @@ namespace WindowsClaude.Launcher
             int lineEnd = message.IndexOf('\n'); if (lineEnd >= 0) message = message.Substring(0, lineEnd).TrimEnd();
             string code = Text(result, "code", "");
             if (code == "runtime_error" || code == "supervisor_exited")
-                return "Запуск Windows не подтверждён. Открой раздел «Проверка», чтобы узнать причину.";
+                return "Запуск Windows не подтверждён. Причина записана в журнал: открой «Проверка» и нажми «Журналы».";
             return message;
         }
 
@@ -508,6 +508,19 @@ namespace WindowsClaude.Launcher
         void OnRepairGateway(object sender, RoutedEventArgs e) { var task = RunAction("repair-gateway", false); }
         void OnPrepareHost(object sender, RoutedEventArgs e) { var task = RunAction("prepare-host", false); }
         void OnCopyReport(object sender, RoutedEventArgs e) { try { Clipboard.SetText(reportText); SetOperation("Отчёт скопирован."); } catch (Exception) { SetOperation("Не удалось скопировать отчёт. Попробуй ещё раз."); } }
+        // Opens logs with the last failed launch folder selected, so it can be zipped and sent as is.
+        void OnOpenLogs(object sender, RoutedEventArgs e)
+        {
+            string folder = System.IO.Path.Combine(Bridge.Root, "logs"), receipt = operationResult == null ? "" : Text(operationResult, "receipt", "");
+            try
+            {
+                Directory.CreateDirectory(folder);
+                string launch = receipt.Length > 0 ? System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(System.IO.Path.Combine(Bridge.Root, receipt))) : "";
+                bool select = launch.StartsWith(folder + "\\", StringComparison.OrdinalIgnoreCase) && Directory.Exists(launch);
+                System.Diagnostics.Process.Start("explorer.exe", select ? "/select,\"" + launch + "\"" : "\"" + folder + "\"");
+            }
+            catch (Exception) { SetOperation("Не удалось открыть папку журналов: " + folder); }
+        }
         void OnNextAction(object sender, RoutedEventArgs e)
         {
             if (suggestedAction == "settings") Navigate(AppPage.Settings);
@@ -694,6 +707,12 @@ namespace WindowsClaude.Launcher
                 { "title", "Файловый сервер остановился" }, { "detail", FileServerRestart } });
             if (fileRecovery) checks.Add(new Dictionary<string, object> { { "passed", false },
                 { "title", "Операция с файлами требует проверки" }, { "detail", recoveryDetail } });
+            // Preflight checks can all pass while the launch itself failed; show that failure where the message points.
+            // A slow start may still come up after the timeout; a running Windows clears the row.
+            string launchReceipt = operationResult != null && !Bridge.Ok(operationResult) && !runtimeActive ? Text(operationResult, "receipt", "") : "";
+            if (launchReceipt.Length > 0) checks.Insert(0, new Dictionary<string, object> { { "passed", false },
+                { "title", "Последний запуск не подтверждён" },
+                { "detail", "Журнал: " + launchReceipt.Substring(0, Math.Max(0, launchReceipt.LastIndexOf('/'))) + ". Нажми «Журналы», заархивируй выделенную папку и отправь её." } });
             if (clipboardState == "failed" || clipboardState == "unconfirmed") checks.Add(new Dictionary<string, object> { { "passed", false },
                 { "title", "Общий буфер обмена недоступен" }, { "detail", clipboardDetail } });
             bool setupRequired = checks.Any(item => !Flag(item, "passed") && Flag(item, "setup_required"));

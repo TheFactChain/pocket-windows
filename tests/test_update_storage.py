@@ -36,7 +36,7 @@ class StorageTests(unittest.TestCase):
         encoder = zlib.compressobj(wbits=-15)
         compressed = encoder.compress(raw) + encoder.flush()
         self.put(self.target/'state/update-cache/chunks'/sha, compressed)
-        url = 'https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v' + version + '/Pocket-Windows-' + version
+        url = 'https://github.com/TheFactChain/pocket-windows/releases/download/v' + version + '/Pocket-Windows-' + version
         value = {'schema': 2, 'min_updater': 2, 'release': json.loads(raw),
                  'archive': {'url': url+'-chunks.zip', 'bytes': len(compressed)+40, 'sha256': 'b'*64},
                  'toolkit': {'url': url+'-updater.zip', 'bytes': 1, 'sha256': 'c'*64},

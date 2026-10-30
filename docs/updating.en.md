@@ -4,7 +4,7 @@
 
 An application update does not replace the Windows disk, applications installed inside it, saved connections or personal settings. The full bundle for a first installation and an application update are different archives.
 
-Find your installed version in **«Обновления» (Updates)** in the launcher. In an older copy, open `release-info.json` next to `Launcher.exe` and read `release_id`. The current published release is on the [Latest page](https://github.com/nekontritce11123-lab/pocket-windows/releases/latest).
+Find your installed version in **«Обновления» (Updates)** in the launcher. In an older copy, open `release-info.json` next to `Launcher.exe` and read `release_id`. The current published release is on the [Latest page](https://github.com/TheFactChain/pocket-windows/releases/latest).
 
 ## Before updating
 
@@ -30,7 +30,7 @@ These steps cover a normal update of a healthy installation. An older operation 
 The verified transition uses the **external updater to install 2026.10.25.7**. Do not use the old built-in update button for this transition: it does not fully replace the active gateway. After the transition, open the new launcher and use its normal update flow to reach the current release.
 
 1. Shut down guest Windows normally and close every launcher panel for that copy.
-2. Download `Pocket-Windows-2026.10.25.7-app.zip` from [release 2026.10.25.7](https://github.com/nekontritce11123-lab/pocket-windows/releases/tag/v2026.10.25.7).
+2. Download `Pocket-Windows-2026.10.25.7-app.zip` from [release 2026.10.25.7](https://github.com/TheFactChain/pocket-windows/releases/tag/v2026.10.25.7).
 3. Open PowerShell. Change the paths **in the first two lines** to your installed folder (the one containing `Launcher.exe`) and downloaded ZIP. Run the rest of the block unchanged:
 
 ```powershell
@@ -54,6 +54,6 @@ After success, open `Launcher.exe` **in your installed folder**, then open Updat
 - Do not run multiple installations at once. Keep the error text and starting version.
 - If the launcher opens, return to Updates and follow its message about resuming or recovery. Previously verified chunks may be reused.
 - Do not delete `state`, the cache, journal or saved updater toolkit: they may be needed to resume or roll back.
-- If the launcher does not open or recovery fails, open an [issue](https://github.com/nekontritce11123-lab/pocket-windows/issues/new) with the starting and target versions. Remove secrets and personal paths from screenshots and logs before posting.
+- If the launcher does not open or recovery fails, open an [issue](https://github.com/TheFactChain/pocket-windows/issues/new) with the starting and target versions. Remove secrets and personal paths from screenshots and logs before posting.
 
 Application rollback does not restore a damaged Windows disk. Your data needs a separate backup.

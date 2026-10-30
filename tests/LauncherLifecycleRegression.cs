@@ -158,7 +158,7 @@ internal static class LauncherLifecycleRegression
             {
                 window = Window();
                 var genericStartup = Bridge.Failure("Supervisor завершился во время запуска.\nlogs/receipt.json");
-                genericStartup["code"] = failureCode;
+                genericStartup["code"] = failureCode; genericStartup["receipt"] = "logs/runtime-launch-fixture/receipt.json";
                 genericStartup["outcome_unknown"] = true;
                 Bridge.Handler = (action, payload) => Task.FromResult(action == "start" ? genericStartup : Report());
                 var failedStart = (Task<bool>)Call(window, "RunAction", "start", false, null);
@@ -166,6 +166,7 @@ internal static class LauncherLifecycleRegression
                 string explanation = ((TextBlock)Field(window, "OperationText")).Text;
                 Assert(!explanation.Contains("сервер") && !explanation.Contains("подключению"), "Generic supervisor failure never claims the proxy failed");
                 Assert(explanation.Contains("Проверка"), "Generic startup failure directs to evidence in diagnostics");
+                Assert(((TextBlock)Field(window, "ChecksHeroTitle")).Text.StartsWith("Нужно исправить"), "Diagnostics shows the failed launch even when every preflight check passed");
                 Assert(!explanation.Contains("не запустилась") && !((TextBlock)Field(window, "StatusText")).Text.Contains("не запустилась"), "An unknown outcome never claims Windows did not start");
             }
             window = Window();

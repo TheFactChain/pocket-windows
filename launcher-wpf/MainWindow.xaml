@@ -324,6 +324,7 @@
                                 <Button x:Name="PrepareHostButton" Style="{StaticResource TextAction}" FontSize="13" Content="Подготовить ПК" Click="OnPrepareHost" ToolTip="Включит виртуализацию, нужны права администратора" />
                                 <Border Width="1" Height="14" Background="{StaticResource Line}" Margin="6,0" />
                                 <Button Style="{StaticResource TextAction}" FontSize="13" Content="Отчёт" Click="OnCopyReport" ToolTip="Скопировать отчёт проверки" />
+                                <Button Style="{StaticResource TextAction}" FontSize="13" Content="Журналы" Click="OnOpenLogs" ToolTip="Открыть папку журналов запуска" />
                                 <TextBlock x:Name="ReportLocation" Visibility="Collapsed" />
                             </StackPanel>
                             <Border Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Top">

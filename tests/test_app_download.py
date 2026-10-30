@@ -41,7 +41,7 @@ class DownloadTests(unittest.TestCase):
                 rows.append({'path':name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
                 entries.append({'path':name,'offset':start,'compressed_bytes':entry.compress_size,'method':entry.compress_type})
         self.index={'schema':1,'release':{'schema':1,'release_id':'2026.10.26.2','source_commit':'a'*40,'artifacts':{},'common_files':rows},
-                    'archive':{'url':'https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v2026.10.26.2/Pocket-Windows-2026.10.26.2-app.zip','bytes':len(self.raw),'sha256':hashlib.sha256(self.raw).hexdigest()},'files':entries}
+                    'archive':{'url':'https://github.com/TheFactChain/pocket-windows/releases/download/v2026.10.26.2/Pocket-Windows-2026.10.26.2-app.zip','bytes':len(self.raw),'sha256':hashlib.sha256(self.raw).hexdigest()},'files':entries}
         self.requests=[];self.corrupt=False;self.status=206
         self.save_index()
 

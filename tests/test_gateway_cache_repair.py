@@ -54,7 +54,7 @@ class GatewayCacheRepairTests(unittest.TestCase):
                                compressed_bytes=len(compressed), method=8))
             offset += len(compressed)
             files.append(dict(path=name, bytes=len(data), sha256=sha, chunks=[sha]))
-        url = 'https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v2026.10.27.1/Pocket-Windows-2026.10.27.1'
+        url = 'https://github.com/TheFactChain/pocket-windows/releases/download/v2026.10.27.1/Pocket-Windows-2026.10.27.1'
         self.index = dict(schema=2, min_updater=2, release=self.info,
                           archive=dict(url=url+'-chunks.zip', bytes=offset, sha256='a'*64),
                           toolkit=dict(url=url+'-updater.zip', bytes=1, sha256='b'*64),
