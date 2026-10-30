@@ -70,6 +70,27 @@ class ProfileActionTests(unittest.TestCase):
         self.assertEqual(current["revision_id"], result["profile"]["revision_id"])
         self.assertTrue(current["selected"])
 
+    def test_delete_removes_the_profile_and_clears_only_its_own_selection(self):
+        kept = self.call("import-profile", {"uri": "hy2://fixture-private-token@kept.example.com#Kept"})["profile"]
+        old = self.call("import-profile", {"uri": "hy2://fixture-private-token@old.example.com#Old"})["profile"]
+        self.call("select-profile", {"profile_id": kept["profile_id"]})
+        removed = self.call("delete-profile", {"profile_id": old["profile_id"]})
+        self.assertTrue(removed["ok"])
+        self.assertFalse(removed["was_selected"])
+        listed = self.call("list-profiles")["profiles"]
+        self.assertEqual([item["profile_id"] for item in listed], [kept["profile_id"]])
+        self.assertTrue(listed[0]["selected"])
+        for request in ({"profile_id": old["profile_id"]}, {"profile_id": "../private"},
+                        {"profile_id": kept["profile_id"], "unknown": True}, {}):
+            with self.subTest(request=request):
+                self.assertFalse(self.call("delete-profile", request)["ok"])
+        self.assertEqual(len(self.call("list-profiles")["profiles"]), 1)
+        active = self.call("delete-profile", {"profile_id": kept["profile_id"]})
+        self.assertTrue(active["ok"])
+        self.assertTrue(active["was_selected"])
+        self.assertEqual(self.call("list-profiles")["profiles"], [])
+        self.assertNotIn(kept["profile_id"], (self.root / "profiles/profiles.json").read_text())
+
     def test_export_is_explicit_never_overwrites_and_keeps_secrets_out_of_reply(self):
         result = self.call("import-profile", {"uri": "hy2://fixture-private-token@example.com"})
         profile_id = result["profile"]["profile_id"]

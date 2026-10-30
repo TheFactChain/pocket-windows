@@ -702,6 +702,7 @@ PROFILE_ACTIONS = {
     'get-profile-view': {'profile_id'},
     'save-profile': {'profile_id', 'profile'},
     'select-profile': {'profile_id'},
+    'delete-profile': {'profile_id'},
     'import-profile': {'uri', 'profile'},
     'export-profile': {'profile_id', 'destination', 'include_secrets'},
 }
@@ -753,6 +754,11 @@ def profile_action(root, action, request):
     elif action == 'select-profile':
         view = store.select(request['profile_id'])
         message = 'Подключение выбрано для следующего запуска.'
+    elif action == 'delete-profile':
+        was_selected = store.delete(request['profile_id'])
+        return result | {'code': 'deleted', 'was_selected': was_selected,
+                         'message': 'Подключение удалено. Выбери другое для следующего запуска.' if was_selected
+                         else 'Подключение удалено.'}
     elif action == 'import-profile':
         if ('uri' in request) == ('profile' in request):
             raise ValueError('Supply one connection link or exported profile')
@@ -785,6 +791,7 @@ def profile_error(error):
         'Enter credentials again when changing protocol or obfuscation':
             'При смене протокола или маскировки введи пароль заново.',
         'Request exceeds 64 KiB': 'Запрос слишком большой. Максимальный размер 64 КиБ.',
+        'Profile does not exist': 'Подключение не найдено. Возможно, оно уже удалено.',
     }
     return messages.get(str(error),
         'Проверь поля подключения или формат импорта. Некорректные данные не сохранены.')

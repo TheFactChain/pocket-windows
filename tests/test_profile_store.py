@@ -67,6 +67,21 @@ class ProfileStoreTests(unittest.TestCase):
             self.store.save(self.config, {'auth': ''}, profile_id=first['profile_id'])
         self.assertEqual(self.store.get_view(first['profile_id'])['revision_id'], second['revision_id'])
 
+    def test_deleting_the_running_profile_keeps_its_session_snapshot(self):
+        first = self.store.save(self.config, {'auth': 'old'})
+        self.store.select(first['profile_id'])
+        with self.store.session_profile() as (selected, profile):
+            self.assertTrue(self.store.delete(first['profile_id']))
+            self.assertEqual(profile['credentials']['auth'], 'old')
+            self.assertIsNone(self.store.selected_summary())
+            other = self.store.save(self.config | {'name': 'Другой'}, {'auth': 'new'})
+        self.assertEqual([item['profile_id'] for item in self.store.list_profiles()], [other['profile_id']])
+        self.assertEqual(list((self.directory / 'leases').iterdir()), [])
+        with self.assertRaises(ValueError):
+            self.store.delete(first['profile_id'])
+        with self.assertRaises(ValueError):
+            self.store.session_profile().__enter__()
+
     def test_inactive_history_is_pruned_before_the_store_size_check(self):
         first = self.store.save(self.config, {'auth': 'first'})
         with mock.patch.object(storage, 'MAX_STORE_BYTES', 4096):

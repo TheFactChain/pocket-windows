@@ -225,7 +225,7 @@ namespace WindowsClaude.Launcher
             ((TranslateTransform)Sheet.RenderTransform).BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(24, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = EaseOut });
         }
 
-        void ShowEditor(string title) { Show(EditorExtras, true); Show(ExportButton, profileId != null); OpenSheet(title, EditorSheet); }
+        void ShowEditor(string title) { Show(EditorExtras, true); Show(ExportButton, profileId != null); Show(DeleteProfileButton, profileId != null); OpenSheet(title, EditorSheet); }
 
         void CloseSheet()
         {
@@ -300,6 +300,7 @@ namespace WindowsClaude.Launcher
                 case "list-profiles": case "get-profile-view": SetOperation("Загружаем подключения…"); break;
                 case "save-profile": case "import-profile": SetOperation("Сохраняем подключение…"); break;
                 case "select-profile": SetOperation("Выбираем подключение…"); break;
+                case "delete-profile": SetOperation("Удаляем подключение…"); break;
                 case "test-profile": SetOperation("Проверяем подключение… Это займёт до пары минут."); break;
                 case "export-profile": SetOperation("Экспортируем подключение…"); break;
                 default: SetOperation("Проверяем готовность…"); break;
@@ -312,7 +313,7 @@ namespace WindowsClaude.Launcher
             busy = value; Show(BusyRing, value); BusyRing.IsIndeterminate = value; // a hidden indeterminate ring keeps animating
             Show(ToastClose, !value);
             if (!value && OperationText.Text.Length > 0) { toastTimer.Stop(); toastTimer.Start(); }
-            foreach (UIElement button in new UIElement[] { RefreshButton, PrepareButton, RepairGatewayButton, NextActionButton, AddLinkButton, SaveProfileButton, ProfileList })
+            foreach (UIElement button in new UIElement[] { RefreshButton, PrepareButton, RepairGatewayButton, NextActionButton, AddLinkButton, SaveProfileButton, DeleteProfileButton, ProfileList })
                 button.IsEnabled = !value;
             PrepareHostButton.IsEnabled = !value && !runtimeActive;
             TestProfileButton.IsEnabled = !value && testAvailable;
@@ -1402,7 +1403,7 @@ namespace WindowsClaude.Launcher
                 if (action == "list-profiles" || action == "get-profile-view") SetOperation("");
                 if (result.ContainsKey("profile")) LoadProfileView(Child(result, "profile"));
                 if (action == "list-profiles") { profilesLoaded = true; LoadProfileList(result["profiles"]); }
-                else if (action == "save-profile" || action == "select-profile" || action == "import-profile")
+                else if (action == "save-profile" || action == "select-profile" || action == "import-profile" || action == "delete-profile")
                 {
                     var list = await Run("list-profiles", null);
                     if (Bridge.Ok(list)) { profilesLoaded = true; LoadProfileList(list["profiles"]); }
@@ -1507,7 +1508,7 @@ namespace WindowsClaude.Launcher
         void OnSecretChanged(object sender, RoutedEventArgs e) { if (TypeHttps != null) UpdateHints(); }
         void OnTypeClick(object sender, RoutedEventArgs e) { ProtocolBox.SelectedIndex = Convert.ToInt32(((FrameworkElement)sender).Tag, CultureInfo.InvariantCulture); }
         void ProfileErrorText(string text) { ProfileError.Text = text ?? ""; Show(ProfileError, !String.IsNullOrEmpty(text)); EditorErrorText(text); }
-        void EditorErrorText(string text) { EditorError.Text = text ?? ""; Show(EditorError, !String.IsNullOrEmpty(text)); Show(EditorExtras, String.IsNullOrEmpty(text)); Show(ExportButton, profileId != null); }
+        void EditorErrorText(string text) { EditorError.Text = text ?? ""; Show(EditorError, !String.IsNullOrEmpty(text)); Show(EditorExtras, String.IsNullOrEmpty(text)); Show(ExportButton, profileId != null); Show(DeleteProfileButton, profileId != null); }
 
         bool CanReuseCredentials
         {
@@ -1590,6 +1591,20 @@ namespace WindowsClaude.Launcher
                 ShowEditor("Введи пароль"); ProfileAuth.Focus(); return;
             }
             await UseProfile(await ProfileAction("import-profile", new Dictionary<string, object> { { "profile", profile } }));
+        }
+
+        // Deleting the selected connection leaves none selected: traffic never moves to another server silently.
+        async void OnDeleteProfile(object sender, RoutedEventArgs e)
+        {
+            string id = profileId;
+            if (busy || id == null) return;
+            var saved = profiles.FirstOrDefault(item => Text(item, "profile_id", "") == id);
+            // Without a selection the running session would be reported as needing setup.
+            if (runtimeActive && Flag(saved, "selected")) { EditorErrorText("Это подключение выбрано для работающей Windows. Выключи Windows и удали его."); return; }
+            string name = Text(saved, "name", "это подключение");
+            if (System.Windows.MessageBox.Show(this, "Удалить «" + name + "»? Адрес и пароль будут стёрты с этого ПК. Работающий сеанс не изменится.",
+                "Удалить подключение", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            if (Bridge.Ok(await ProfileAction("delete-profile", new Dictionary<string, object> { { "profile_id", id } }))) { NewProfile(); CloseSheet(); }
         }
 
         // Export opens in the same card: the profile being edited, otherwise the selected one.

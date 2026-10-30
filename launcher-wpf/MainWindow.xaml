@@ -487,6 +487,7 @@
                                 <StackPanel x:Name="EditorExtras" Orientation="Horizontal" VerticalAlignment="Center" Margin="-7,0,0,0">
                                     <Button x:Name="TestProfileButton" Style="{StaticResource TextAction}" Content="Проверить" Click="OnTestProfile" ToolTip="Проверить, что сервер отвечает" />
                                     <Button x:Name="ExportButton" Style="{StaticResource TextAction}" Content="Экспорт" Click="OnExportProfile" Margin="6,0,0,0" ToolTip="Сохранить подключение в файл" />
+                                    <Button x:Name="DeleteProfileButton" Style="{StaticResource TextAction}" Foreground="{StaticResource Danger}" Content="Удалить" Click="OnDeleteProfile" Margin="6,0,0,0" ToolTip="Убрать подключение с этого ПК" />
                                 </StackPanel>
                             </DockPanel>
                         </StackPanel>

@@ -396,6 +396,18 @@ class ProfileStore:
             self._write(data)
             return self._view(data, profile_id)
 
+    def delete(self, profile_id):
+        """Remove a profile with its credentials; a deleted selection leaves no connection selected."""
+        with self._transaction():
+            data = self._read()
+            self._revision(data, profile_id)
+            del data['profiles'][profile_id]
+            was_selected = data['selected_profile_id'] == profile_id
+            if was_selected:
+                data['selected_profile_id'] = None
+            self._write(data)
+            return was_selected
+
     def export(self, profile_id, include_secrets=False):
         if type(include_secrets) is not bool:
             raise ValueError('Explicit boolean permission is required to export credentials')

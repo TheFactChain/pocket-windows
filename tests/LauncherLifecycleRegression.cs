@@ -142,6 +142,37 @@ internal static class LauncherLifecycleRegression
             Call(window, "NewProfile");
             Assert(((Button)Field(window, "ExportButton")).Visibility == Visibility.Collapsed, "New draft cannot export a nonexistent saved profile");
             Assert(((Button)Field(window, "TestProfileButton")).IsEnabled, "Draft test does not require a selected saved profile");
+            Assert(((Button)Field(window, "DeleteProfileButton")).Visibility == Visibility.Collapsed, "New draft cannot delete a nonexistent saved profile");
+            window = Window();
+            string savedId = new string('b', 32);
+            var savedRow = new Dictionary<string, object> { { "profile_id", savedId }, { "protocol", "hysteria2" }, { "host", "old.example" }, { "name", "Коннект 1" }, { "selected", true } };
+            Call(window, "LoadProfileList", (object)new object[] { savedRow });
+            Assert(((List<Dictionary<string, object>>)Field(window, "profiles")).Count == 1, "Fixture list has the saved profile");
+            Call(window, "LoadProfileView", savedRow); Call(window, "ShowEditor", "Изменить подключение");
+            Assert(((Button)Field(window, "DeleteProfileButton")).Visibility == Visibility.Visible, "Saved profile offers deletion in its editor");
+            bool runningAsked = false;
+            var refuse = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            refuse.Tick += delegate { var dialog = FindWindow("#32770", "Удалить подключение"); if (dialog != IntPtr.Zero) { runningAsked = true; PostMessage(dialog, 0x111, new IntPtr(7), IntPtr.Zero); refuse.Stop(); } };
+            Set(window, "runtimeActive", true); refuse.Start(); Call(window, "OnDeleteProfile", null, new RoutedEventArgs()); refuse.Stop(); Set(window, "runtimeActive", false);
+            Assert(!runningAsked && !Bridge.Calls.Contains("delete-profile"), "Selected profile of a running session is not deleted");
+            Assert(((TextBlock)Field(window, "EditorError")).Text.Contains("Выключи Windows"), "Refused deletion explains how to continue: " + ((TextBlock)Field(window, "EditorError")).Text);
+            Call(window, "EditorErrorText", "");
+            object deleted = null;
+            Bridge.Handler = (action, payload) => { if (action == "delete-profile") deleted = payload; return Task.FromResult(action == "list-profiles"
+                ? new Dictionary<string, object> { { "ok", true }, { "profiles", new object[0] } } : Report()); };
+            foreach (int answer in new[] { 7, 6 })
+            {
+                bool asked = false;
+                var reply = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+                reply.Tick += delegate { var dialog = FindWindow("#32770", "Удалить подключение"); if (dialog != IntPtr.Zero) { asked = (SendMessage(dialog, 0x400, IntPtr.Zero, IntPtr.Zero).ToInt64() & 0xffff) == 7; PostMessage(dialog, 0x111, new IntPtr(answer), IntPtr.Zero); reply.Stop(); } };
+                reply.Start(); Call(window, "OnDeleteProfile", null, new RoutedEventArgs()); reply.Stop();
+                Assert(asked, "Deletion asks first and defaults to No");
+                if (answer == 7) Assert(deleted == null && !Bridge.Calls.Contains("delete-profile"), "No keeps the profile");
+            }
+            Pump(() => deleted != null && Field(window, "profileId") == null && !(bool)Field(window, "busy"));
+            Assert((string)((Dictionary<string, object>)deleted)["profile_id"] == savedId, "Yes deletes exactly the edited profile");
+            Assert(Bridge.Calls.IndexOf("list-profiles") > Bridge.Calls.IndexOf("delete-profile") && ((List<Dictionary<string, object>>)Field(window, "profiles")).Count == 0, "Deletion reloads the saved list");
+            Assert(Field(window, "profileId") == null, "Editor forgets the deleted profile");
             window = Window();
             ((TextBox)Field(window, "MemoryInput")).Text = Decimal.MaxValue.ToString(CultureInfo.InvariantCulture);
             Call(window, "StepMemory", 0.5m);
