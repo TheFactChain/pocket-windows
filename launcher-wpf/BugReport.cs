@@ -96,6 +96,18 @@ internal static class BugReport
         request.Method = "POST"; request.ContentType = "application/zip"; request.Timeout = 120000; request.ReadWriteTimeout = 120000;
         request.Headers["X-Report-Id"] = id; request.UserAgent = "PocketWindows-Launcher";
         request.ContentLength = info.Length;
+        // Timeout covers only synchronous calls; a stalled server must not leave the window waiting forever.
+        var upload = Upload(request, zip);
+        if (await Task.WhenAny(upload, Task.Delay(180000)).ConfigureAwait(false) != upload)
+        {
+            request.Abort();
+            throw new WebException("Сервер поддержки не ответил вовремя.", WebExceptionStatus.Timeout);
+        }
+        return await upload.ConfigureAwait(false);
+    }
+
+    static async Task<Dictionary<string, object>> Upload(HttpWebRequest request, string zip)
+    {
         using (var body = await request.GetRequestStreamAsync().ConfigureAwait(false))
         using (var file = File.OpenRead(zip)) await file.CopyToAsync(body).ConfigureAwait(false);
         using (var response = (HttpWebResponse)await request.GetResponseAsync().ConfigureAwait(false))

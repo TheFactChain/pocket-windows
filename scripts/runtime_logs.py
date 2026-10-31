@@ -138,11 +138,15 @@ def append_event(root, component, code, **fields):
     import time
     from datetime import datetime, timezone
     try:
+        # Long values are shortened before encoding, so every line stays whole JSON with its newline.
         record = {'utc': datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
                   'mono_ms': int(time.monotonic() * 1000), 'pid': os.getpid(),
                   'component': str(component), 'code': str(code),
-                  **{key: value for key, value in fields.items() if value is not None}}
-        line = (json.dumps(record, ensure_ascii=False, default=str) + '\n').encode('utf-8')[:16384]
+                  **{key: value[:2000] if isinstance(value, str) else value for key, value in fields.items() if value is not None}}
+        line = (json.dumps(record, ensure_ascii=False, default=str) + '\n').encode('utf-8')
+        if len(line) > 16384:
+            line = (json.dumps({key: record[key] for key in ('utc', 'mono_ms', 'pid', 'component', 'code')}
+                               | {'truncated': True}, ensure_ascii=False) + '\n').encode('utf-8')
         logs = Path(os.path.abspath(root)) / 'logs'
         path = logs / EVENTS
         logs.mkdir(exist_ok=True)
@@ -153,7 +157,9 @@ def append_event(root, component, code, **fields):
             size = 0
         if size + len(line) > MAX_EVENTS_BYTES:
             try:
-                os.replace(path, logs / ('events.1.jsonl'))
+                # Measure again: another writer may have rotated already, and its fresh file must not replace the history.
+                if path.stat().st_size + len(line) > MAX_EVENTS_BYTES:
+                    os.replace(path, logs / ('events.1.jsonl'))
             except OSError:
                 # Another writer holds it open; a short overrun is fine, unbounded growth is not.
                 if size > 2 * MAX_EVENTS_BYTES:

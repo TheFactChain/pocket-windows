@@ -237,7 +237,7 @@ def spawn_generation():
     report['telemetry']=runtime.CONTROLLER_TELEMETRY
     inbox=queue.Queue();qmp_events=deque(maxlen=64);sequence=0
     save()
-    runtime.controller_event(output,'generation_started',generation=report.get('generation'),pid=process.pid)
+    runtime.controller_event(output,'generation_started',generation=report.get('generation'),qemu_pid=process.pid)
     qmp_reader=threading.Thread(target=read_qmp,daemon=True)
     qmp_reader.start()
     return True
@@ -258,8 +258,9 @@ def read_qmp():
                     event={'observed_utc':datetime.now(timezone.utc).isoformat(),'event':message['event'],'data':{k:v for k,v in message.get('data',{}).items() if k in allowed}}
                     stamp=message.get('timestamp',{})
                     if isinstance(stamp,dict) and isinstance(stamp.get('seconds'),int) and isinstance(stamp.get('microseconds'),int):
-                        # QEMU's own time of the event, kept apart from when the host read it.
-                        event['qemu_utc']=datetime.fromtimestamp(stamp['seconds']+stamp['microseconds']/1e6,timezone.utc).isoformat()
+                        # QEMU's own time of the event, kept apart from when the host read it; an odd value never loses the event.
+                        try:event['qemu_utc']=datetime.fromtimestamp(stamp['seconds']+stamp['microseconds']/1e6,timezone.utc).isoformat()
+                        except (OverflowError,OSError,ValueError):event['qemu_utc']=None
                     if work_reboot_session:
                         event['generation']=report['generation']
                     event['data']={key: value[:512] if isinstance(value,str) else value for key,value in event['data'].items()}

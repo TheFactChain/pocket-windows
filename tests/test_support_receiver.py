@@ -18,7 +18,8 @@ def package(report_id=REPORT_ID, what='Зависло выключение', ext
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, 'w') as archive:
         archive.writestr('report.json', json.dumps({'report_id': report_id, 'what': what, 'contact': '@fixture'}))
-        archive.writestr('manifest.json', json.dumps({'sources': [{'source': 'windows', 'status': 'unavailable'}]}))
+        if not any(name == 'manifest.json' for name, _ in extra):
+            archive.writestr('manifest.json', json.dumps({'sources': [{'source': 'windows', 'status': 'unavailable'}]}))
         for name, data in extra:
             archive.writestr(name, data)
     return stream.getvalue()
@@ -27,6 +28,12 @@ def package(report_id=REPORT_ID, what='Зависло выключение', ext
 class FakeGitHub:
     def __init__(self, fail_issue=0):
         self.calls, self.fail_issue = [], fail_issue
+
+    def find_release(self, report_id):
+        return None
+
+    def find_issue(self, report_id):
+        return None
 
     def create_release(self, report_id):
         self.calls.append('release')
@@ -60,6 +67,28 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(github.calls, ['release', 'asset', 'issue', 'issue'])
         self.assertIn('@fixture', github.body)
         self.assertIn('windows (unavailable)', github.body)
+
+    def test_lost_issue_response_finds_the_issue_instead_of_a_second(self):
+        github = FakeGitHub()
+        github.create_issue = mock.Mock(side_effect=TimeoutError('response lost'))
+        service = receiver.Receiver(self.temporary.name, github)
+        with self.assertRaises(TimeoutError):
+            service.handle(REPORT_ID, package())
+        github.create_issue = mock.Mock()
+        github.find_issue = mock.Mock(return_value={'number': 77})
+        self.assertEqual(service.handle(REPORT_ID, package())['issue_number'], 77)
+        github.create_issue.assert_not_called()
+
+    def test_odd_manifest_types_never_create_anything(self):
+        github = FakeGitHub()
+        service = receiver.Receiver(self.temporary.name, github)
+        result = service.handle(REPORT_ID, package(extra=[('versions.json', '[]')]))
+        self.assertEqual(result['issue_number'], 42)
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w') as archive:
+            archive.writestr('report.json', '[' * 5000 + ']' * 5000)
+        with self.assertRaises(receiver.Rejected):
+            service.handle('e' * 32, stream.getvalue())
 
     def test_garbage_foreign_or_unsafe_archives_are_refused(self):
         service = receiver.Receiver(self.temporary.name, FakeGitHub())

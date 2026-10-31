@@ -160,7 +160,8 @@ internal static class Bridge
                 if (info.Exists && info.Length + line.Length > MaxEventsBytes)
                 {
                     // Another writer may hold the file; a short overrun is fine, unbounded growth is not.
-                    try { string rotated = Path.Combine(folder, "events.1.jsonl"); if (File.Exists(rotated)) File.Delete(rotated); File.Move(path, rotated); }
+                    // Measure again: another process may have rotated already, and its fresh file must not replace the history.
+                    try { string rotated = Path.Combine(folder, "events.1.jsonl"); if (new FileInfo(path).Length + line.Length > MaxEventsBytes) { if (File.Exists(rotated)) File.Delete(rotated); File.Move(path, rotated); } }
                     catch (IOException) { if (info.Length > 2 * MaxEventsBytes) return; }
                     catch (UnauthorizedAccessException) { if (info.Length > 2 * MaxEventsBytes) return; }
                 }

@@ -909,7 +909,8 @@ namespace WindowsClaude.Launcher
                 object message, status;
                 if (!result.TryGetValue("status", out status) || !new[] { "committed", "rolled_back", "failed", "recovery_required" }.Contains(Convert.ToString(status)) || !result.TryGetValue("message", out message))
                     return "Результат обновления не подтверждён. Открой logs/update-details.txt.";
-                KeepInHistory(root, path);
+                // Archiving is a bonus: a locked file must not hide a result that was read correctly.
+                try { KeepInHistory(root, path); } catch (Exception) { }
                 return Convert.ToString(message);
             }
             catch (Exception) { return "Не удалось прочитать результат обновления. Открой logs/" + Path.GetFileName(path) + "."; }

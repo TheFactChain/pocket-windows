@@ -531,12 +531,16 @@ namespace WindowsClaude.Launcher
             ReportContents.Foreground = reportStatus.Length > 0 ? Ink : Grey;
             Show(ReportSaveButton, reportSendFailed);
             ReportSaveButton.IsEnabled = ReportSendButton.IsEnabled = ReportImagesButton.IsEnabled = !reportBusy;
+            // Fields stay locked while packing, so the package always matches what is on screen.
+            ReportWhat.IsReadOnly = ReportSteps.IsReadOnly = ReportContact.IsReadOnly = reportBusy;
         }
 
         void OnReportEdited(object sender, TextChangedEventArgs e)
         {
-            if (loadingDraft || reportId == null) return;
-            reportZip = null;  // a changed description needs a new package
+            if (loadingDraft) return;
+            // A changed description needs a new package; after a send attempt also a new id, since the receiver keeps its first archive.
+            if (reportId == null || reportSendFailed) { reportId = BugReport.NewId(); reportSendFailed = false; Show(ReportSaveButton, false); }
+            reportZip = null;
             BugReport.SaveDraft(Bridge.Root, new Dictionary<string, object> { { "report_id", reportId }, { "what", ReportWhat.Text },
                 { "steps", ReportSteps.Text }, { "contact", ReportContact.Text }, { "images", reportImages.ToArray() } });
         }

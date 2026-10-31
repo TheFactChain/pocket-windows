@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SOURCE_DIRS = {'docs', 'gateway', 'guest', 'host', 'launcher-wpf', 'patches', 'scripts', 'tests', 'ui'}
+SOURCE_DIRS = {'docs', 'gateway', 'guest', 'host', 'launcher-wpf', 'patches', 'scripts', 'support', 'tests', 'ui'}
 SOURCE_FILES = {'.gitattributes', '.gitignore', 'AGENTS.md', 'README.md', 'README.en.md', 'Start.cmd'}
 README_IMAGES = {'docs/assets/readme/' + name for name in (
     'launcher.png', 'connection.png', 'settings.png', 'diagnostics.png', 'desktop.png', 'files.png', 'social-preview.png',

@@ -43,7 +43,7 @@ class Redactor:
                             ('TEMP', '%TEMP%')):
             if os.environ.get(name):
                 pairs.append((os.environ[name], label))
-        pairs += [(value, '<secret>') for value in secrets if len(value) >= 4]
+        pairs += [(value, '<secret>') for value in secrets if len(value) >= 6]  # short ones are ordinary words like "auto"
         for name, label in (('USERNAME', '<user>'), ('COMPUTERNAME', '<pc>')):
             if len(os.environ.get(name, '')) >= 3:
                 pairs.append((os.environ[name], label))
@@ -55,8 +55,13 @@ class Redactor:
         self.pattern = re.compile('|'.join(re.escape(value) for value, _ in expanded), re.IGNORECASE) if expanded else None
         self.labels = {value.casefold(): label for value, label in expanded}
 
+    # Any other absolute path (shared folders on D:, downloads) can name a person or a client; system folders stay.
+    # Possessive separator: JSON doubles backslashes, and backtracking to one of them would defeat the system-folder check.
+    OTHER_PATH = re.compile(r'\b[A-Za-z]:[\\/]++(?!(?:Windows|Program Files|ProgramData)\b)[^\s"\'<>|,;]*', re.IGNORECASE)
+
     def text(self, value):
-        return self.pattern.sub(lambda match: self.labels[match.group(0).casefold()], value) if self.pattern else value
+        value = self.pattern.sub(lambda match: self.labels[match.group(0).casefold()], value) if self.pattern else value
+        return self.OTHER_PATH.sub('<path>', value)
 
     def data(self, value):
         if isinstance(value, dict):

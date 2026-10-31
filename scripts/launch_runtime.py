@@ -957,10 +957,11 @@ def stop_records(root, records):
         if wait_records(root, guests, SHUTDOWN_TIMEOUT if role == 'work' else GATEWAY_SHUTDOWN_TIMEOUT):
             append_event(root, 'runtime', 'shutdown_unconfirmed', role=role, result='timeout', duration_ms=int((time.monotonic() - started) * 1000))
             raise RuntimeError(role + ' ignored graceful shutdown; running guests retained. Shut it down inside its window')
-        append_event(root, 'runtime', 'shutdown_confirmed', role=role, duration_ms=int((time.monotonic() - started) * 1000))
         if role == 'work':
             for record in guests:
                 confirm_windows_shutdown(root, record, allow_reset_stop=True)
+        if guests:
+            append_event(root, 'runtime', 'shutdown_confirmed', role=role, duration_ms=int((time.monotonic() - started) * 1000))
 
 
 def check_acceptance(root):

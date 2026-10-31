@@ -28,7 +28,8 @@ class BugReportTests(unittest.TestCase):
         (guest / 'state.json').write_text(json.dumps({'status': 'exited', 'arguments': ['-drive', 'file=secret-disk'],
             'process': {'image': str(self.root / 'runtime/qemu.exe')}, 'note': 'link hy2://top-secret-value@vps'}), encoding='utf-8')
         (guest / 'qmp-events.json').write_text('{broken', encoding='utf-8')
-        (self.logs / 'events.jsonl').write_text(json.dumps({'code': 'stop_failed', 'message': 'C:\\Users\\Fixture\\x'}) + '\n', encoding='utf-8')
+        (self.logs / 'events.jsonl').write_text(json.dumps({'code': 'stop_failed', 'message': 'C:\\Users\\Fixture\\x',
+            'share': 'D:\\Клиенты\\Иванов', 'system': 'C:\\Windows\\System32\\kernel32.dll'}) + '\n', encoding='utf-8')
         (self.root / 'release-info.json').write_text(json.dumps({'release_id': '2026.10.31.2', 'source_commit': 'b' * 40}), encoding='utf-8')
         self.environment = mock.patch.dict(os.environ, {'USERPROFILE': 'C:\\Users\\Fixture', 'USERNAME': 'Fixture', 'COMPUTERNAME': 'FIXTURE-PC'})
         self.environment.start()
@@ -45,8 +46,9 @@ class BugReportTests(unittest.TestCase):
     def test_package_keeps_history_but_no_secret_path_or_arguments(self):
         files = self.read(self.collect())
         everything = '\n'.join(files.values())
-        for private in ('top-secret-value', 'secret-disk', 'C:\\Users\\Fixture', str(self.root), 'FIXTURE-PC'):
+        for private in ('top-secret-value', 'secret-disk', 'C:\\Users\\Fixture', str(self.root), 'FIXTURE-PC', 'Иванов'):
             self.assertNotIn(private, everything)
+        self.assertIn('kernel32.dll', everything)
         self.assertIn('stop_failed', files['logs/events.jsonl'])
         self.assertIn('%USERPROFILE%', files['logs/events.jsonl'])
         state = json.loads(files['logs/guest-work-boot-20261031T000000Z/state.json'])
