@@ -1,0 +1,23 @@
+# Pocket Windows support receiver. Install: copy receiver.py to /opt/pocket-support/,
+# put the GitHub token into /etc/pocket-support/github-token (root, 0600), set the repository below.
+[Unit]
+Description=Pocket Windows support receiver
+After=network-online.target
+
+[Service]
+DynamicUser=yes
+StateDirectory=pocket-support
+LoadCredential=github-token:/etc/pocket-support/github-token
+Environment=POCKET_SUPPORT_REPO=TheFactChain/pocket-windows-support
+Environment=POCKET_SUPPORT_DATA=/var/lib/pocket-support
+Environment=POCKET_SUPPORT_LISTEN=127.0.0.1:8790
+ExecStart=/usr/bin/python3 -I /opt/pocket-support/receiver.py
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
