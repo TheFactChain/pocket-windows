@@ -18,6 +18,7 @@ SPEC.loader.exec_module(storage)
 class StorageTests(unittest.TestCase):
     def setUp(self):
         scratch = ROOT.parent/'Служебное/_temp/2026-10-27-updates/toolkit'
+        scratch.mkdir(parents=True, exist_ok=True)
         temporary = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)

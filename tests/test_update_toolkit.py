@@ -19,6 +19,7 @@ TEMP = ROOT.parent / 'Служебное/_temp/2026-10-27-updates/toolkit'
 
 class ToolkitTests(unittest.TestCase):
     def setUp(self):
+        TEMP.mkdir(parents=True, exist_ok=True)
         temporary = tempfile.TemporaryDirectory(dir=TEMP)
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
