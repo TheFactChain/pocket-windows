@@ -909,10 +909,19 @@ namespace WindowsClaude.Launcher
                 object message, status;
                 if (!result.TryGetValue("status", out status) || !new[] { "committed", "rolled_back", "failed", "recovery_required" }.Contains(Convert.ToString(status)) || !result.TryGetValue("message", out message))
                     return "Результат обновления не подтверждён. Открой logs/update-details.txt.";
-                File.Delete(path);
+                KeepInHistory(root, path);
                 return Convert.ToString(message);
             }
             catch (Exception) { return "Не удалось прочитать результат обновления. Открой logs/" + Path.GetFileName(path) + "."; }
+        }
+
+        // The notice is shown once, but the result stays for a bug report: the last ten move to logs/update-history.
+        static void KeepInHistory(string root, string path)
+        {
+            string history = Path.Combine(root, "logs", "update-history");
+            Directory.CreateDirectory(history);
+            File.Move(path, Path.Combine(history, DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ") + ".json"));
+            foreach (var old in new DirectoryInfo(history).GetFiles("*.json").OrderByDescending(file => file.Name).Skip(10)) old.Delete();
         }
     }
 }

@@ -263,5 +263,38 @@ class RuntimeLogTests(unittest.TestCase):
         self.assertTrue(report['failures'])
 
 
+class EventHistoryTests(unittest.TestCase):
+    def test_events_append_rotate_once_and_never_raise(self):
+        import json
+        with tempfile.TemporaryDirectory() as temporary, patch.object(runtime_logs, 'MAX_EVENTS_BYTES', 400):
+            root = Path(temporary)
+            self.assertTrue(runtime_logs.append_event(root, 'runtime', 'stop_requested', generation=2, skipped=None))
+            first = json.loads((root / 'logs/events.jsonl').read_text(encoding='utf-8'))
+            self.assertEqual((first['component'], first['code'], first['generation']), ('runtime', 'stop_requested', 2))
+            self.assertNotIn('skipped', first)
+            for number in range(20):
+                runtime_logs.append_event(root, 'controller', 'status', number=number)
+            self.assertLessEqual((root / 'logs/events.jsonl').stat().st_size, 400)
+            self.assertTrue((root / 'logs/events.1.jsonl').exists())
+            self.assertFalse((root / 'logs/events.2.jsonl').exists())
+
+    def test_qmp_history_keeps_every_generation_until_its_cap(self):
+        import json
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'qmp-events.jsonl'
+            lines = [(json.dumps({'event': 'RESET', 'generation': generation}) + '\n').encode() for generation in (1, 2, 3)]
+            limit = len(lines[0]) + len(lines[1])
+            self.assertEqual([runtime_logs.append_capped_line(path, line, limit) for line in lines], [True, True, False])
+            self.assertEqual([json.loads(line)['generation'] for line in path.read_text().splitlines()], [1, 2])
+
+    def test_event_write_failure_is_counted_not_raised(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'logs').write_text('not a directory')
+            before = runtime_logs.event_failures
+            self.assertFalse(runtime_logs.append_event(root, 'runtime', 'stop_requested'))
+            self.assertEqual(runtime_logs.event_failures, before + 1)
+
+
 if __name__ == '__main__':
     unittest.main()

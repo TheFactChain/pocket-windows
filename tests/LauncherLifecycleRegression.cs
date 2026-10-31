@@ -30,6 +30,9 @@ internal static class Bridge
     internal static Dictionary<string, object> Unknown(string message, string code) { var result = Failure(message); result["outcome_unknown"] = true; return result; }
     internal static string Quote(string value) { return "\"" + value + "\""; }
     internal static bool CanRestoreComponents(string root) { return true; }
+    internal static readonly List<string> Events = new List<string>();
+    internal static void Event(string code, string detail) { Events.Add(code); }
+    internal static void Event(string code, Dictionary<string, object> fields) { Events.Add(code); }
 }
 
 internal static class LauncherLifecycleRegression

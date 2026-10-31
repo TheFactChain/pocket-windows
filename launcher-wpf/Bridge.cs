@@ -137,6 +137,44 @@ internal static class Bridge
         return null;
     }
 
+    const long MaxEventsBytes = 4 * 1024 * 1024;  // mirrors scripts/runtime_logs.MAX_EVENTS_BYTES
+    static readonly object EventLock = new object();
+
+    // One line in logs/events.jsonl, the same history the Python side writes. Never throws.
+    internal static void Event(string code, Dictionary<string, object> fields)
+    {
+        try
+        {
+            var record = new Dictionary<string, object> {
+                { "utc", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fff+00:00") },
+                { "mono_ms", Environment.TickCount & int.MaxValue }, { "pid", Process.GetCurrentProcess().Id },
+                { "component", "launcher" }, { "code", code } };
+            if (fields != null) foreach (var item in fields) if (item.Value != null) record[item.Key] = item.Value;
+            byte[] line = Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(record) + "\n");
+            string folder = Path.Combine(Root, "logs"), path = Path.Combine(folder, "events.jsonl");
+            lock (EventLock)
+            {
+                Directory.CreateDirectory(folder);
+                var info = new FileInfo(path);
+                if (info.Exists && info.Length + line.Length > MaxEventsBytes)
+                {
+                    // Another writer may hold the file; a short overrun is fine, unbounded growth is not.
+                    try { string rotated = Path.Combine(folder, "events.1.jsonl"); if (File.Exists(rotated)) File.Delete(rotated); File.Move(path, rotated); }
+                    catch (IOException) { if (info.Length > 2 * MaxEventsBytes) return; }
+                    catch (UnauthorizedAccessException) { if (info.Length > 2 * MaxEventsBytes) return; }
+                }
+                using (var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+                    stream.Write(line, 0, line.Length);
+            }
+        }
+        catch (Exception) { }
+    }
+
+    internal static void Event(string code, string detail)
+    {
+        Event(code, detail == null ? null : new Dictionary<string, object> { { "detail", detail } });
+    }
+
     // Restoring needs both the script and its archive; offer it only when it can actually run.
     internal static bool CanRestoreComponents(string root)
     {

@@ -187,7 +187,9 @@ internal static class AppUpdateRegression
             string stage = AppUpdate.NewStage(root);
             Assert(Path.GetDirectoryName(stage) == Path.Combine(root, "state") && System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(stage), "\\A[a-f0-9]{32}\\z"), "Prepared stage is a direct state UUID child");
             Assert(!AppUpdate.HasV2Catalog(root), "Legacy copies without a catalog retain component preparation");
-            var release = new Dictionary<string, object> { { "schema", 1 }, { "release_id", "2026.10.27.1" }, { "source_commit", commit } };
+            File.WriteAllText(Path.Combine(root, "logs", "update-result.json"), "{\"status\":\"failed\",\"message\":\"Обновление не установлено.\",\"operation\":\"x\"}");
+            Assert(AppUpdate.TakeReport(root) == "Обновление не установлено." && !File.Exists(Path.Combine(root, "logs", "update-result.json")), "The notice is shown once");
+            Assert(Directory.GetFiles(Path.Combine(root, "logs", "update-history"), "*.json").Length == 1, "The shown result stays in the update history for a bug report");            var release = new Dictionary<string, object> { { "schema", 1 }, { "release_id", "2026.10.27.1" }, { "source_commit", commit } };
             AppUpdate.AtomicJson(Path.Combine(root, "release-info.json"), release);
             using (var current = Process.GetCurrentProcess())
             {

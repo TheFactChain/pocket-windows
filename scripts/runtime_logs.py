@@ -17,7 +17,13 @@ from file_snapshot import remove_owned_file
 
 MAX_LOG_BYTES = 50 * 1024 * 1024
 MAX_STREAM_BYTES = 4 * 1024 * 1024
-NORMAL_PAIR_RESERVE = 7 * MAX_STREAM_BYTES + 2 * 1024 * 1024
+MAX_QMP_HISTORY_BYTES = 1024 * 1024
+NORMAL_PAIR_RESERVE = 7 * MAX_STREAM_BYTES + 2 * 1024 * 1024 + 2 * MAX_QMP_HISTORY_BYTES
+EVENTS = 'events.jsonl'
+MAX_EVENTS_BYTES = 4 * 1024 * 1024
+# The current and one rotated event file never compete with session logs for the budget.
+EVENTS_RESERVE = 2 * MAX_EVENTS_BYTES
+event_failures = 0
 GUEST_DELETABLE = frozenset({'stderr.txt', 'runtime-serial.log'})
 GUEST_PROTECTED = frozenset({'state.json', 'qmp-events.json', 'qmp-events.jsonl',
                              'stop-session.json', 'work-lifecycle.lock'})
@@ -119,6 +125,59 @@ class CappedDrain:
 
 def start_capped_drain(source, destination, *, limit=MAX_STREAM_BYTES):
     return CappedDrain(source, destination, limit)
+
+
+def append_event(root, component, code, **fields):
+    """Add one line to logs/events.jsonl, the history that outlives QEMU generations and launcher restarts.
+
+    Never raises: diagnostics must not break the operation they describe. A failed write is
+    counted in event_failures. The file rotates once to events.1.jsonl at MAX_EVENTS_BYTES.
+    """
+    global event_failures
+    import json
+    import time
+    from datetime import datetime, timezone
+    try:
+        record = {'utc': datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
+                  'mono_ms': int(time.monotonic() * 1000), 'pid': os.getpid(),
+                  'component': str(component), 'code': str(code),
+                  **{key: value for key, value in fields.items() if value is not None}}
+        line = (json.dumps(record, ensure_ascii=False, default=str) + '\n').encode('utf-8')[:16384]
+        logs = Path(os.path.abspath(root)) / 'logs'
+        path = logs / EVENTS
+        logs.mkdir(exist_ok=True)
+        _plain(logs, directory=True)
+        try:
+            size = _plain(path).st_size
+        except FileNotFoundError:
+            size = 0
+        if size + len(line) > MAX_EVENTS_BYTES:
+            try:
+                os.replace(path, logs / ('events.1.jsonl'))
+            except OSError:
+                # Another writer holds it open; a short overrun is fine, unbounded growth is not.
+                if size > 2 * MAX_EVENTS_BYTES:
+                    raise
+        with path.open('ab') as stream:
+            stream.write(line)
+        return True
+    except (OSError, ValueError, TypeError):
+        event_failures += 1
+        return False
+
+
+def append_capped_line(path, line, limit):
+    """Append one bytes line unless the file would exceed limit; False means it was dropped."""
+    path = Path(path)
+    try:
+        size = _plain(path).st_size
+    except FileNotFoundError:
+        size = 0
+    if size + len(line) > limit:
+        return False
+    with path.open('ab') as stream:
+        stream.write(line)
+    return True
 
 
 def _plain(path, directory=False):

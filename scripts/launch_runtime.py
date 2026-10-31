@@ -18,6 +18,56 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime_config import PYTHON, QEMU
 
 
+def append_event(root, component, code, **fields):
+    # Imported on use, as before: this module must still load where runtime_logs is absent.
+    try:
+        from runtime_logs import append_event as write
+    except ImportError:
+        return False
+    return write(root, component, code, **fields)
+
+# Losses inside a guest controller, so a missing event can be told from a dropped one; saved in its state.json.
+CONTROLLER_TELEMETRY = {'qmp_bad_lines': 0, 'qmp_history_dropped': 0, 'receipt_errors': 0,
+                        'last_error': None, 'last_error_utc': None}
+SIGNIFICANT_QMP = {'SHUTDOWN', 'RESET', 'POWERDOWN', 'GUEST_PANICKED', 'BLOCK_IO_ERROR', 'WATCHDOG', 'STOP', 'RESUME'}
+_controller_status = {}
+
+
+def controller_event(output, code, **fields):
+    """A guest controller's line in the shared history; output is <root>/logs/guest-*."""
+    output = Path(output)
+    return append_event(output.parent.parent, 'controller', code, session=output.name, **fields)
+
+
+def controller_error(counter, error):
+    CONTROLLER_TELEMETRY[counter] += 1
+    CONTROLLER_TELEMETRY.update(last_error=(type(error).__name__ + ': ' + str(error))[:200], last_error_utc=utc_now())
+
+
+def note_controller_status(output, report):
+    """Record a guest, file or clipboard state change once, not every poll."""
+    status = (report.get('status'), report.get('host_files', {}).get('status'), report.get('host_files', {}).get('code'),
+              report.get('clipboard', {}).get('status'), report.get('windows_display', {}).get('status'))
+    if _controller_status.get(str(output)) != status:
+        _controller_status[str(output)] = status
+        controller_event(output, 'status', generation=report.get('generation'), guest_status=status[0],
+                         files=status[1], files_code=status[2], clipboard=status[3], display=status[4])
+
+
+def record_qmp_event(output, event):
+    """Every generation's QMP events in one capped file; qmp-events.json keeps only the latest 64."""
+    try:
+        from runtime_logs import append_capped_line, MAX_QMP_HISTORY_BYTES
+        if not append_capped_line(Path(output) / 'qmp-events.jsonl', (json.dumps(event, ensure_ascii=True) + '\n').encode('ascii'),
+                                  MAX_QMP_HISTORY_BYTES):
+            CONTROLLER_TELEMETRY['qmp_history_dropped'] += 1
+    except (ImportError, OSError, ValueError) as error:
+        controller_error('qmp_history_dropped', error)
+    if event.get('event') in SIGNIFICANT_QMP:
+        controller_event(output, 'qmp_' + event['event'].lower(), generation=event.get('generation'), qemu_utc=event.get('qemu_utc'),
+                         reason=event.get('data', {}).get('reason'), guest=event.get('data', {}).get('guest'))
+
+
 NETWORKS = {'gateway': 'gateway', 'work': 'isolated-lan'}
 DISKS = {'gateway': 'images/gateway-empty.qcow2', 'work': 'images/workvm-empty.qcow2'}
 START_TIMEOUT = 210
@@ -675,6 +725,8 @@ def recover_session(root):
                   'windows_terminated': False, 'work_sessions': len(current['work']),
                   'message': 'Прерванный сеанс восстановлен. Диск Windows и подключения сохранены. Можно запускать Windows заново.'}
         atomic_json(root / 'state' / ('recovery-' + operation + '.json'), result)
+        append_event(root, 'runtime', 'session_recovered', recovery_id=operation, gateway_reset=reset,
+                     work_sessions=[Path(record['state']).parent.name for record in current['work']])
         return result
 
 
@@ -731,6 +783,8 @@ def force_stop(root, request):
                         {'session_nonce':state['session_nonce'], 'controller':state['controller']})
             audit = {'schema':1, 'phase':'requested', 'session':offered, 'requested_utc':utc_now()}
             atomic_json(path.with_name('force-stop.json'), audit)
+            append_event(root, 'runtime', 'force_stop_requested', session=path.parent.name,
+                         generation=offered['generation'], target_pid=expected['pid'])
             kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
             kernel.TerminateProcess.restype = wintypes.BOOL
             kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
@@ -741,6 +795,7 @@ def force_stop(root, request):
                 raise RuntimeError('Windows termination has not completed; state retained')
             audit.update(phase='terminated', completed_utc=utc_now())
             atomic_json(path.with_name('force-stop.json'), audit)
+            append_event(root, 'runtime', 'force_stop_done', session=path.parent.name, target_pid=expected['pid'])
         finally:
             kernel.CloseHandle(handle)
     deadline = time.monotonic() + 15
@@ -808,6 +863,7 @@ def request_powerdown(root, record):
         with work_session_lock(path.parent):
             atomic_json(path.with_name('stop-session.json'), {'session_nonce':record['session_nonce'], 'controller':record['controller']})
     atomic_json(path.parent / ('control-runtime-' + uuid.uuid4().hex + '.json'), {'action': 'powerdown'})
+    append_event(root, 'runtime', 'powerdown_sent', session=path.parent.name, generation=record.get('generation'))
     return True
 
 
@@ -897,8 +953,11 @@ def stop_records(root, records):
         guests = records.get(role, [])
         for record in guests:
             request_powerdown(root, record)
+        started = time.monotonic()
         if wait_records(root, guests, SHUTDOWN_TIMEOUT if role == 'work' else GATEWAY_SHUTDOWN_TIMEOUT):
+            append_event(root, 'runtime', 'shutdown_unconfirmed', role=role, result='timeout', duration_ms=int((time.monotonic() - started) * 1000))
             raise RuntimeError(role + ' ignored graceful shutdown; running guests retained. Shut it down inside its window')
+        append_event(root, 'runtime', 'shutdown_confirmed', role=role, duration_ms=int((time.monotonic() - started) * 1000))
         if role == 'work':
             for record in guests:
                 confirm_windows_shutdown(root, record, allow_reset_stop=True)
@@ -1133,6 +1192,12 @@ def run_start(root, receipt, work_test_media=False):
             and all(value.get('identity') for value in report.get('controllers', {}).values()))
         report['observed_utc'] = utc_now()
         atomic_json(receipt, report)
+        if report['phase'] != phases[-1]:
+            phases.append(report['phase'])
+            append_event(root, 'supervisor', 'phase_' + report['phase'], session=receipt.parent.name,
+                         generation=report['guests'].get('work', {}).get('generation'),
+                         message=report.get('message') if report['phase'] == 'error' else None)
+    phases = [None]
     save()
     try:
         require_runtime(root)
@@ -1240,13 +1305,13 @@ def normal_log_descriptors(root):
 
 
 def prepare_log_budget(root):
-    from runtime_logs import prune_logs, MAX_LOG_BYTES, NORMAL_PAIR_RESERVE
+    from runtime_logs import prune_logs, MAX_LOG_BYTES, NORMAL_PAIR_RESERVE, EVENTS_RESERVE
     from profile_store import _pinned_directory
     def gone(identity):
         return not same_identity(identity, process_identity(identity['pid']))
     report = prune_logs(root, normal_log_descriptors(root), process_gone=gone,
                         pin_directory=lambda path: _pinned_directory(path, create=False),
-                        budget_bytes=MAX_LOG_BYTES-NORMAL_PAIR_RESERVE)
+                        budget_bytes=MAX_LOG_BYTES-NORMAL_PAIR_RESERVE-EVENTS_RESERVE)
     if not report['budget_met']:
         raise RuntimeError('Normal runtime logs reached the 50 MiB limit; protected or live logs leave insufficient space for a new session')
     report['reserved_bytes'] = NORMAL_PAIR_RESERVE
@@ -1354,7 +1419,14 @@ def main(argv=None):
                               'shutdown': 'ACPI powerdown only; retain guests on timeout'}, ensure_ascii=True))
             return 0
         if args.stop:
-            return run_stop(root)
+            append_event(root, 'runtime', 'stop_requested')
+            try:
+                code = run_stop(root)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+                append_event(root, 'runtime', 'stop_failed', message=str(error))
+                raise
+            append_event(root, 'runtime', 'stop_done', result=code)
+            return code
         default = root / 'logs' / ('runtime-launch-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]) / 'receipt.json'
         receipt = safe_receipt_path(root, args.receipt or default)
         return run_start(root, receipt, args.work_test_media)

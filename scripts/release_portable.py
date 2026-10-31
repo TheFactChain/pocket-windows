@@ -1319,7 +1319,14 @@ def cleanup_download(target, archive, digest, release_id):
 def run_app_update(target, pid, created, archive=None, sha256=None, release_id=None, recover=False,
                    prepared=None, index_sha256=None, probe=False, catalog=None):
     target = absolute(target)
-    result = {'schema': 1, 'status': 'failed'}
+    result = {'schema': 1, 'status': 'failed', 'operation': uuid.uuid4().hex, 'started_utc': runtime.utc_now(),
+              'target_release': release_id, 'recover': bool(recover)}
+    try:
+        result['from_release'] = read_json(target / INFO).get('release_id')
+    except (OSError, ValueError, AttributeError):
+        pass  # the history line simply lacks the starting version
+    runtime.append_event(target, 'update', 'update_started', operation=result['operation'],
+                         from_release=result.get('from_release'), target_release=release_id, recover=bool(recover))
     try:
         wait_for_launcher(target, pid, created)
         if recover:
@@ -1344,10 +1351,18 @@ def run_app_update(target, pid, created, archive=None, sha256=None, release_id=N
                     result['cleanup'] = update_storage.cleanup(target, installed['backup'], allowed_probe=installed.get('probe'))
                 except (OSError, ValueError, RuntimeError):
                     result['cleanup_pending'] = True
-    except Exception:
+    except Exception as error:
+        result['error'] = (type(error).__name__ + ': ' + str(error))[:300]
+        try:
+            # Name what held the copy; nothing is stopped, the update guard stays as it is.
+            result['blocking_processes'] = [{'name': Path(identity.get('image', '')).name, 'pid': pid_value}
+                                            for pid_value, identity in project_processes(target).items() if pid_value != os.getpid()]
+        except (OSError, ValueError, RuntimeError, AttributeError, TypeError):
+            result['blocking_processes_error'] = True
         try:
             directory(target / 'logs')
             with (target / 'logs/update-details.txt').open('w', encoding='utf-8') as log:
+                log.write('operation ' + result['operation'] + ' ' + runtime.utc_now() + '\n')
                 traceback.print_exc(file=log)
         except (OSError, ValueError):
             pass
@@ -1355,6 +1370,9 @@ def run_app_update(target, pid, created, archive=None, sha256=None, release_id=N
             result.update(status='recovery_required', message='Обновление прервано. Нужен откат из сохранённой копии.')
         else:
             result['message'] = 'Обновление не установлено. Прежние файлы сохранены. Подробности: logs/update-details.txt.'
+    result['finished_utc'] = runtime.utc_now()
+    runtime.append_event(target, 'update', 'update_' + result['status'], operation=result['operation'],
+                         message=result.get('error'), blocking=result.get('blocking_processes'))
     try:
         directory(target / 'logs')
         atomic_json(target / 'logs/update-result.json', result)

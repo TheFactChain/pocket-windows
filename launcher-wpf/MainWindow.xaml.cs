@@ -368,6 +368,10 @@ namespace WindowsClaude.Launcher
             if (!BeginOperation(action)) return false;
             if (selectDiagnostics) Navigate(AppPage.Diagnostics);
             Dictionary<string, object> completed = null;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            // Diagnostics run every few seconds; only actions the user starts belong in the history.
+            bool logged = action != "diagnose" && action != "status" && action != "get-settings";
+            if (logged) Bridge.Event("action_started", new Dictionary<string, object> { { "action", action } });
             try
             {
                 completed = await Run(action, payload);
@@ -392,6 +396,9 @@ namespace WindowsClaude.Launcher
             }
             finally
             {
+                if (logged) Bridge.Event("action_finished", new Dictionary<string, object> { { "action", action }, { "result", Bridge.Ok(completed) ? "ok" : "failed" },
+                    { "result_code", Text(completed, "code", null) }, { "message", Bridge.Ok(completed) ? null : Bridge.Message(completed) },
+                    { "outcome_unknown", Flag(completed, "outcome_unknown") ? (object)true : null }, { "duration_ms", watch.ElapsedMilliseconds } });
                 if (!closing)
                 {
                     Busy(false);
@@ -478,9 +485,12 @@ namespace WindowsClaude.Launcher
         async void OnForceStop(object sender, RoutedEventArgs e)
         {
             if (busy || pendingOutcome != null || !Flag(Child(readinessReport, "capabilities"), "force_stop")) return;
+            Bridge.Event("force_stop_offered", (string)null);
             if (System.Windows.MessageBox.Show(this,
                 "Принудительное выключение может повредить данные Windows и потерять несохранённую работу. Продолжить?",
-                "Принудительно выключить Windows", System.Windows.MessageBoxButton.YesNo, MessageBoxImage.Warning, System.Windows.MessageBoxResult.No) != System.Windows.MessageBoxResult.Yes) return;
+                "Принудительно выключить Windows", System.Windows.MessageBoxButton.YesNo, MessageBoxImage.Warning, System.Windows.MessageBoxResult.No) != System.Windows.MessageBoxResult.Yes)
+            { Bridge.Event("force_stop_declined", (string)null); return; }
+            Bridge.Event("force_stop_confirmed", (string)null);
             await ForceStopConfirmedAsync();
         }
         async Task ForceStopConfirmedAsync()
@@ -1125,18 +1135,8 @@ namespace WindowsClaude.Launcher
             timer.Start();
         }
 
-        // Why the panel hid or reappeared goes to logs/launcher-ui.log, so a flicker can be explained afterwards.
-        static void UiLog(string message)
-        {
-            try
-            {
-                string folder = System.IO.Path.Combine(Bridge.Root, "logs"), path = System.IO.Path.Combine(folder, "launcher-ui.log");
-                Directory.CreateDirectory(folder);
-                if (File.Exists(path) && new FileInfo(path).Length > 200 * 1024) File.Delete(path);
-                File.AppendAllText(path, DateTime.Now.ToString("HH:mm:ss.fff") + " " + message + Environment.NewLine);
-            }
-            catch (Exception) { }
-        }
+        // Why the panel hid or reappeared goes to logs/events.jsonl, so a flicker can be explained afterwards.
+        static void UiLog(string message) { Bridge.Event("ui", message); }
 
         void HidePanelForSession(string why)
         {

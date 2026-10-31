@@ -7,7 +7,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 
-internal static class Bridge { internal static string Root; }
+internal static class Bridge { internal static string Root; internal static void Event(string code, string detail) { } }
 internal static class ReleaseInfo
 {
     internal static string StartupBlockReason(string root)

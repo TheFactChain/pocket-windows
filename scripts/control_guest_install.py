@@ -234,8 +234,10 @@ def spawn_generation():
     if normal_runtime:
         report['clipboard'] = dict(clipboard.public() if clipboard is not None else clipboard_state)
     report['writers']=[report['process'],report['controller']]
+    report['telemetry']=runtime.CONTROLLER_TELEMETRY
     inbox=queue.Queue();qmp_events=deque(maxlen=64);sequence=0
     save()
+    runtime.controller_event(output,'generation_started',generation=report.get('generation'),pid=process.pid)
     qmp_reader=threading.Thread(target=read_qmp,daemon=True)
     qmp_reader.start()
     return True
@@ -244,6 +246,7 @@ def save():
     report['observed_utc']=datetime.now(timezone.utc).isoformat()
     runtime.atomic_json(output/'state.json', report)
     print(json.dumps({'state':str(output/'state.json'),'pid':process.pid,'status':report['status']}),flush=True)
+    runtime.note_controller_status(output,report)
 controls=queue.Queue()
 def read_qmp():
     try:
@@ -251,18 +254,24 @@ def read_qmp():
             try:
                 message=json.loads(line)
                 if 'event' in message:
-                    allowed={'reason','device','node-name','operation','action','nospace','error','guest'}
+                    allowed={'reason','device','node-name','operation','action','nospace','error','guest','offset'}
                     event={'observed_utc':datetime.now(timezone.utc).isoformat(),'event':message['event'],'data':{k:v for k,v in message.get('data',{}).items() if k in allowed}}
+                    stamp=message.get('timestamp',{})
+                    if isinstance(stamp,dict) and isinstance(stamp.get('seconds'),int) and isinstance(stamp.get('microseconds'),int):
+                        # QEMU's own time of the event, kept apart from when the host read it.
+                        event['qemu_utc']=datetime.fromtimestamp(stamp['seconds']+stamp['microseconds']/1e6,timezone.utc).isoformat()
                     if work_reboot_session:
                         event['generation']=report['generation']
                     event['data']={key: value[:512] if isinstance(value,str) else value for key,value in event['data'].items()}
                     qmp_events.append(event)
                     runtime.atomic_json(output/'qmp-events.json', list(qmp_events))
+                    runtime.record_qmp_event(output,event)
                     if normal_runtime and message['event'] == 'SHUTDOWN':
                         clear_work_taskbar()
                 else:
                     inbox.put(message)
-            except Exception:pass # one bad line or failed side effect must not stop the reader
+            except Exception as error:
+                runtime.controller_error('qmp_bad_lines',error) # one bad line or failed side effect must not stop the reader
     finally:
         inbox.put({'eof':True}) # always wake command(), or every later call waits its full timeout
 def read_controls():
@@ -708,8 +717,10 @@ def read_file_receipt():
             if state['status'] != 'unconfirmed' or state.get('code') != 'GUEST_STATUS_STALE':
                 state.update(status='unconfirmed', code='GUEST_STATUS_STALE')
                 save()
-    except (OSError, ValueError, RuntimeError, TimeoutError, queue.Empty):
+    except (OSError, ValueError, RuntimeError, TimeoutError, queue.Empty) as error:
         files_buffer = ''
+        # Count read failures in the saved state, so a lost receipt is visible later.
+        state.update(receipt_errors=state.get('receipt_errors', 0) + 1, last_receipt_error=type(error).__name__)
         if state['status'] != 'unconfirmed':
             state['status'] = 'unconfirmed'
             save()
@@ -941,6 +952,8 @@ try:
             if reset:
                 report['reset_proof']=reset
             save()
+            runtime.controller_event(output,'generation_ended',generation=report.get('generation'),
+                                     result='reset' if reset else 'exited',exit_code=process.returncode,message=report.get('error'))
         if not reset:
             break
         # The old QEMU exited itself; the lifecycle lock serializes Stop with the next spawn.
