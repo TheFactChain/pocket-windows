@@ -49,12 +49,12 @@ CHECK_INFO = {
     'runtime_state': ('Другие запуски', 'Нужно проверить состояние Windows и шлюза', 'retry', 'Проверить снова'),
     'memory': ('Память', 'Не хватает свободной памяти', 'settings', 'Настроить память'),
     'free_space': ('Место на диске', 'Не хватает места на диске', 'retry', 'Проверить снова'),
-    'runtime_files': ('Python и QEMU', 'Не все компоненты установлены', 'prepare', 'Восстановить Python и QEMU'),
+    'runtime_files': ('Python и QEMU', 'Повреждены файлы программы', 'prepare', 'Восстановить файлы'),
     'application_files': ('Программа', 'Нужно распаковать полный комплект', 'retry', 'Проверить после распаковки'),
     'guest_files': ('Диск Windows', 'Не найден диск Windows или файл прошивки', 'retry', 'Проверить снова'),
-    'engine_identity': ('QEMU', 'Нужно восстановить QEMU', 'prepare', 'Восстановить Python и QEMU'),
+    'engine_identity': ('QEMU', 'Повреждены файлы программы', 'prepare', 'Восстановить файлы'),
     'gateway_package': ('Шлюз', 'Шлюз нужно восстановить', 'repair_gateway', 'Восстановить шлюз'),
-    'powershell': ('PowerShell', 'Не найден Windows PowerShell', 'retry', 'Проверить снова'),
+    'powershell': ('Средства Windows', 'Не найден Windows PowerShell', 'retry', 'Проверить снова'),
     'connection': ('Подключение', 'Добавь своё подключение', 'connection', 'Настроить подключение'),
 }
 
@@ -228,7 +228,7 @@ def preflight(root, host=None, *, full=True):
         except (OSError, ValueError, RuntimeError, KeyError, TypeError):
             check('gateway_package', False, 'Не найдена исправная версия шлюза. Её можно восстановить из комплекта; подключения и Windows сохранятся.')
         powershell = POWERSHELL
-        check('powershell', powershell.is_file(), 'Найден' if powershell.is_file() else 'Не найден встроенный Windows PowerShell. Без него Windows не запустится.')
+        check('powershell', powershell.is_file(), 'Есть' if powershell.is_file() else 'Не найден встроенный Windows PowerShell. Без него Windows не запустится.')
     connection = {'selected_profile': None, 'applied_revision_id': None, 'verified': False}
     try:
         connection['selected_profile'] = ProfileStore(root / 'profiles').selected_summary()

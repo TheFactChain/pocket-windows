@@ -304,9 +304,8 @@ namespace WindowsClaude.Launcher
             busy = value; Show(BusyRing, value); BusyRing.IsIndeterminate = value; // a hidden indeterminate ring keeps animating
             Show(ToastClose, !value);
             if (!value && OperationText.Text.Length > 0) { toastTimer.Stop(); toastTimer.Start(); }
-            foreach (UIElement button in new UIElement[] { RefreshButton, PrepareButton, RepairGatewayButton, NextActionButton, AddLinkButton, SaveProfileButton, DeleteProfileButton, ProfileList }.Concat(checkActions))
+            foreach (UIElement button in new UIElement[] { RefreshButton, NextActionButton, AddLinkButton, SaveProfileButton, DeleteProfileButton, ProfileList }.Concat(checkActions))
                 button.IsEnabled = !value;
-            PrepareHostButton.IsEnabled = !value && !runtimeActive;
             TestProfileButton.IsEnabled = !value && testAvailable;
             ExportButton.IsEnabled = !value && profiles.Count > 0;
             SettingsBody.IsEnabled = settingsLoaded && !value && !runtimeActive && !outcomeUnknown && !updating;
@@ -440,7 +439,7 @@ namespace WindowsClaude.Launcher
             int lineEnd = message.IndexOf('\n'); if (lineEnd >= 0) message = message.Substring(0, lineEnd).TrimEnd();
             string code = Text(result, "code", "");
             if (code == "runtime_error" || code == "supervisor_exited")
-                return "Запуск Windows не подтверждён. Причина записана в журнал: открой «Проверка» и нажми «Журналы».";
+                return "Запуск Windows не подтверждён. Открой «Проверка» и нажми «Сообщить о проблеме»: журналы приложатся сами.";
             return message;
         }
 
@@ -617,19 +616,6 @@ namespace WindowsClaude.Launcher
             finally { reportBusy = false; ShowReportState(reportStatus); }
         }
 
-        // Opens logs with the last failed launch folder selected, so it can be zipped and sent as is.
-        void OnOpenLogs(object sender, RoutedEventArgs e)
-        {
-            string folder = System.IO.Path.Combine(Bridge.Root, "logs"), receipt = operationResult == null ? "" : Text(operationResult, "receipt", "");
-            try
-            {
-                Directory.CreateDirectory(folder);
-                string launch = receipt.Length > 0 ? System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(System.IO.Path.Combine(Bridge.Root, receipt))) : "";
-                bool select = launch.StartsWith(folder + "\\", StringComparison.OrdinalIgnoreCase) && Directory.Exists(launch);
-                System.Diagnostics.Process.Start("explorer.exe", select ? "/select,\"" + launch + "\"" : "\"" + folder + "\"");
-            }
-            catch (Exception) { SetOperation("Не удалось открыть папку журналов: " + folder); }
-        }
         void OnNextAction(object sender, RoutedEventArgs e) { RunSuggested(suggestedAction, sender, e); }
         // One meaning per action code, for the home button and the buttons in the check rows alike.
         void RunSuggested(string action, object sender, RoutedEventArgs e)
@@ -641,6 +627,7 @@ namespace WindowsClaude.Launcher
             else if (action == "recover_session") { var task = StopSessionAsync(false); }
             else if (action == "windows_features") OnPrepareHost(sender, e);
             else if (action == "prepare") OnPrepare(sender, e);
+            else if (action == "report") OnReportProblem(sender, e);
             else OnRefresh(sender, e);
         }
         void OnShortcut(object sender, RoutedEventArgs e)
@@ -749,16 +736,29 @@ namespace WindowsClaude.Launcher
             return result;
         }
 
+        static readonly string[] PackageChecks = { "runtime_files", "application_files", "engine_identity", "guest_files" };
+
         static List<Dictionary<string, object>> Checks(Dictionary<string, object> result)
         {
             var checks = new List<Dictionary<string, object>>();
+            var package = new List<Dictionary<string, object>>();
             var source = Child(result, "checks");
             if (source != null)
                 foreach (var item in source)
                 {
                     var check = item.Value as Dictionary<string, object>; if (check == null) continue;
-                    var row = new Dictionary<string, object>(check); if (!row.ContainsKey("title")) row["title"] = item.Key; checks.Add(row);
+                    var row = new Dictionary<string, object>(check); if (!row.ContainsKey("title")) row["title"] = item.Key;
+                    if (PackageChecks.Contains(item.Key)) package.Add(row); else checks.Add(row);
                 }
+            // Everything ships inside the ZIP, so its parts are one row: "the program's files", fine or damaged.
+            if (package.Count > 0)
+            {
+                var broken = package.Where(item => !Flag(item, "passed")).ToList();
+                var lead = broken.FirstOrDefault(item => Text(item, "action", "") == "prepare") ?? broken.FirstOrDefault();
+                checks.Add(new Dictionary<string, object> { { "title", "Программа" }, { "passed", broken.Count == 0 },
+                    { "detail", broken.Count == 0 ? "На месте" : String.Join(" ", broken.Select(item => Text(item, "detail", "")).Distinct()) },
+                    { "action", Text(lead, "action", "retry") }, { "action_label", Text(lead, "action_label", "") } });
+            }
             // A reply from before Python could run (a lone EXE, a partial unpack) has only blockers; show them as rows.
             else if (result != null && result.ContainsKey("blockers") && result["blockers"] is IEnumerable)
                 foreach (var blocker in ((IEnumerable)result["blockers"]).Cast<object>().OfType<Dictionary<string, object>>())
@@ -817,7 +817,7 @@ namespace WindowsClaude.Launcher
             bool fileServerStopped = FileSharingState(report) == "failed" && Text(Child(report, "host_files"), "code", "") == "FILE_SERVER_STOPPED";
             var hostFiles = Child(report, "host_files");
             bool fileRecovery = Flag(hostFiles, "recovery_required") || Flag(hostFiles, "recovery_log_failed") || Flag(hostFiles, "recovery_channel_failed");
-            string recoveryDetail = Flag(hostFiles, "recovery_log_failed") ? "Не удалось записать журнал восстановления. Открой «Проверка» и сохрани отчёт." :
+            string recoveryDetail = Flag(hostFiles, "recovery_log_failed") ? "Не удалось записать журнал восстановления. Нажми «Сообщить о проблеме» в разделе «Проверка»." :
                 "Открой журнал восстановления: " + Text(hostFiles, "recovery_log", "подробности в отчёте проверки");
             if (Flag(hostFiles, "recovery_channel_failed")) recoveryDetail = "Канал отчёта файлового сервера недоступен. Сохрани работу в Windows, выключи её в панели и запусти заново. " + recoveryDetail;
             if (unavailable.Count > 0) checks.Add(new Dictionary<string, object> { { "passed", false },
@@ -832,7 +832,7 @@ namespace WindowsClaude.Launcher
             string launchReceipt = operationResult != null && !Bridge.Ok(operationResult) && !runtimeActive ? Text(operationResult, "receipt", "") : "";
             if (launchReceipt.Length > 0) checks.Insert(0, new Dictionary<string, object> { { "passed", false },
                 { "title", "Последний запуск не подтверждён" },
-                { "detail", "Журнал: " + launchReceipt.Substring(0, Math.Max(0, launchReceipt.LastIndexOf('/'))) + ". Нажми «Журналы», заархивируй выделенную папку и отправь её." } });
+                { "detail", "Причина записана в журнал. Отправь отчёт, журналы приложатся сами." }, { "action", "report" }, { "action_label", "Сообщить о проблеме" } });
             if (clipboardState == "failed" || clipboardState == "unconfirmed") checks.Add(new Dictionary<string, object> { { "passed", false },
                 { "title", "Общий буфер обмена недоступен" }, { "detail", clipboardDetail } });
             bool setupRequired = checks.Any(item => !Flag(item, "passed") && Flag(item, "setup_required"));
@@ -841,7 +841,6 @@ namespace WindowsClaude.Launcher
             DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
             ChecksHeroTitle.Text = failed > 0 ? DiagnosticSummary.Text : checks.Count == 0 ? "Проверка не выполнялась" : setupRequired ? "Нужна настройка" : "Всё в порядке";
             ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : setupRequired && failed == 0 ? "Добавь или выбери подключение для запуска Windows." : checks.All(item => !Flag(item, "passed")) ? "Остальное проверится после исправления" : "Пройдено " + checks.Count(item => Flag(item, "passed")) + " из " + checks.Count;
-            Show(PrepareButton, Bridge.CanRestoreComponents(Bridge.Root));
             Show(ReportProblemLink, failed > 0 || (operationResult != null && !Bridge.Ok(operationResult)));
 
             Dictionary<string, object> blocker = null;

@@ -130,8 +130,8 @@ internal static class Bridge
                 return Blocked("kit_access", "Нет доступа к файлам программы",
                     "Windows не дала открыть " + name + " (" + denied.GetType().Name + "). Проверь права на папку и повтори.", "retry", "Проверить снова");
             if (file.EndsWith("python.exe", StringComparison.OrdinalIgnoreCase) && recovery)
-                return Blocked("runtime_files", "Не хватает Python и QEMU",
-                    "Их можно вернуть из резервной копии внутри комплекта. Диск Windows и подключения не меняются.", "prepare", "Восстановить Python и QEMU");
+                return Blocked("runtime_files", "Повреждены файлы программы",
+                    "Их можно вернуть из резервной копии внутри комплекта. Диск Windows и подключения не меняются.", "prepare", "Восстановить файлы");
             return Blocked("application_files", "Комплект распакован не полностью",
                 "Не найден " + name + ". Распакуй полный ZIP Pocket Windows заново, в новую папку.", "retry", "Проверить снова");
         }
@@ -287,7 +287,7 @@ internal static class Bridge
         Dictionary<string, object> reply = await RunProcessAsync(info, 180000).ConfigureAwait(false);
         string code = reply.ContainsKey("code") ? Convert.ToString(reply["code"]) : "error";
         Dictionary<string, string> messages = new Dictionary<string, string> {
-            { "ready", "Компоненты готовы. Файлы Python и QEMU проверены." },
+            { "ready", "Файлы программы на месте и проверены." },
             { "repaired", "Компоненты восстановлены. Файлов: " + (reply.ContainsKey("repaired_files") ? Convert.ToString(reply["repaired_files"]) : "несколько") + "." },
             { "runtime_busy", "Компоненты заняты работающей Windows. Выключи Windows, затем повтори." },
             { "package_missing", "В комплекте нет резервной копии компонентов. Распакуй полный ZIP Pocket Windows заново." },

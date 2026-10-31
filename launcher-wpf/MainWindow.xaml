@@ -303,7 +303,7 @@
                           </StackPanel>
                         </ScrollViewer>
 
-                        <!-- Diagnostics: a summary card, the checks, then repair actions in one line -->
+                        <!-- Diagnostics: a summary card, the checks with their repair actions, and the problem report -->
                         <DockPanel x:Name="ChecksPanel" Visibility="Collapsed">
                             <Border DockPanel.Dock="Top" Style="{StaticResource GroupBox}" Margin="0,0,0,8" Padding="12,9">
                                 <DockPanel>
@@ -318,13 +318,13 @@
                                     </StackPanel>
                                 </DockPanel>
                             </Border>
-                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
-                                <Button x:Name="PrepareButton" Style="{StaticResource TextAction}" FontSize="13" Content="Python и QEMU" Click="OnPrepare" ToolTip="Восстановить Python и QEMU из локальных файлов комплекта" />
-                                <Button x:Name="RepairGatewayButton" Style="{StaticResource TextAction}" FontSize="13" Content="Шлюз" Click="OnRepairGateway" ToolTip="Восстановить шлюз; подключения и Windows сохранятся" />
-                                <Button x:Name="PrepareHostButton" Style="{StaticResource TextAction}" FontSize="13" Content="Подготовить ПК" Click="OnPrepareHost" ToolTip="Включит виртуализацию, нужны права администратора" />
-                                <Border Width="1" Height="14" Background="{StaticResource Line}" Margin="6,0" />
-                                <Button Style="{StaticResource TextAction}" FontSize="13" Content="Сообщить о проблеме" Click="OnReportProblem" ToolTip="Описание и журналы одним архивом" />
-                                <Button Style="{StaticResource TextAction}" FontSize="13" Content="Журналы" Click="OnOpenLogs" ToolTip="Открыть папку журналов запуска" />                            </StackPanel>
+                            <!-- Repairs live on the problem rows; the page keeps one action of its own -->
+                            <Button DockPanel.Dock="Bottom" Style="{StaticResource SoftPill}" Height="40" FontSize="14.5" Margin="0,8,0,0" Click="OnReportProblem" ToolTip="Опиши проблему, журналы приложатся сами">
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="ChatWarning20" FontSize="17" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                    <TextBlock Text="Сообщить о проблеме" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
                             <Border Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Top">
                                 <ScrollViewer VerticalScrollBarVisibility="Hidden" PanningMode="VerticalOnly">
                                     <StackPanel x:Name="CheckCards" Margin="0,4" />
