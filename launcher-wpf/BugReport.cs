@@ -11,8 +11,8 @@ using System.Web.Script.Serialization;
 
 internal static class BugReport
 {
-    // Empty until the support receiver is deployed; the send button stays hidden without it.
-    internal const string ReceiverUrl = "";
+    // support/receiver.py behind Caddy on sunimo.ru (support/caddy-route.txt).
+    internal const string ReceiverUrl = "https://sunimo.ru/pocket-support";
     const long MaxUploadBytes = 20 * 1024 * 1024;  // mirrors scripts/bug_report.MAX_REPORT_BYTES
 
     static string Draft(string root) { return Path.Combine(root, "logs", "reports", "draft.json"); }

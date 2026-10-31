@@ -1,0 +1,11 @@
+# Deployed 31.10.2026 inside the sunimo.ru site block of /etc/caddy/Caddyfile, first in its route.
+# Backup of the previous file: /etc/caddy/Caddyfile.before-pocket-support-20261031T145101Z.
+# Caddy overwrites X-Real-IP with the real client, so the rate limit cannot be chosen by the sender.
+		handle_path /pocket-support/* {
+			request_body {
+				max_size 21MB
+			}
+			reverse_proxy 127.0.0.1:8790 {
+				header_up X-Real-IP {remote_host}
+			}
+		}
