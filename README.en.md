@@ -34,7 +34,8 @@ Portable Windows for accessing blocked services through an existing proxy. One f
 | Your situation | What to do |
 | --- | --- |
 | You do not have Pocket Windows | Download the **full bundle** from Google Drive and follow [First start](#first-start). |
-| You have version 2026.10.25.3 or later | Shut down guest Windows normally, open **«Обновления» (Updates)** in the launcher, click **«Проверить» (Check)**, then **«Обновить» (Update)**. |
+| You have version 2026.10.30.1 or later | Shut down guest Windows normally, open **«Обновления» (Updates)** in the launcher, click **«Проверить» (Check)**, then **«Обновить» (Update)**. |
+| You have a version from 2026.10.25.3 to 2026.10.29.3 | These copies no longer update themselves. Update them [manually with these instructions](docs/updating.en.md#versions-202610253-to-202610293). |
 | You have the older version 2026.10.24.13 | Follow the [separate transition instructions](docs/updating.en.md#version-2026102413), then update from the launcher. |
 
 **In this guide:** [download and SHA256](#download) | [PC requirements](#pc-requirements) | [known limitations](#known-limitations) | [documentation](#documentation-and-source-code)
@@ -119,22 +120,22 @@ SHA256:
 
 ### Updating an existing installation
 
-The current published release is **[2026.10.29.3](https://github.com/TheFactChain/pocket-windows/releases/tag/v2026.10.29.3)**: microphone, audio, power defaults and accumulated fixes. The complete application update, `Pocket-Windows-2026.10.29.3-app.zip`, is **909,595,516 bytes** (about 910 MB). It does not include the Windows disk. You normally do not need to download it manually: use **«Обновления» (Updates)** in the launcher and follow the [instructions for your version](docs/updating.en.md).
+The current published release is **[2026.10.31.1](https://github.com/TheFactChain/pocket-windows/releases/tag/v2026.10.31.1)**: signed updates that do not depend on the repository address, plus launch fixes. The complete application update, `Pocket-Windows-2026.10.31.1-app.zip`, is **909,598,774 bytes** (about 910 MB). It does not include the Windows disk. You normally do not need to download it manually: use **«Обновления» (Updates)** in the launcher and follow the [instructions for your version](docs/updating.en.md).
 
 The new updater downloads changed, verified chunks and resumes interrupted downloads. The amount depends on your installed version and saved cache; the first download can be large.
 
 | GitHub Assets file | What it is for |
 | --- | --- |
 | `Pocket-Windows-<version>-app.zip` | Complete **application update**, without Windows. Do not extract `app` over your installation manually. |
-| `-chunks.zip`, `-update.json`, `-update-v2.json`, `-updater.zip` | Files used by the updater. You do not need to select or run them manually. `-updater.zip` is not a first-install package. |
+| `update-manifest.json`, `-chunks.zip`, `-update.json`, `-update-v2.json`, `-updater.zip` | Files used by the updater. You do not need to select or run them manually. `-updater.zip` is not a first-install package. |
 | `*.sha256` | Checksum of the corresponding file. |
 | **Source code (zip / tar.gz)** | Source files for developers, not the ready-to-run application. |
 
 <details>
-<summary>SHA256 of the 2026.10.29.3 application package</summary>
+<summary>SHA256 of the 2026.10.31.1 application package</summary>
 
 ```text
-21d08f305d94807ce4df0062da61f29c6633339a53cd3721372ecd6a0504c874
+f918bae41c8858be170cea268e4c554fac8988c4864a9d085d40278bcc51e729
 ```
 
 </details>
