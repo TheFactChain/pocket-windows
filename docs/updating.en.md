@@ -29,13 +29,15 @@ Launchers newer than 2026.10.30.2 accept only updates signed with the project ke
 
 ## Versions 2026.10.25.3 to 2026.10.29.3
 
-These copies look for updates at the repository's former address (before the GitHub account was renamed) and no longer update themselves: «Проверить» (Check) reports that the check failed. If an "update" ever appears at the old address, do not install it: that account no longer belongs to the project. Update the copy manually the same way as described below for 2026.10.24.13, using the latest release:
+These copies look for updates at the repository's former address (before the GitHub account was renamed) and no longer update themselves: «Проверить» (Check) reports that the check failed. GitHub has permanently retired the former repository name, so they cannot be moved automatically. One manual step is needed:
 
-1. Shut down guest Windows normally and close every panel of this copy.
-2. From the [Latest page](https://github.com/TheFactChain/pocket-windows/releases/latest), download `Pocket-Windows-<version>-app.zip` and `Pocket-Windows-<version>-app.zip.sha256` into one folder.
-3. Run the block from the next section with `$archive` set to the downloaded ZIP and the `$expected = ...` line replaced by `$expected = (Get-Content -LiteralPath ($archive + '.sha256')).Split(' ')[0]`.
+1. Shut down guest Windows normally and close the launcher of this copy.
+2. Download [`Update-Pocket-Windows.cmd`](https://github.com/TheFactChain/pocket-windows/releases/latest/download/Update-Pocket-Windows.cmd) and put it in the Pocket Windows folder next to `Launcher.exe`.
+3. Double-click it. If Windows shows "Windows protected your PC", click "More info", then "Run anyway".
 
-Afterwards «Обновления» (Updates) works again and later releases arrive the normal way.
+The file verifies the update signature with the same key as the launcher, downloads the latest release, checks its SHA-256 and installs it with the regular installer, which rolls back on failure. The Windows disk, settings and connections are not changed. Afterwards «Обновления» (Updates) works again and later releases arrive the normal way.
+
+Without this file, run the block from the next section with `$archive` set to `Pocket-Windows-<version>-app.zip` from the [Latest page](https://github.com/TheFactChain/pocket-windows/releases/latest) and the `$expected = ...` line replaced by `$expected = (Get-Content -LiteralPath ($archive + '.sha256')).Split(' ')[0]`.
 
 ## Version 2026.10.24.13
 

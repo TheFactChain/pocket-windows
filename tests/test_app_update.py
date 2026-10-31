@@ -51,6 +51,10 @@ class AppUpdateTests(unittest.TestCase):
 
     def test_pinned_keys_match_release_sources(self):
         source = (ROOT / 'launcher-wpf/AppUpdate.cs').read_text(encoding='utf-8')
+        manual = (ROOT / 'scripts/Update-Pocket-Windows.cmd').read_text(encoding='utf-8')
+        for value in [*release.update_sources()['keys'], *release.update_sources()['feeds']]:
+            self.assertIn("'" + value + "'", manual, 'The one-file manual updater trusts the same keys and feeds')
+        self.assertTrue(all(line.isascii() for line in manual.splitlines()[:7]), 'cmd.exe part must stay ASCII')
         sources = release.update_sources()
         self.assertEqual(release.release_url('2026.10.31.1', 'a.zip'),
                          sources['release_base'].replace('{release_id}', '2026.10.31.1') + 'a.zip')
