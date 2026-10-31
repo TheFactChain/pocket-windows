@@ -919,7 +919,7 @@ namespace WindowsClaude.Launcher
                 updateOffer = result.Offer; UpdateStatusText.Text = result.Message;
                 if (updateOffer == null) { try { updateOffer = AppUpdate.SavedOffer(Bridge.Root); } catch (Exception) { } }
                 UpdateStatusTitle.Text = result.Title;
-                UpdateCaption.Text = updateOffer == null ? result.Title : updateOffer.Repair ? "Можно восстановить файлы" : "Доступна версия " + updateOffer.Id;
+                UpdateCaption.Text = updateOffer == null || updateOffer.Repair ? result.Title : "Доступна версия " + updateOffer.Id;
                 if (updateOffer != null && updateOffer.Offline) UpdateStatusText.Text += " Сохранённые файлы можно восстановить кнопкой «Обновить».";
             }
             catch (Exception)
@@ -943,7 +943,8 @@ namespace WindowsClaude.Launcher
             Show(UpdatePill, offered && !updating && !updateOffer.Repair);
             Show(UpdateProgress, updating);
             CheckUpdatesButton.IsEnabled = !App.UpdateProbePending && !checkingUpdate && !busy && !updating && !updateHandedOff;
-            InstallUpdateButton.Content = updating ? "Отменить" : "Обновить";
+            // At the latest version the same action only re-checks and repairs files; say so instead of offering an "update".
+            InstallUpdateButton.Content = updating ? "Отменить" : offered && updateOffer.Repair ? "Восстановить файлы" : "Обновить";
             InstallUpdateButton.IsEnabled = !App.UpdateProbePending && !checkingUpdate && !updateHandedOff && (updating || (offered && !busy && !runtimeActive && !outcomeUnknown));
         }
 
@@ -956,9 +957,13 @@ namespace WindowsClaude.Launcher
                 UpdateStatusTitle.Text = title; UpdateCaption.Text = title;
                 long done = 0, total = 0;
                 bool measured = Int64.TryParse(Text(value, "done_bytes", ""), out done) && Int64.TryParse(Text(value, "total_bytes", ""), out total) && total > 0;
-                UpdateProgress.IsIndeterminate = !measured;
-                if (measured) { UpdateProgress.Value = Math.Min(100, done * 100.0 / total); UpdateStatusText.Text = UpdateProgress.Value.ToString("0") + "%. Можно отменить."; }
-                else UpdateStatusText.Text = title + ". Можно отменить.";
+                // One bar for the whole operation: each phase owns a slice and the bar never moves back, so phases no longer look like restarts.
+                double low = phase == "bootstrap" ? 0 : phase == "downloading" ? 20 : phase == "assembling" ? 90 : phase == "prepared" || phase == "checking" ? 98 : 10;
+                double high = phase == "bootstrap" ? 10 : phase == "downloading" ? 90 : phase == "assembling" ? 98 : phase == "prepared" || phase == "checking" ? 100 : 20;
+                double overall = low + (high - low) * (measured ? Math.Min(1.0, done / (double)total) : 0);
+                UpdateProgress.IsIndeterminate = false;
+                UpdateProgress.Value = Math.Max(UpdateProgress.Value, Math.Min(100, overall));
+                UpdateStatusText.Text = title + ": " + UpdateProgress.Value.ToString("0") + "%. Можно отменить.";
             });
         }
 

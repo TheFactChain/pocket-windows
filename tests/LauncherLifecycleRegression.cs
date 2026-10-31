@@ -211,7 +211,22 @@ internal static class LauncherLifecycleRegression
             Set(window, "updateOffer", new AppUpdate.Offer { Id = "2026.10.27.1", Repair = true });
             Call(window, "ShowUpdateOffer");
             Assert(((Border)Field(window, "UpdatePill")).Visibility == Visibility.Collapsed && ((Button)Field(window, "InstallUpdateButton")).Visibility == Visibility.Visible, "Current-version repair is available without a new-version notification");
-            Assert(Buttons((DependencyObject)Field(window, "UpdatesPane")).Count == 2 && ((Button)Field(window, "InstallUpdateButton")).Content.ToString() == "Обновить", "Updates has exactly Check and Update actions");
+            Assert(Buttons((DependencyObject)Field(window, "UpdatesPane")).Count == 2 && ((Button)Field(window, "InstallUpdateButton")).Content.ToString() == "Восстановить файлы", "At the latest version the action is named repair, not update");
+            Set(window, "updateOffer", new AppUpdate.Offer { Id = "2026.10.27.2" }); Call(window, "ShowUpdateOffer");
+            Assert(((Button)Field(window, "InstallUpdateButton")).Content.ToString() == "Обновить", "A newer release is offered as an update");
+            double barBefore = -1;
+            foreach (var step in new[] { new object[] { "bootstrap", 10, 10 }, new object[] { "scanning", null, null }, new object[] { "planned", null, null }, new object[] { "scanning", null, null },
+                new object[] { "downloading", 0, 100 }, new object[] { "downloading", 50, 100 }, new object[] { "assembling", 1, 4 }, new object[] { "prepared", null, null } })
+            {
+                var value = new Dictionary<string, object> { { "phase", step[0] } };
+                if (step[1] != null) { value["done_bytes"] = step[1]; value["total_bytes"] = step[2]; }
+                Call(window, "UpdateBytesProgress", value);
+                var bar = (ProgressBar)Field(window, "UpdateProgress");
+                Assert(!bar.IsIndeterminate && bar.Value >= barBefore, "One update bar only moves forward across phases: " + step[0]);
+                barBefore = bar.Value;
+            }
+            Assert(barBefore >= 98, "Prepared files fill the bar");
+            ((ProgressBar)Field(window, "UpdateProgress")).Value = 0;
             Assert(typeof(MainWindow).GetField("UpdatePackageText", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public) == null, "Updates has no technical package details control");
             Call(window, "UpdateBytesProgress", new Dictionary<string, object> { { "phase", "downloading" }, { "done_bytes", 123 }, { "total_bytes", 456 } });
             Assert(!((TextBlock)Field(window, "UpdateStatusText")).Text.Contains("123") && !((TextBlock)Field(window, "UpdateStatusText")).Text.Contains("байт"), "Progress uses a short human status instead of byte counts");
