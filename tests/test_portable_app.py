@@ -455,7 +455,36 @@ class PortableAppTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             report = app.preflight(Path(temporary), host=self.facts(512))
             self.assertFalse(report['checks']['memory']['passed'])
-            self.assertIn('6144', report['checks']['memory']['detail'])
+            self.assertIn('Нужно 6 ГБ', report['checks']['memory']['detail'])
+            self.assertIn('свободно 0,5 ГБ', report['checks']['memory']['detail'])
+
+    def test_english_internal_errors_become_russian_with_detail_kept(self):
+        self.assertEqual(app.user_message(ValueError('Сначала выключи Windows.'), 'start'), 'Сначала выключи Windows.')
+        with tempfile.TemporaryDirectory() as temporary:
+            output = io.StringIO()
+            with mock.patch.object(sys, 'argv', ['app', '--root', temporary, '--action', 'status']), \
+                    mock.patch.object(app, 'runtime_status', side_effect=ValueError('Package manifest pair is incomplete')), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(app.main(), 1)
+            reply = json.loads(output.getvalue())
+            self.assertNotRegex(reply['message'], '[A-Za-z]{4}')
+            self.assertEqual((reply['code'], reply['detail']), ('internal_error', 'Package manifest pair is incomplete'))
+
+    def test_damaged_package_is_a_problem_row_not_a_raw_error(self):
+        import package_integrity
+        with tempfile.TemporaryDirectory() as temporary:
+            output = io.StringIO()
+            with mock.patch.object(sys, 'argv', ['app', '--root', temporary, '--action', 'diagnose']), \
+                    mock.patch.object(package_integrity, 'verify_initial', side_effect=ValueError('Package file checksum mismatch: scripts/x.py')), \
+                    mock.patch.object(app, 'host_facts', return_value=self.facts()), \
+                    mock.patch.object(app, 'save_diagnostic_report', return_value='logs/fixture.json'), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(app.main(), 1)
+            reply = json.loads(output.getvalue())
+            self.assertFalse(reply['checks']['application_files']['passed'])
+            self.assertEqual(reply['blockers'][0]['code'], 'application_files')
+            self.assertNotIn('mismatch', reply['message'] + reply['checks']['application_files']['detail'])
+            self.assertEqual(reply['package_check']['detail'], 'Package file checksum mismatch: scripts/x.py')
 
     def test_diagnostics_never_expose_saved_profile_contents(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -667,7 +696,7 @@ class PortableAppTests(unittest.TestCase):
             self.assertIn('памят', report['message'].lower())
             self.assertEqual(report.get('blockers', [{}])[0].get('code'), 'memory')
             self.assertEqual(report['blockers'][0]['action'], 'settings')
-            self.assertEqual(report['checks']['memory'].get('title'), 'Оперативная память')
+            self.assertEqual(report['checks']['memory'].get('title'), 'Память')
 
     def test_missing_runtime_report_points_to_component_preparation(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -44,19 +44,24 @@ RUNTIME_FILES = (PYTHON + '/python.exe',
 GUEST_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 CHECK_INFO = {
     'windows_x64': ('Версия Windows', 'Нужна 64-разрядная Windows', 'retry', 'Проверить снова'),
-    'whpx': ('Аппаратное ускорение', 'Нужен компонент виртуализации Windows', 'windows_features', 'Как включить'),
+    'whpx': ('Виртуализация', 'Нужен компонент виртуализации Windows', 'windows_features', 'Подготовить ПК'),
     'settings': ('Настройки', 'Нужно восстановить настройки', 'settings', 'Открыть настройки'),
-    'runtime_state': ('Виртуальные машины', 'Нужно проверить состояние виртуальных машин', 'retry', 'Проверить снова'),
-    'memory': ('Оперативная память', 'Не хватает свободной памяти', 'settings', 'Настроить память'),
+    'runtime_state': ('Другие запуски', 'Нужно проверить состояние Windows и шлюза', 'retry', 'Проверить снова'),
+    'memory': ('Память', 'Не хватает свободной памяти', 'settings', 'Настроить память'),
     'free_space': ('Место на диске', 'Не хватает места на диске', 'retry', 'Проверить снова'),
-    'runtime_files': ('Компоненты программы', 'Не все компоненты установлены', 'prepare', 'Восстановить Python и QEMU'),
-    'application_files': ('Файлы приложения', 'Нужно распаковать полный комплект', 'retry', 'Проверить после распаковки'),
+    'runtime_files': ('Python и QEMU', 'Не все компоненты установлены', 'prepare', 'Восстановить Python и QEMU'),
+    'application_files': ('Программа', 'Нужно распаковать полный комплект', 'retry', 'Проверить после распаковки'),
     'guest_files': ('Диск Windows', 'Не найден диск Windows или файл прошивки', 'retry', 'Проверить снова'),
     'engine_identity': ('QEMU', 'Нужно восстановить QEMU', 'prepare', 'Восстановить Python и QEMU'),
-    'gateway_package': ('Шлюз подключения', 'Шлюз нужно восстановить', 'repair_gateway', 'Восстановить шлюз'),
-    'powershell': ('Системные инструменты', 'Не найден Windows PowerShell', 'retry', 'Проверить снова'),
+    'gateway_package': ('Шлюз', 'Шлюз нужно восстановить', 'repair_gateway', 'Восстановить шлюз'),
+    'powershell': ('PowerShell', 'Не найден Windows PowerShell', 'retry', 'Проверить снова'),
     'connection': ('Подключение', 'Добавь своё подключение', 'connection', 'Настроить подключение'),
 }
+
+
+def gib(mib):
+    """Show memory and disk in gigabytes with a Russian decimal comma, as people read them."""
+    return f'{mib / 1024:.1f}'.replace('.', ',').removesuffix(',0')
 
 
 def host_facts():
@@ -111,15 +116,16 @@ def preflight(root, host=None, *, full=True):
         checks[name] = {'passed': bool(passed), 'detail': detail, 'title': title,
                         'action': action, 'action_label': label}
 
-    check('windows_x64', host['windows'] and host['x64'], 'Требуется Windows x64.')
-    check('whpx', host['whpx'], 'Ускорение виртуальных машин доступно.' if host['whpx'] else
-          'В компонентах Windows включи «Платформа гипервизора Windows» и перезагрузи ПК. Программа не меняет это автоматически.')
+    passed_x64 = host['windows'] and host['x64']
+    check('windows_x64', passed_x64, '64 бит' if passed_x64 else 'Pocket Windows запускается только в 64-разрядной Windows.')
+    check('whpx', host['whpx'], 'Включено' if host['whpx'] else
+          'Нужен компонент «Платформа гипервизора Windows». Кнопка «Подготовить ПК» включит его с правами администратора, затем перезагрузи ПК.')
     try:
         settings = load_settings(root)
-        check('settings', True, 'Публичные параметры корректны.')
+        check('settings', True, 'В порядке')
     except (OSError, ValueError):
         settings = dict(DEFAULTS)
-        check('settings', False, 'Некорректный config/runtime.json. Исправьте настройки.')
+        check('settings', False, 'Файл настроек повреждён. Открой настройки и сохрани их заново.')
     try:
         display_settings = windows_settings.load_settings(root)
     except (OSError, ValueError):
@@ -152,10 +158,10 @@ def preflight(root, host=None, *, full=True):
         usable = (not guests or already_running) and all(
             state.get('test_only') is not True and state.get('status') in
             ('starting', 'running', 'restarting', 'reconnecting', 'stopping') for state in states.values())
-        check('runtime_state', usable, 'Сначала заверши текущую проверку или останови сеанс шлюза.' if not usable else
-              'Обе VM уже работают.' if already_running else 'Конфликтующих процессов этой копии не найдено.')
+        check('runtime_state', usable, 'Дождись завершения текущего запуска или выключи Windows.' if not usable else
+              'Windows работает' if already_running else 'Нет')
     except (OSError, ValueError, RuntimeError, KeyError, TypeError):
-        check('runtime_state', False, 'Состояние VM не подтверждено. Проверьте журналы этой копии.')
+        check('runtime_state', False, 'Не удалось прочитать состояние Windows и шлюза. Проверь снова; если не поможет, сообщи о проблеме.')
     startup = {}
     supervisor_active = False
     try:
@@ -183,25 +189,28 @@ def preflight(root, host=None, *, full=True):
             checks['runtime_state'].update(action='recover_session', action_label='Завершить прерванный сеанс',
                 detail='Windows и её контроллер уже завершились. Восстанови прерванный сеанс: при необходимости будет сброшен только одноразовый шлюз. Диск Windows и подключения сохранятся.')
     required_memory = settings['work_memory_mib'] + settings['gateway_memory_mib'] + 1024
-    check('memory', already_running or host['ram_available_mib'] >= required_memory,
-          'Память для работающей пары уже выделена.' if already_running else
-          f"Нужно {required_memory} МиБ свободной памяти; доступно {host['ram_available_mib']} МиБ. "
+    memory_ok = already_running or host['ram_available_mib'] >= required_memory
+    check('memory', memory_ok,
+          'Занята Windows' if already_running else f"{gib(host['ram_available_mib'])} ГБ свободно" if memory_ok else
+          f"Нужно {gib(required_memory)} ГБ свободной памяти, сейчас свободно {gib(host['ram_available_mib'])} ГБ. "
           'Закрой лишние приложения или уменьши память Windows в настройках.')
     free = shutil.disk_usage(root).free
     check('free_space', free >= 2 * 1024 ** 3,
-          f'Свободно {free // 1048576} МиБ; для запуска требуется резерв не менее 2048 МиБ.')
+          f'{gib(free // 1048576)} ГБ' if free >= 2 * 1024 ** 3 else
+          f'Свободно {gib(free // 1048576)} ГБ, нужно хотя бы 2 ГБ. Освободи место на этом диске.')
     gateway_version = None
     if full:
         missing = [name for name in RUNTIME_FILES if name.startswith('runtime/') and not (root / name).is_file()]
-        check('runtime_files', not missing, 'Не хватает: ' + ', '.join(missing) if missing else 'Python и QEMU найдены.')
+        check('runtime_files', not missing, 'Не хватает: ' + ', '.join(missing) + '. Их можно вернуть из резервной копии комплекта.'
+              if missing else 'На месте')
         missing = [name for name in RUNTIME_FILES if name.startswith('scripts/') and not (root / name).is_file()]
         check('application_files', not missing,
               'Распакуй полный комплект поверх файлов приложения, сохранив личные диски и настройки. Не хватает: ' + ', '.join(missing)
-              if missing else 'Файлы приложения на месте.')
+              if missing else 'На месте')
         missing_guests = [name for name in GUEST_FILES if not (root / name).is_file()]
         check('guest_files', not missing_guests,
-              'Нужны установленные диски и файл прошивки: ' + ', '.join(missing_guests)
-              if missing_guests else 'Диск Windows и данные прошивки найдены.')
+              'Не найден диск Windows или файл прошивки: ' + ', '.join(missing_guests) + '. Распакуй полный ZIP Pocket Windows заново.'
+              if missing_guests else 'На месте')
         engine = root / RUNTIME_FILES[1]
         valid_engine = False
         if engine.is_file():
@@ -210,29 +219,29 @@ def preflight(root, host=None, *, full=True):
                     valid_engine = hashlib.file_digest(reader, 'sha256').hexdigest() == ENGINE_SHA256
             except OSError:
                 pass
-        check('engine_identity', valid_engine, 'QEMU 11.1.0 проверен.' if valid_engine else
-              'Файл QEMU отсутствует или повреждён. Нажми «Восстановить Python и QEMU».')
+        check('engine_identity', valid_engine, 'Проверен' if valid_engine else
+              'Файл QEMU отсутствует или повреждён. Его можно вернуть из резервной копии комплекта.')
         try:
             package = inspect_current(root)
             gateway_version = package['version']
-            check('gateway_package', True, 'Установлен шлюз ' + gateway_version + '. Структура корректна; полная проверка SHA256 выполняется перед запуском.')
+            check('gateway_package', True, gateway_version)
         except (OSError, ValueError, RuntimeError, KeyError, TypeError):
-            check('gateway_package', False, 'Не найдена исправная версия шлюза. Восстанови её из пакета компонентов.')
+            check('gateway_package', False, 'Не найдена исправная версия шлюза. Её можно восстановить из комплекта; подключения и Windows сохранятся.')
         powershell = POWERSHELL
-        check('powershell', powershell.is_file(), 'Windows PowerShell найден.' if powershell.is_file() else 'Для запуска нужен встроенный Windows PowerShell 5.1.')
+        check('powershell', powershell.is_file(), 'Найден' if powershell.is_file() else 'Не найден встроенный Windows PowerShell. Без него Windows не запустится.')
     connection = {'selected_profile': None, 'applied_revision_id': None, 'verified': False}
     try:
         connection['selected_profile'] = ProfileStore(root / 'profiles').selected_summary()
         selected = connection['selected_profile']
         check('connection', selected is not None and not selected['needs_credentials'] and not selected.get('needs_correction'),
-              'Исправь адрес сохранённого подключения в разделе «Подключение».' if selected and selected.get('needs_correction') else
-              'Пароль выбранного подключения недоступен. Открой раздел «Подключение» и введи его заново.'
-              if selected and selected['needs_credentials'] else 'Подключение выбрано для следующего запуска.' if selected else
+              'Исправь адрес сохранённого подключения в разделе «Подключения».' if selected and selected.get('needs_correction') else
+              'Пароль выбранного подключения недоступен. Открой раздел «Подключения» и введи его заново.'
+              if selected and selected['needs_credentials'] else 'Выбрано' if selected else
               'Добавь подключение, чтобы запустить Windows.')
         if selected is None:
             checks['connection'].update(setup_required=True, action_label='Добавить подключение')
     except (OSError, ValueError, RuntimeError):
-        check('connection', False, 'Не удалось прочитать подключение. Открой раздел «Подключение» и проверь сохранённый профиль.')
+        check('connection', False, 'Не удалось прочитать подключение. Открой раздел «Подключения» и проверь сохранённый профиль.')
     network_verified = False
     display_state = {'status': 'not_running'}
     if guests:
@@ -340,6 +349,28 @@ def show_desktop(root):
             'Окно Windows восстановлено. Выбери его на панели задач.'}
 
 
+def mark_package_damaged(result):
+    """A failed manifest check is one more problem row, not a page replaced by a raw error."""
+    title, problem, action, label = CHECK_INFO['application_files']
+    detail = 'Часть файлов комплекта повреждена или распакована не полностью. Распакуй полный ZIP Pocket Windows заново, в новую папку.'
+    result['checks']['application_files'] = {'passed': False, 'detail': detail, 'title': title, 'action': action, 'action_label': label}
+    result['blockers'] = [{'code': 'application_files', 'title': problem, 'detail': detail, 'action': action,
+                           'action_label': label, 'setup_required': False},
+                          *(item for item in result['blockers'] if item['code'] != 'application_files')]
+    result.update(ok=False, message=problem)
+    return result
+
+
+def user_message(error, action):
+    """Messages written for people are Russian; an English one is internal and goes to the report instead."""
+    text = str(error)
+    if re.search('[А-Яа-яЁё]', text):
+        return text
+    if action in ('diagnose', 'status'):
+        return 'Проверка не завершилась. Подробности сохранены в отчёте, можно сообщить о проблеме.'
+    return 'Действие не выполнено. Подробности сохранены в отчёте, можно сообщить о проблеме.'
+
+
 def save_diagnostic_report(root, result):
     folder = root / 'logs'
     folder.mkdir(parents=True, exist_ok=True)
@@ -347,7 +378,7 @@ def save_diagnostic_report(root, result):
         raise ValueError('Diagnostic directory escapes the project root')
     public = {key: result[key] for key in (
         'ok', 'message', 'checks', 'blockers', 'settings', 'host', 'checked_utc',
-        'already_running', 'network_verified', 'network_acceptance_scope', 'network_warning')
+        'already_running', 'network_verified', 'network_acceptance_scope', 'network_warning', 'package_check')
         if key in result}
     runtime.atomic_json(folder / 'diagnostics-latest.json', public)
     return 'logs/diagnostics-latest.json'
@@ -363,9 +394,9 @@ def save_settings(root, value):
     settings = validate_settings(value)
     with runtime.ProjectLock(root) as acquired:
         if not acquired:
-            raise ValueError('Сейчас выполняется запуск или работа VM. Повторите после штатного завершения.')
+            raise ValueError('Сейчас идёт запуск или работает Windows. Повтори после её выключения.')
         if runtime.engine_processes(root):
-            raise ValueError('Сначала завершите VM штатно. Настройки применяются при следующем запуске.')
+            raise ValueError('Сначала штатно выключи Windows. Настройки применятся при следующем запуске.')
         folder = root / 'config'
         folder.mkdir(parents=True, exist_ok=True)
         if not folder.resolve().is_relative_to(root.resolve()):
@@ -432,18 +463,18 @@ def windows_preferences(root):
 
 
 START_MESSAGES = {
-    'ready': 'Gateway и Windows запущены.',
-    'stopped': 'Windows и gateway уже завершились штатно.',
-    'uac_cancelled': 'Запрос прав администратора отменён. Повторите запуск и подтвердите UAC.',
-    'execution_policy': 'PowerShell запретил запуск скрипта. Политика не изменялась; проверьте её с владельцем ПК.',
-    'elevation_failed': 'Повышенный процесс не подтвердил выполнение скрипта запуска.',
-    'missing_runtime': 'Обязательный файл runtime отсутствует или исчез до запуска.',
-    'runtime_error': 'Supervisor сообщил об ошибке запуска. Откройте указанный receipt.',
-    'supervisor_exited': 'Supervisor завершился до подтверждения запуска.',
-    'startup_timeout': 'Запуск не подтверждён в отведённое время; работающие VM сохранены.',
-    'startup_pending': 'Ожидание запуска превышено. Проверьте UAC и logs; работающие VM сохранены.',
-    'result_channel_invalid': 'Результат запуска некорректен. Проверьте целостность комплекта.',
-    'wrapper_failed': 'Скрипт запуска не вернул подтверждённый результат.',
+    'ready': 'Шлюз и Windows запущены.',
+    'stopped': 'Windows и шлюз уже завершились штатно.',
+    'uac_cancelled': 'Запрос прав администратора отменён. Запусти снова и подтверди запрос Windows.',
+    'execution_policy': 'Windows PowerShell запретил сценарий запуска. Политика не менялась; проверь её с владельцем ПК.',
+    'elevation_failed': 'Запуск с правами администратора не подтвердился.',
+    'missing_runtime': 'Не хватает файла программы. Проверь снова или распакуй полный ZIP заново.',
+    'runtime_error': 'Запуск завершился ошибкой. Подробности в отчёте, сообщи о проблеме.',
+    'supervisor_exited': 'Служба запуска остановилась раньше, чем Windows поднялась.',
+    'startup_timeout': 'Запуск не подтвердился вовремя. Уже работающие части не останавливались.',
+    'startup_pending': 'Запуск идёт дольше обычного. Проверь, не ждёт ли Windows подтверждения прав; работающие части не останавливались.',
+    'result_channel_invalid': 'Ответ о запуске повреждён. Проверь снова; если повторится, распакуй полный ZIP заново.',
+    'wrapper_failed': 'Сценарий запуска не вернул подтверждённый результат.',
 }
 
 
@@ -667,7 +698,7 @@ def stop_runtime(root):
     stopped = process.returncode == 0 and not runtime.engine_processes(root)
     return {'ok': stopped, 'code': 'stopped' if stopped else 'shutdown_not_confirmed',
             'message': 'Windows и шлюз выключены.' if stopped else
-                'Штатное выключение не подтверждено. VM сохранены. Проверь состояние Windows и диагностику.'}
+                'Штатное выключение не подтверждено. Windows и шлюз не останавливались принудительно. Открой «Проверка».'}
 
 
 def repair_gateway(root):
@@ -831,8 +862,15 @@ def main():
             result = runtime_status(root)
         elif args.action == 'diagnose':
             from package_integrity import verify_initial
-            integrity = verify_initial(root)
-            result = preflight(root) if integrity['ok'] else dict(integrity)
+            try:
+                integrity = verify_initial(root)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+                integrity = {'ok': False, 'code': 'package_damaged', 'detail': str(error),
+                             'message': 'Файлы комплекта повреждены или распакованы не полностью.'}
+            if integrity['ok'] or integrity.get('code') == 'busy':
+                result = preflight(root) if integrity['ok'] else dict(integrity)
+            else:
+                result = mark_package_damaged(preflight(root))
             result['package_check'] = integrity
             try:
                 result['diagnostic_report'] = save_diagnostic_report(root, result)
@@ -869,9 +907,13 @@ def main():
         else:
             result = start(root)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
-        result = {'ok': False, 'message': profile_error(error) if args.action in PROFILE_ACTIONS or args.action == 'test-profile' else str(error)}
+        # Profile errors can quote a secret, so their raw text never leaves the process.
+        private = args.action in PROFILE_ACTIONS or args.action == 'test-profile'
+        result = {'ok': False, 'message': profile_error(error) if private else user_message(error, args.action)}
+        if not private and result['message'] != str(error):
+            result.update(code='internal_error', detail=str(error))
         if args.action == 'recover-session':
-            result.update(code='recovery_refused', detail=str(error), message='Восстановление не подтверждено: Windows или служебные процессы ещё работают либо состояние файлов не удалось проверить. VM сохранены. Повтори диагностику после завершения текущей операции.')
+            result.update(code='recovery_refused', detail=str(error), message='Восстановление не подтверждено: Windows или служебные процессы ещё работают либо состояние файлов не удалось проверить. Ничего не остановлено. Проверь снова после завершения текущей операции.')
         elif args.action == 'force-stop':
             result.update(code='force_stop_refused', detail=str(error), message='Аварийное завершение не подтверждено. Сеанс мог измениться или служебные процессы ещё завершаются. Повтори проверку состояния; чужие процессы не останавливались.')
     result.setdefault('schema', 1)

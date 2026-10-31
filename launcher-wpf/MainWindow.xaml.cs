@@ -26,13 +26,13 @@ namespace WindowsClaude.Launcher
 {
     public enum AppPage { Home, Connection, Settings, Diagnostics, Updates, Help }
 
-    // Same state rules as the WinForms launcher (ui/Launcher.cs): an unconfirmed operation blocks
-    // everything except diagnostics, the panel hides to the tray while Windows runs, status polls every 3 s.
+    // An unconfirmed operation blocks everything except diagnostics, the panel hides to the tray
+    // while Windows runs, status polls every 3 s.
     public partial class MainWindow : FluentWindow
     {
         static readonly Brush Green = Hex("#34C759"), GreenSoft = Hex("#E3F7E8"), GreenInk = Hex("#1E7A36"),
             Blue = Hex("#3390EC"), BlueSoft = Hex("#E9F2FD"), BlueInk = Hex("#1C5A9A"),
-            Grey = Hex("#8A8A8E"), GreySoft = Hex("#EDEDF0"), Orange = Hex("#FF9500"), Red = Hex("#E53935"), Ink = Hex("#1C1C1E");
+            Grey = Hex("#8A8A8E"), GreySoft = Hex("#EDEDF0"), Orange = Hex("#FF9500"), OrangeSoft = Hex("#FFF1DE"), OrangeInk = Hex("#B36200"), Teal = Hex("#30B0C7"), Red = Hex("#E53935"), Ink = Hex("#1C1C1E");
         static readonly int[,] Modes = { { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1366, 768 }, { 1440, 900 },
             { 1600, 900 }, { 1680, 1050 }, { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 } };
         const int DefaultMode = 8;
@@ -54,7 +54,9 @@ namespace WindowsClaude.Launcher
         int settingsRevision;
         string pendingStartReceipt, activeOperationAction, workState = "unknown", gatewayState = "unknown", suggestedAction = "retry", reportText = "", displayedChecks;
         bool busy, ready, outcomeUnknown, stopAvailable, testAvailable, runtimeActive, runtimePolling, closing,
-            panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, checksOpen, pulsing;
+            panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, pulsing;
+        readonly List<UIElement> checkActions = new List<UIElement>();
+        List<Dictionary<string, object>> shownChecks = new List<Dictionary<string, object>>(); string shownMessage = ""; bool showPassed;
         int operationRevision, attentionPolls; string shownStatus, lastAttention;
         bool trayNoticeShown, displayNoticeShown, attentionNoticeShown, trayPromotionStarted, runtimePollFailed;
         readonly List<string> folders = new List<string>();
@@ -181,7 +183,6 @@ namespace WindowsClaude.Launcher
         // Pages slide over the home list like iOS; "Назад" returns.
         void ShowPage(AppPage page)
         {
-            checksOpen = page == AppPage.Diagnostics;
             if (page == AppPage.Connection && !profilesLoaded && !busy) { var task = LoadProfilesAsync(); }
             if (page == currentPage) return;
             bool forward = currentPage == AppPage.Home;
@@ -251,7 +252,7 @@ namespace WindowsClaude.Launcher
 
         void UpdateWindowsSummary()
         {
-            WindowsSummary.Text = MemoryInput.Text + " ГиБ памяти, " + CpuInput.Text + " ЦП, экран " + (ResolutionBox.SelectedItem ?? "") + (FilesSwitch.IsChecked == true ? ", файлы ПК" : "");
+            WindowsSummary.Text = MemoryInput.Text + " ГБ памяти, " + CpuInput.Text + " ЦП, экран " + (ResolutionBox.SelectedItem ?? "") + (FilesSwitch.IsChecked == true ? ", файлы ПК" : "");
         }
         // ---------- Toast ----------
         void SetOperation(string text)
@@ -313,7 +314,7 @@ namespace WindowsClaude.Launcher
             busy = value; Show(BusyRing, value); BusyRing.IsIndeterminate = value; // a hidden indeterminate ring keeps animating
             Show(ToastClose, !value);
             if (!value && OperationText.Text.Length > 0) { toastTimer.Stop(); toastTimer.Start(); }
-            foreach (UIElement button in new UIElement[] { RefreshButton, PrepareButton, RepairGatewayButton, NextActionButton, AddLinkButton, SaveProfileButton, DeleteProfileButton, ProfileList })
+            foreach (UIElement button in new UIElement[] { RefreshButton, PrepareButton, RepairGatewayButton, NextActionButton, AddLinkButton, SaveProfileButton, DeleteProfileButton, ProfileList }.Concat(checkActions))
                 button.IsEnabled = !value;
             PrepareHostButton.IsEnabled = !value && !runtimeActive;
             TestProfileButton.IsEnabled = !value && testAvailable;
@@ -378,7 +379,7 @@ namespace WindowsClaude.Launcher
                 if (action == "prepare-components" || action == "prepare-host" || action == "repair-gateway" || action == "recover-session" || action == "force-stop" || action == "stop" || action == "start")
                     await RefreshAfterAsync(completed);
                 if (action == "prepare-host" && Flag(completed, "restart_required")) SetOperation("Подготовка завершена. Перезагрузи ПК самостоятельно, затем нажми «Проверить снова».");
-                else if (action == "diagnose") CheckedAtText.Text = completed.ContainsKey("checks") ? "Проверено в " + DateTime.Now.ToString("HH:mm") : "Проверка не обновилась. Повтори.";
+                else if (action == "diagnose") CheckedAtText.Text = completed.ContainsKey("checks") || completed.ContainsKey("blockers") ? "Проверено в " + DateTime.Now.ToString("HH:mm") : "Проверка не обновилась. Повтори.";
             }
             catch (Exception error)
             {
@@ -491,11 +492,8 @@ namespace WindowsClaude.Launcher
         }
         void OnOpenDesktop(object sender, RoutedEventArgs e) { var task = RunAction("show-desktop", false); }
         void OnRefresh(object sender, RoutedEventArgs e) { var task = RunAction("diagnose", true); }
-        void OnDiagnosticAction(object sender, RoutedEventArgs e)
-        {
-            if (Checks(readinessReport).Any(item => !Flag(item, "passed") && Flag(item, "setup_required"))) Navigate(AppPage.Connection);
-            else OnRefresh(sender, e);
-        }
+        void OnDiagnosticAction(object sender, RoutedEventArgs e) { OnRefresh(sender, e); }
+        void OnTogglePassed(object sender, RoutedEventArgs e) { showPassed = !showPassed; RenderChecks(shownChecks, shownMessage); Busy(busy); }
         void OnPrepare(object sender, RoutedEventArgs e)
         {
             if (App.UpdateProbePending || runtimeActive || busy || outcomeUnknown) return;
@@ -523,14 +521,18 @@ namespace WindowsClaude.Launcher
             }
             catch (Exception) { SetOperation("Не удалось открыть папку журналов: " + folder); }
         }
-        void OnNextAction(object sender, RoutedEventArgs e)
+        void OnNextAction(object sender, RoutedEventArgs e) { RunSuggested(suggestedAction, sender, e); }
+        // One meaning per action code, for the home button and the buttons in the check rows alike.
+        void RunSuggested(string action, object sender, RoutedEventArgs e)
         {
-            if (suggestedAction == "settings") Navigate(AppPage.Settings);
-            else if (suggestedAction == "connection") Navigate(AppPage.Connection);
-            else if (suggestedAction == "repair_gateway") { var task = RunAction("repair-gateway", false); }
-            else if (suggestedAction == "recover_session") { var task = StopSessionAsync(false); }
-            else if (suggestedAction == "windows_features") { Navigate(AppPage.Diagnostics); SetOperation("Нажми «Подготовить этот ПК» в проверке. Потребуется UAC; перезагрузка выполняется вручную."); }
-            else { var task = RunAction(suggestedAction == "prepare" ? "prepare-components" : "diagnose", suggestedAction != "prepare"); }
+            if (busy) return;
+            if (action == "settings") Navigate(AppPage.Settings);
+            else if (action == "connection") Navigate(AppPage.Connection);
+            else if (action == "repair_gateway") OnRepairGateway(sender, e);
+            else if (action == "recover_session") { var task = StopSessionAsync(false); }
+            else if (action == "windows_features") OnPrepareHost(sender, e);
+            else if (action == "prepare") OnPrepare(sender, e);
+            else OnRefresh(sender, e);
         }
         void OnShortcut(object sender, RoutedEventArgs e)
         {
@@ -648,6 +650,12 @@ namespace WindowsClaude.Launcher
                     var check = item.Value as Dictionary<string, object>; if (check == null) continue;
                     var row = new Dictionary<string, object>(check); if (!row.ContainsKey("title")) row["title"] = item.Key; checks.Add(row);
                 }
+            // A reply from before Python could run (a lone EXE, a partial unpack) has only blockers; show them as rows.
+            else if (result != null && result.ContainsKey("blockers") && result["blockers"] is IEnumerable)
+                foreach (var blocker in ((IEnumerable)result["blockers"]).Cast<object>().OfType<Dictionary<string, object>>())
+                {
+                    var row = new Dictionary<string, object>(blocker); row["passed"] = false; checks.Add(row);
+                }
             return checks.OrderBy(item => Flag(item, "passed") ? 2 : Flag(item, "setup_required") ? 1 : 0).ToList();
         }
 
@@ -720,15 +728,11 @@ namespace WindowsClaude.Launcher
                 { "title", "Общий буфер обмена недоступен" }, { "detail", clipboardDetail } });
             bool setupRequired = checks.Any(item => !Flag(item, "passed") && Flag(item, "setup_required"));
             int failed = checks.Count(item => !Flag(item, "passed") && !Flag(item, "setup_required"));
+            ApplyCheckState(checks.Count == 0 ? 0 : failed > 0 ? 3 : setupRequired ? 2 : 1);
             DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
-            DiagnosticPill.Background = checks.Count == 0 ? GreySoft : failed == 0 ? (setupRequired ? BlueSoft : GreenSoft) : Hex("#FFF1DE");
-            DiagnosticSummary.Foreground = checks.Count == 0 ? Grey : failed == 0 ? (setupRequired ? BlueInk : GreenInk) : Hex("#B36200");
-            ChecksHeroTitle.Text = checks.Count == 0 ? "Проверка не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : "Нужно исправить: " + failed;
-            ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : setupRequired && failed == 0 ? "Добавь или выбери подключение для запуска Windows." : checks.Count(item => Flag(item, "passed")) + " из " + checks.Count + " проверок пройдено";
-            ChecksHeroBadge.Background = DiagnosticPill.Background; ChecksHeroGlyph.Foreground = DiagnosticSummary.Foreground;
-            ChecksHeroGlyph.Symbol = checks.Count == 0 ? SymbolRegular.Pulse24 : failed == 0 ? (setupRequired ? SymbolRegular.Globe24 : SymbolRegular.Checkmark24) : SymbolRegular.Warning24;
-            RefreshButton.Content = setupRequired ? "Добавить подключение" : "Проверить снова";
-            RefreshButton.ToolTip = setupRequired ? "Добавить или выбрать подключение. F5: проверить снова." : "F5";
+            ChecksHeroTitle.Text = failed > 0 ? DiagnosticSummary.Text : checks.Count == 0 ? "Проверка не выполнялась" : setupRequired ? "Нужна настройка" : "Всё в порядке";
+            ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : setupRequired && failed == 0 ? "Добавь или выбери подключение для запуска Windows." : checks.All(item => !Flag(item, "passed")) ? "Остальное проверится после исправления" : "Пройдено " + checks.Count(item => Flag(item, "passed")) + " из " + checks.Count;
+            Show(PrepareButton, Bridge.CanRestoreComponents(Bridge.Root));
 
             Dictionary<string, object> blocker = null;
             if (!Bridge.Ok(result))
@@ -778,20 +782,7 @@ namespace WindowsClaude.Launcher
             string warning = runtimeActive ? Text(report, "network_warning", "") : "";
             NetworkText.Text = warning; Show(NetworkText, warning.Length > 0);
 
-            string signature = new JavaScriptSerializer().Serialize(checks.Select(item => new object[] { Flag(item, "passed"), Flag(item, "setup_required"), Text(item, "title", ""), Text(item, "detail", "") }).ToArray()) + Bridge.Message(result);
-            if (signature != displayedChecks)
-            {
-                displayedChecks = signature; CheckCards.Children.Clear();
-                // Problems go full width on top; passed checks are tags that wrap, so long names are never cut.
-                var passedGrid = new WrapPanel { Margin = new Thickness(10, 7, 10, 7) };
-                foreach (var item in checks)
-                {
-                    var row = CheckRow(Flag(item, "passed"), Text(item, "title", "Проверка"), Text(item, "detail", ""), Flag(item, "setup_required"));
-                    if (Flag(item, "passed")) passedGrid.Children.Add(row); else CheckCards.Children.Add(row);
-                }
-                if (passedGrid.Children.Count > 0) CheckCards.Children.Add(passedGrid);
-                if (checks.Count == 0) CheckCards.Children.Add(new TextBlock { Text = Bridge.Message(result), Style = (Style)FindResource("Caption"), Margin = new Thickness(16, 6, 16, 10) });
-            }
+            RenderChecks(checks, Bridge.Message(result));
             var lines = checks.Select(item => (Flag(item, "passed") ? "Готово: " : Flag(item, "setup_required") ? "Настройка: " : "Нужно исправить: ") + Text(item, "title", "Проверка") + Environment.NewLine + Text(item, "detail", "")).ToList();
             if (checks.Count == 0) lines.Add(Bridge.Message(result));
             if (operationResult != null && !Bridge.Ok(operationResult))
@@ -800,7 +791,6 @@ namespace WindowsClaude.Launcher
             if (clipboardState != "off") lines.Add("Общий буфер обмена: " + clipboardDetail + Environment.NewLine + Text(clipboard, "code", ""));
             string reportPath = Text(report, "diagnostic_report", "");
             if (reportPath.Length > 0) lines.Add("Отчёт: " + reportPath);
-            ReportLocation.Text = reportPath.Length > 0 ? "Отчёт: " + reportPath : Text(report, "diagnostic_report_error", "");
             reportText = String.Join(Environment.NewLine + Environment.NewLine, lines);
             Busy(busy);
             if (!settingsDirty)
@@ -810,20 +800,78 @@ namespace WindowsClaude.Launcher
             }
         }
 
-        UIElement CheckRow(bool passed, string title, string detail, bool setupRequired)
+        void RenderChecks(List<Dictionary<string, object>> checks, string message)
         {
-            // A passed check is a small green tag with its detail in a tooltip.
-            if (passed)
-                return new Border { CornerRadius = new CornerRadius(13), Background = GreenSoft, Padding = new Thickness(8, 3, 10, 3), Margin = new Thickness(2.5), ToolTip = detail.Length > 0 ? detail : null,
-                    Child = new StackPanel { Orientation = Orientation.Horizontal, Children = {
-                        new SymbolIcon { Symbol = SymbolRegular.Checkmark16, FontSize = 12, Foreground = GreenInk, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center },
-                        new TextBlock { Text = title, FontSize = 12.5, Foreground = GreenInk, VerticalAlignment = VerticalAlignment.Center } } } };
-            var row = new DockPanel { Margin = new Thickness(16, 9, 12, 9), Background = setupRequired ? BlueSoft : Brushes.Transparent };
-            var dot = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = setupRequired ? BlueSoft : Hex("#FFF1DE"), Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top,
-                Child = new SymbolIcon { Symbol = setupRequired ? SymbolRegular.Globe16 : SymbolRegular.Warning16, FontSize = 12, Foreground = setupRequired ? BlueInk : Hex("#B36200") } };
+            shownChecks = checks; shownMessage = message;
+            string signature = new JavaScriptSerializer().Serialize(checks.Select(item => new object[] { Flag(item, "passed"), Flag(item, "setup_required"), Text(item, "title", ""), Text(item, "detail", ""), Text(item, "action_label", "") }).ToArray()) + message + showPassed;
+            if (signature == displayedChecks) return;
+            displayedChecks = signature; CheckCards.Children.Clear(); checkActions.Clear();
+            // The page never scrolls: problems come first with their own action, passed checks
+            // take the place of the problems on request, or show at once when nothing is wrong.
+            var passed = checks.Where(item => Flag(item, "passed")).ToList();
+            var problems = checks.Where(item => !Flag(item, "passed")).ToList();
+            if (problems.Count == 0 || showPassed)
+            {
+                // Two columns of one-line rows hold every check (13 at most) with short titles and results.
+                var grid = new UniformGrid { Columns = 2, Margin = new Thickness(6, 6, 6, 6) };
+                foreach (var item in passed) grid.Children.Add(PassedRow(Text(item, "title", "Проверка"), Text(item, "detail", "")));
+                if (passed.Count > 0) CheckCards.Children.Add(grid);
+            }
+            else
+            {
+                // Up to three problems keep two lines of detail; more get one line, and past five the rest wait for the next check.
+                foreach (var item in problems.Take(5)) CheckCards.Children.Add(CheckRow(item, problems.Count > 3 ? 1 : 2));
+                if (problems.Count > 5) CheckCards.Children.Add(new TextBlock { Text = "Ещё " + (problems.Count - 5) + ", они появятся после исправления этих.", Style = (Style)FindResource("Caption"), Margin = new Thickness(50, 0, 16, 8) });
+            }
+            // The header line doubles as the switch, so the list keeps its full height for problems.
+            bool canToggle = problems.Count > 0 && passed.Count > 0;
+            PassedToggle.Content = showPassed ? "Показать проблемы" : "Пройдено " + passed.Count + " из " + checks.Count;
+            PassedToggle.ToolTip = showPassed ? null : "Показать пройденные проверки";
+            Show(PassedToggle, canToggle); Show(ChecksHeroDetail, !canToggle);
+            if (checks.Count == 0) CheckCards.Children.Add(new TextBlock { Text = message, Style = (Style)FindResource("Caption"), Margin = new Thickness(16, 6, 16, 10) });
+        }
+
+        // 0 not run, 1 all passed, 2 setup needed, 3 problems: the home row and the page header always agree.
+        void ApplyCheckState(int state)
+        {
+            Brush soft = state == 0 ? GreySoft : state == 1 ? GreenSoft : state == 2 ? BlueSoft : OrangeSoft;
+            Brush ink = state == 0 ? Grey : state == 1 ? GreenInk : state == 2 ? BlueInk : OrangeInk;
+            var symbol = state == 0 ? SymbolRegular.Pulse24 : state == 1 ? SymbolRegular.Checkmark24 : state == 2 ? SymbolRegular.Info24 : SymbolRegular.Warning24;
+            DiagnosticPill.Background = soft; DiagnosticSummary.Foreground = ink;
+            ChecksHeroBadge.Background = soft; ChecksHeroGlyph.Foreground = ink; ChecksHeroGlyph.Symbol = symbol;
+            // The home badge stays a solid tile like its neighbours, only its colour and symbol follow the result.
+            DiagnosticBadge.Background = state == 0 ? Teal : state == 1 ? Green : state == 2 ? Blue : Orange;
+            DiagnosticGlyph.Symbol = symbol;
+        }
+
+        UIElement PassedRow(string title, string detail)
+        {
+            // "Title: result" in one line; results are kept short in portable_app.py so they fit the column.
+            var line = new TextBlock { FontSize = 13, Foreground = Ink, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+            line.Inlines.Add(new System.Windows.Documents.Run(detail.Length > 0 ? title + ": " : title));
+            line.Inlines.Add(new System.Windows.Documents.Run(detail) { Foreground = Grey });
+            return new DockPanel { Margin = new Thickness(10, 4, 8, 4), ToolTip = detail.Length > 0 ? title + ": " + detail : null, Background = Brushes.Transparent, Children = {
+                new SymbolIcon { Symbol = SymbolRegular.Checkmark16, FontSize = 13, Foreground = GreenInk, Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center }, line } };
+        }
+
+        UIElement CheckRow(Dictionary<string, object> item, int detailLines = 2)
+        {
+            bool setupRequired = Flag(item, "setup_required");
+            string title = Text(item, "title", "Проверка"), detail = Text(item, "detail", ""), action = Text(item, "action", "retry"), label = Text(item, "action_label", "");
+            var row = new DockPanel { Margin = new Thickness(16, 7, 12, 7), Background = Brushes.Transparent };
+            var dot = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = setupRequired ? BlueSoft : OrangeSoft, Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Top,
+                Child = new SymbolIcon { Symbol = setupRequired ? SymbolRegular.Info16 : SymbolRegular.Warning16, FontSize = 12, Foreground = setupRequired ? BlueInk : OrangeInk } };
             DockPanel.SetDock(dot, Dock.Left); row.Children.Add(dot);
+            // "Проверить снова" already sits in the header; a row only offers an action that fixes it.
+            if (action != "retry" && label.Length > 0)
+            {
+                var button = new System.Windows.Controls.Button { Style = (Style)FindResource("SoftPill"), Content = label, Height = 30, FontSize = 12.5, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+                button.Click += (sender, e) => RunSuggested(action, sender, e);
+                DockPanel.SetDock(button, Dock.Right); row.Children.Add(button); checkActions.Add(button);
+            }
             var text = new StackPanel { Children = { new TextBlock { Text = title, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Ink, TextTrimming = TextTrimming.CharacterEllipsis } } };
-            if (detail.Length > 0) text.Children.Add(new TextBlock { Text = detail, Style = (Style)FindResource("Caption"), Margin = new Thickness(0, 1, 0, 0) });
+            // A clamped detail keeps every problem on the page without scrolling; the full text is in the tooltip.
+            if (detail.Length > 0) text.Children.Add(new TextBlock { Text = detail, Style = (Style)FindResource("Caption"), Margin = new Thickness(0, 1, 0, 0), MaxHeight = 17 * detailLines, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = detail });
             row.Children.Add(text);
             return row;
         }
@@ -1343,7 +1391,7 @@ namespace WindowsClaude.Launcher
             value = null; error = null;
             decimal gib; int original; Int32.TryParse(Text(originalSettings, "work_memory_mib", "0"), out original);
             int memoryMax = Math.Max(MemoryLimitGiB(), (int)Math.Ceiling((decimal)original / 1024));
-            if (!TryGiB(MemoryInput.Text, out gib) || gib < 1 || gib > memoryMax) { error = "Память: число от 1 до " + memoryMax + " ГиБ, например 6 или 6,5."; return false; }
+            if (!TryGiB(MemoryInput.Text, out gib) || gib < 1 || gib > memoryMax) { error = "Память: число от 1 до " + memoryMax + " ГБ, например 6 или 6,5."; return false; }
             // Unchanged text keeps an old exact MiB value such as 5000.
             int mib = MemoryInput.Text.Trim() == FormatGiB(original) ? original : (int)Math.Round(gib * 1024, MidpointRounding.AwayFromZero);
             int cpus;

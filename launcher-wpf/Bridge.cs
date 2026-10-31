@@ -1,4 +1,4 @@
-// Backend protocol, timeouts and safety rules of the launcher (carried over from the former WinForms panel, now removed).
+// Backend protocol, timeouts and safety rules of the launcher.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -100,22 +100,56 @@ internal static class Bridge
         }
         string python = Path.Combine(root, PythonDir, "python.exe");
         string backend = Path.Combine(root, "scripts", "portable_app.py");
-        if (!File.Exists(python))
-        {
-            Dictionary<string, object> failure = Failure("Не найден Python");
-            failure["blockers"] = new object[] { new Dictionary<string, object> {
-                { "title", "Не хватает компонентов" },
-                { "detail", "Python отсутствует. Нажми «Восстановить Python и QEMU»: приложение вернёт файлы из комплекта." },
-                { "action", "prepare" }, { "action_label", "Восстановить Python и QEMU" }
-            } };
-            return failure;
-        }
-        if (!File.Exists(backend))
-            return Failure("Не найдены файлы приложения. Распакуй полный комплект рядом с Launcher.exe.");
+        Dictionary<string, object> problem = KitProblem(root);
+        if (problem != null) return problem;
         string[] args = { "-X", "utf8", "-I", "-S", "-B", backend, "--root", root, "--action", action };
         ProcessStartInfo info = new ProcessStartInfo(python, String.Join(" ", args.Select(Quote)));
         info.WorkingDirectory = root;
         return await ExecuteProcessAsync(info, TimeoutMilliseconds(action), payload).ConfigureAwait(false);
+    }
+
+    // Python can only explain problems once it runs, so a lone EXE, a partial unpack or a locked file is told apart here.
+    internal static Dictionary<string, object> KitProblem(string root)
+    {
+        if (!Directory.Exists(Path.Combine(root, "runtime")) && !Directory.Exists(Path.Combine(root, "scripts")))
+            return Blocked("kit_detached", "Launcher открыт отдельно от папки Pocket Windows",
+                "Launcher.exe работает только внутри распакованной папки Pocket Windows. Открой эту папку и запусти Launcher.exe оттуда. Для Рабочего стола создай ярлык, а не переноси сам файл.",
+                "retry", "Проверить снова");
+        bool recovery = CanRestoreComponents(root);
+        foreach (string file in new[] { Path.Combine(root, PythonDir, "python.exe"), Path.Combine(root, "scripts", "portable_app.py") })
+        {
+            string name = file.Substring(root.Length).TrimStart('\\');
+            Exception denied = null;
+            try { using (File.OpenRead(file)) { } continue; }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            catch (UnauthorizedAccessException error) { denied = error; }
+            catch (IOException error) { denied = error; }
+            if (denied != null)
+                return Blocked("kit_access", "Нет доступа к файлам программы",
+                    "Windows не дала открыть " + name + " (" + denied.GetType().Name + "). Проверь права на папку и повтори.", "retry", "Проверить снова");
+            if (file.EndsWith("python.exe", StringComparison.OrdinalIgnoreCase) && recovery)
+                return Blocked("runtime_files", "Не хватает Python и QEMU",
+                    "Их можно вернуть из резервной копии внутри комплекта. Диск Windows и подключения не меняются.", "prepare", "Восстановить Python и QEMU");
+            return Blocked("application_files", "Комплект распакован не полностью",
+                "Не найден " + name + ". Распакуй полный ZIP Pocket Windows заново, в новую папку.", "retry", "Проверить снова");
+        }
+        return null;
+    }
+
+    // Restoring needs both the script and its archive; offer it only when it can actually run.
+    internal static bool CanRestoreComponents(string root)
+    {
+        return File.Exists(Path.Combine(root, "scripts", "Prepare-Dependencies.ps1")) && File.Exists(Path.Combine(root, "runtime", "components-recovery.zip"));
+    }
+
+    static Dictionary<string, object> Blocked(string code, string title, string detail, string action, string label)
+    {
+        Dictionary<string, object> failure = Failure(title);
+        failure["code"] = code;
+        failure["blockers"] = new object[] { new Dictionary<string, object> {
+            { "code", code }, { "title", title }, { "detail", detail }, { "action", action }, { "action_label", label } } };
+        return failure;
     }
 
     internal static Dictionary<string, object> Unknown(string message, string code)
@@ -215,8 +249,8 @@ internal static class Bridge
         Dictionary<string, string> messages = new Dictionary<string, string> {
             { "ready", "Компоненты готовы. Файлы Python и QEMU проверены." },
             { "repaired", "Компоненты восстановлены. Файлов: " + (reply.ContainsKey("repaired_files") ? Convert.ToString(reply["repaired_files"]) : "несколько") + "." },
-            { "runtime_busy", "Компоненты заняты работающей VM. Штатно заверши Windows и шлюз, затем повтори подготовку." },
-            { "package_missing", "Не найден runtime/components-recovery.zip. Распакуй полный комплект приложения и повтори подготовку." },
+            { "runtime_busy", "Компоненты заняты работающей Windows. Выключи Windows, затем повтори." },
+            { "package_missing", "В комплекте нет резервной копии компонентов. Распакуй полный ZIP Pocket Windows заново." },
             { "invalid_package", "Пакет восстановления повреждён или не соответствует комплекту. Распакуй полный проверенный комплект приложения." },
             { "error", "Подготовка не завершена. Проверь свободное место и доступ к папке. Если ошибка сохранится, распакуй полный комплект." }
         };

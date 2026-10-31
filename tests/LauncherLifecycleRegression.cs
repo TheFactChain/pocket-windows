@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -28,6 +29,7 @@ internal static class Bridge
     internal static Dictionary<string, object> Failure(string message) { return new Dictionary<string, object> { { "ok", false }, { "message", message } }; }
     internal static Dictionary<string, object> Unknown(string message, string code) { var result = Failure(message); result["outcome_unknown"] = true; return result; }
     internal static string Quote(string value) { return "\"" + value + "\""; }
+    internal static bool CanRestoreComponents(string root) { return true; }
 }
 
 internal static class LauncherLifecycleRegression
@@ -42,6 +44,7 @@ internal static class LauncherLifecycleRegression
         return result;
     }
     static object Field(object obj, string name) { return obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public).GetValue(obj); }
+    static bool SetupActionShown(object window) { return ((StackPanel)Field(window, "CheckCards")).Children.OfType<DockPanel>().Any(row => row.Children.OfType<Button>().Any(button => button.Content.ToString() == "Добавить подключение")); }
     static void Set(object obj, string name, object value) { obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(obj, value); }
     static object Call(object obj, string name, params object[] args) { return obj.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly).Invoke(obj, args); }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string name, string title);
@@ -198,7 +201,7 @@ internal static class LauncherLifecycleRegression
                 string explanation = ((TextBlock)Field(window, "OperationText")).Text;
                 Assert(!explanation.Contains("сервер") && !explanation.Contains("подключению"), "Generic supervisor failure never claims the proxy failed");
                 Assert(explanation.Contains("Проверка"), "Generic startup failure directs to evidence in diagnostics");
-                Assert(((TextBlock)Field(window, "ChecksHeroTitle")).Text.StartsWith("Нужно исправить"), "Diagnostics shows the failed launch even when every preflight check passed");
+                Assert(((TextBlock)Field(window, "ChecksHeroTitle")).Text.EndsWith("проблема"), "Diagnostics shows the failed launch even when every preflight check passed");
                 Assert(!explanation.Contains("не запустилась") && !((TextBlock)Field(window, "StatusText")).Text.Contains("не запустилась"), "An unknown outcome never claims Windows did not start");
             }
             window = Window();
@@ -455,13 +458,15 @@ internal static class LauncherLifecycleRegression
             Assert(((TextBlock)Field(window, "DiagnosticSummary")).Text == "Нужна настройка", "empty connection is setup, not a counted problem");
             Assert(((TextBlock)Field(window, "ChecksHeroTitle")).Text == "Нужна настройка", "empty connection never says needs fixing");
             Assert(!((Button)Field(window, "StartButton")).IsEnabled && !(bool)Field(window, "ready"), "setup still blocks Windows launch");
-            Assert(((Button)Field(window, "RefreshButton")).Content.ToString() == "Добавить подключение", "diagnostics offers connection setup directly");
+            Assert(((Button)Field(window, "RefreshButton")).Content.ToString() == "Проверить снова", "the header always refreshes; setup has its own row action");
             Assert(((TextBlock)Field(window, "NextStepText")).Text == "Добавь или выбери подключение для запуска Windows.", "setup explains the next step directly");
             Assert(!((string)Field(window, "reportText")).Contains("Нужно исправить: Подключение"), "copied diagnostics also distinguish setup from errors");
             var setupRow = (DockPanel)((StackPanel)Field(window, "CheckCards")).Children[0];
             Assert(((Wpf.Ui.Controls.SymbolIcon)((Border)setupRow.Children[0]).Child).Symbol != Wpf.Ui.Controls.SymbolRegular.Warning16, "setup card is neutral, without warning icon");
             Set(window, "profilesLoaded", true); Bridge.Calls.Clear();
-            ((Button)Field(window, "RefreshButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            var setupAction = setupRow.Children.OfType<Button>().Single();
+            Assert(setupAction.Content.ToString() == "Добавить подключение", "diagnostics offers connection setup directly in its row");
+            setupAction.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             Assert((AppPage)Field(window, "currentPage") == AppPage.Connection && Bridge.Calls.Count == 0, "diagnostic setup action opens existing connection route");
             Bridge.Handler = (action, payload) => Task.FromResult(setup);
             foreach (System.Windows.Input.KeyBinding binding in window.InputBindings)
@@ -489,15 +494,15 @@ internal static class LauncherLifecycleRegression
                 Bridge.Handler = (action, payload) => Task.FromResult(polled);
                 var setupPoll = (Task)Call(window, "RefreshRuntimeAsync"); Pump(() => setupPoll.IsCompleted);
                 Assert(((TextBlock)Field(window, "DiagnosticSummary")).Text == (toSetup ? "Нужна настройка" : "1 проблема"), "runtime poll applies setup marker transition " + toSetup);
-                Assert(((Button)Field(window, "RefreshButton")).Content.ToString() == (toSetup ? "Добавить подключение" : "Проверить снова"), "runtime poll updates diagnostic action " + toSetup);
                 var polledRow = (DockPanel)((StackPanel)Field(window, "CheckCards")).Children[0];
+                Assert(polledRow.Children.OfType<Button>().Any(button => button.Content.ToString() == "Добавить подключение"), "runtime poll keeps the connection action " + toSetup);
                 Assert((((Wpf.Ui.Controls.SymbolIcon)((Border)polledRow.Children[0]).Child).Symbol == Wpf.Ui.Controls.SymbolRegular.Warning16) != toSetup, "runtime poll updates setup/error style " + toSetup);
                 Set(window, "panelHiddenForSession", false);
             }
             Call(window, "Display", SetupReport(false, true));
-            Assert(((TextBlock)Field(window, "DiagnosticSummary")).Text == "1 проблема" && ((TextBlock)Field(window, "ChecksHeroTitle")).Text == "Нужно исправить: 1", "mixed setup and runtime failure count only the real error");
+            Assert(((TextBlock)Field(window, "DiagnosticSummary")).Text == "1 проблема" && ((TextBlock)Field(window, "ChecksHeroTitle")).Text == "1 проблема", "mixed setup and runtime failure count only the real error");
             Assert(((TextBlock)Field(window, "StatusText")).Text == "Windows завершилась с ошибкой", "setup never masks recovery status");
-            Assert(((Button)Field(window, "RefreshButton")).Content.ToString() == "Добавить подключение" && ((Button)Field(window, "NextActionButton")).Content.ToString() == "Завершить прерванный сеанс", "mixed state preserves setup route and recovery action");
+            Assert(SetupActionShown(window) && ((Button)Field(window, "NextActionButton")).Content.ToString() == "Завершить прерванный сеанс", "mixed state preserves setup route and recovery action");
             var mixed = SetupReport();
             var components = new Dictionary<string, object> { { "passed", false }, { "title", "Не хватает компонентов" },
                 { "detail", "Восстанови компоненты из комплекта." }, { "action", "prepare" }, { "action_label", "Восстановить компоненты" } };
@@ -505,7 +510,7 @@ internal static class LauncherLifecycleRegression
             mixed["blockers"] = new object[] { ((Dictionary<string, object>)mixed["checks"])["connection"], components };
             Call(window, "Display", mixed);
             Assert(((TextBlock)Field(window, "DiagnosticSummary")).Text == "1 проблема" && ((TextBlock)Field(window, "StatusText")).Text == "Не хватает компонентов", "real failure takes priority even when setup blocker arrives first");
-            Assert(((Button)Field(window, "NextActionButton")).Content.ToString() == "Восстановить компоненты" && ((Button)Field(window, "RefreshButton")).Content.ToString() == "Добавить подключение", "repair and connection setup paths remain available together");
+            Assert(((Button)Field(window, "NextActionButton")).Content.ToString() == "Восстановить компоненты" && SetupActionShown(window), "repair and connection setup paths remain available together");
             Call(window, "Display", setup); Call(window, "Display", Bridge.Failure("Shutdown was not confirmed"));
             Assert(((TextBlock)Field(window, "StatusText")).Text != "Подключение не выбрано" && ((string)Field(window, "reportText")).Contains("Shutdown was not confirmed"), "setup never replaces a shutdown failure");
             var partialFolders = Report("running", "running");
