@@ -69,7 +69,8 @@ internal static class Bridge
         switch (action)
         {
             case "start": return 600000;
-            case "diagnose": return 300000;
+            case "diagnose":
+            case "collect-report": return 300000;
             case "test-profile": return 330000;
             case "stop": return 510000;
             case "repair-gateway":

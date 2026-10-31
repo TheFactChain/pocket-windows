@@ -838,6 +838,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--action', choices=['diagnose', 'status', 'show-desktop', 'get-settings', 'save-settings', 'start', 'recover-session',
+                                            'collect-report',
                                             'stop', 'force-stop', 'test-profile', 'repair-gateway',
                                             *PROFILE_ACTIONS], required=True)
     args = parser.parse_args()
@@ -856,6 +857,17 @@ def main():
         elif args.action in PROFILE_ACTIONS:
             request = {} if args.action == 'list-profiles' else read_request()
             result = profile_action(root, args.action, request)
+        elif args.action == 'collect-report':
+            import bug_report
+            request = read_request()
+            try:
+                diagnostics = preflight(root)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                diagnostics = None  # the package says the check did not run; the rest is still collected
+            result = {'ok': True, 'report': bug_report.collect(root, request, diagnostics),
+                      'message': 'Отчёт собран.'}
+            runtime.append_event(root, 'report', 'report_collected', report_id=result['report']['report_id'],
+                                 bytes=result['report']['bytes'])
         elif args.action == 'show-desktop':
             result = show_desktop(root)
         elif args.action == 'status':

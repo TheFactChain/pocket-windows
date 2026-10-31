@@ -397,6 +397,25 @@
                     </Setter.Value>
                 </Setter>
             </Style>
+            <!-- Multi-line field: text starts at the top; the fixed card height means long text scrolls inside the field only -->
+            <Style x:Key="Area" TargetType="TextBox" BasedOn="{StaticResource Field}">
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="AcceptsReturn" Value="True" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="VerticalScrollBarVisibility" Value="Hidden" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                            <Border x:Name="Body" CornerRadius="11" Background="#F2F2F7" Padding="10,6" BorderThickness="1.5" BorderBrush="Transparent">
+                                <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Stretch" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Body" Property="BorderBrush" Value="{StaticResource Accent}" /><Setter TargetName="Body" Property="Background" Value="White" /></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

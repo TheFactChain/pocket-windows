@@ -54,6 +54,8 @@ namespace WindowsClaude.Launcher
             panelHiddenForSession, panelDismissedByUser, settingsLoaded, profilesLoaded, applyingSettings, pulsing;
         readonly List<UIElement> checkActions = new List<UIElement>();
         List<Dictionary<string, object>> shownChecks = new List<Dictionary<string, object>>(); string shownMessage = ""; bool showPassed;
+        // Problem report: one id per report until it is sent, so a retry never creates a second card.
+        string reportId, reportZip, reportStatus = ""; readonly List<string> reportImages = new List<string>(); bool loadingDraft, reportBusy, reportSendFailed;
         int operationRevision, attentionPolls; string shownStatus, lastAttention;
         bool trayNoticeShown, displayNoticeShown, attentionNoticeShown, trayPromotionStarted, runtimePollFailed;
         readonly List<string> folders = new List<string>();
@@ -205,7 +207,7 @@ namespace WindowsClaude.Launcher
 
         void OpenSheet(string title, UIElement content)
         {
-            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet }) Show(part, part == content);
+            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet, ReportSheet }) Show(part, part == content);
             SheetTitle.Text = title;
             if (SheetHost.Visibility == Visibility.Visible) { content.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))); return; }
             Show(SheetHost, true);
@@ -505,7 +507,112 @@ namespace WindowsClaude.Launcher
         }
         void OnRepairGateway(object sender, RoutedEventArgs e) { var task = RunAction("repair-gateway", false); }
         void OnPrepareHost(object sender, RoutedEventArgs e) { var task = RunAction("prepare-host", false); }
-        void OnCopyReport(object sender, RoutedEventArgs e) { try { Clipboard.SetText(reportText); SetOperation("Отчёт скопирован."); } catch (Exception) { SetOperation("Не удалось скопировать отчёт. Попробуй ещё раз."); } }
+        void OnReportProblem(object sender, RoutedEventArgs e)
+        {
+            var draft = BugReport.LoadDraft(Bridge.Root);
+            loadingDraft = true;
+            reportId = Text(draft, "report_id", reportId ?? BugReport.NewId());
+            ReportWhat.Text = Text(draft, "what", ReportWhat.Text); ReportSteps.Text = Text(draft, "steps", ReportSteps.Text); ReportContact.Text = Text(draft, "contact", ReportContact.Text);
+            reportImages.Clear();
+            if (draft != null && draft.ContainsKey("images") && draft["images"] is IEnumerable)
+                reportImages.AddRange(((IEnumerable)draft["images"]).Cast<object>().Select(Convert.ToString).Where(File.Exists).Take(3));
+            loadingDraft = false;
+            ShowReportState(null);
+            OpenSheet("Сообщить о проблеме", ReportSheet);
+            ReportWhat.Focus();
+        }
+
+        void ShowReportState(string status)
+        {
+            ReportImagesButton.Content = reportImages.Count == 0 ? "Добавить снимок" : "Снимков: " + reportImages.Count;
+            // The status takes the place of the contents line, so the card keeps its height and its buttons.
+            reportStatus = status ?? "";
+            ReportContents.Text = reportStatus.Length > 0 ? reportStatus : "Приложим журналы запуска, проверку и историю событий. Пути, имена и пароли вычищаются.";
+            ReportContents.Foreground = reportStatus.Length > 0 ? Ink : Grey;
+            Show(ReportSaveButton, reportSendFailed);
+            ReportSaveButton.IsEnabled = ReportSendButton.IsEnabled = ReportImagesButton.IsEnabled = !reportBusy;
+        }
+
+        void OnReportEdited(object sender, TextChangedEventArgs e)
+        {
+            if (loadingDraft || reportId == null) return;
+            reportZip = null;  // a changed description needs a new package
+            BugReport.SaveDraft(Bridge.Root, new Dictionary<string, object> { { "report_id", reportId }, { "what", ReportWhat.Text },
+                { "steps", ReportSteps.Text }, { "contact", ReportContact.Text }, { "images", reportImages.ToArray() } });
+        }
+
+        void OnReportImages(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "Снимки (PNG, JPEG)|*.png;*.jpg;*.jpeg", Multiselect = true, Title = "Снимки к отчёту, до трёх" };
+            if (dialog.ShowDialog(this) != true) return;
+            reportImages.Clear(); reportImages.AddRange(dialog.FileNames.Take(3));
+            OnReportEdited(sender, null);
+            ShowReportState(dialog.FileNames.Length > 3 ? "Взяты первые три снимка." : null);
+        }
+
+        // Collects with Python when it runs; otherwise a minimal package that says why the check is missing.
+        async Task<string> BuildReportAsync()
+        {
+            if (reportZip != null && File.Exists(reportZip)) return reportZip;
+            var payload = new Dictionary<string, object> { { "report_id", reportId }, { "what", ReportWhat.Text }, { "steps", ReportSteps.Text },
+                { "contact", ReportContact.Text }, { "images", reportImages.ToArray() } };
+            var reply = await Run("collect-report", payload);
+            var report = Child(reply, "report");
+            if (Bridge.Ok(reply) && report != null) return reportZip = System.IO.Path.Combine(Bridge.Root, Text(report, "zip", "").Replace('/', '\\'));
+            if (Bridge.KitProblem(Bridge.Root) == null) throw new InvalidOperationException(Bridge.Message(reply));
+            // The controls are read here, on the UI thread; only the packing runs in the background.
+            string id = reportId, what = ReportWhat.Text, steps = ReportSteps.Text, contact = ReportContact.Text, reason = Bridge.Message(reply);
+            return reportZip = await Task.Run(() => BugReport.MinimalZip(Bridge.Root, id, what, steps, contact, reason));
+        }
+
+        bool ReportFilled()
+        {
+            if (ReportWhat.Text.Trim().Length == 0) { ShowReportState("Опиши, что произошло."); ReportWhat.Focus(); return false; }
+            if (ReportContact.Text.Trim().Length < 3) { ShowReportState("Оставь Telegram или почту, чтобы мы могли ответить."); ReportContact.Focus(); return false; }
+            return true;
+        }
+
+        // Fallback after a failed send: the same package, kept locally to retry or pass on.
+        async void OnReportSave(object sender, RoutedEventArgs e)
+        {
+            if (!ReportFilled()) return;
+            reportBusy = true; ShowReportState("Собираю журналы…");
+            try
+            {
+                string zip = await BuildReportAsync();
+                ShowReportState("Архив сохранён и выделен в Проводнике.");
+                System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + zip + "\"");
+            }
+            catch (Exception error) { ShowReportState("Не удалось собрать отчёт: " + error.Message); }
+            finally { reportBusy = false; ShowReportState(reportStatus); }
+        }
+
+        async void OnReportSend(object sender, RoutedEventArgs e)
+        {
+            if (!ReportFilled()) return;
+            reportBusy = true; ShowReportState("Собираю журналы и отправляю…");
+            string zip = null;
+            try
+            {
+                zip = await BuildReportAsync();
+                if (BugReport.ReceiverUrl.Length == 0) throw new System.Net.WebException("Адрес поддержки не задан");
+                var answer = await BugReport.SendAsync(reportId, zip);
+                string number = Text(answer, "issue_number", "");
+                Bridge.Event("report_sent", new Dictionary<string, object> { { "report_id", reportId }, { "issue_number", number } });
+                BugReport.ClearDraft(Bridge.Root);
+                ShowReportState("Отправлено, спасибо. Номер обращения: " + (number.Length > 0 ? number : reportId.Substring(0, 8)) + ".");
+                reportId = null; reportZip = null; reportImages.Clear(); reportSendFailed = false;
+                loadingDraft = true; ReportWhat.Text = ReportSteps.Text = ReportContact.Text = ""; loadingDraft = false;
+            }
+            catch (Exception error)
+            {
+                Bridge.Event("report_send_failed", new Dictionary<string, object> { { "report_id", reportId }, { "error", error.GetType().Name } });
+                reportSendFailed = zip != null;
+                ShowReportState(zip == null ? "Не удалось собрать отчёт: " + error.Message : "Не удалось отправить. Описание сохранено: нажми «Отправить» позже или сохрани архив.");
+            }
+            finally { reportBusy = false; ShowReportState(reportStatus); }
+        }
+
         // Opens logs with the last failed launch folder selected, so it can be zipped and sent as is.
         void OnOpenLogs(object sender, RoutedEventArgs e)
         {
@@ -731,6 +838,7 @@ namespace WindowsClaude.Launcher
             ChecksHeroTitle.Text = failed > 0 ? DiagnosticSummary.Text : checks.Count == 0 ? "Проверка не выполнялась" : setupRequired ? "Нужна настройка" : "Всё в порядке";
             ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : setupRequired && failed == 0 ? "Добавь или выбери подключение для запуска Windows." : checks.All(item => !Flag(item, "passed")) ? "Остальное проверится после исправления" : "Пройдено " + checks.Count(item => Flag(item, "passed")) + " из " + checks.Count;
             Show(PrepareButton, Bridge.CanRestoreComponents(Bridge.Root));
+            Show(ReportProblemLink, failed > 0 || (operationResult != null && !Bridge.Ok(operationResult)));
 
             Dictionary<string, object> blocker = null;
             if (!Bridge.Ok(result))

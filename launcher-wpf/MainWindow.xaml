@@ -28,6 +28,7 @@
                         <Button x:Name="NextActionButton" Style="{StaticResource SoftPill}" Height="44" FontSize="14.5" Margin="0,8,0,0" Click="OnNextAction" />
                         <Button x:Name="StopButton" Style="{StaticResource DangerPill}" Height="44" FontSize="14.5" Margin="0,8,0,0" Click="OnStop" Content="Выключить Windows" />
                         <Button x:Name="ForceStopButton" Style="{StaticResource DangerPill}" Height="40" FontSize="13" Margin="0,8,0,0" Click="OnForceStop" Content="Принудительно выключить" Visibility="Collapsed" />
+                        <Button x:Name="ReportProblemLink" Style="{StaticResource TextAction}" FontSize="13" HorizontalAlignment="Center" Margin="0,4,0,-4" Content="Сообщить о проблеме" Click="OnReportProblem" Visibility="Collapsed" />
                     </StackPanel>
                     <Grid x:Name="Hero">
                         <Grid.RowDefinitions><RowDefinition Height="*" MinHeight="40" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
@@ -322,7 +323,7 @@
                                 <Button x:Name="RepairGatewayButton" Style="{StaticResource TextAction}" FontSize="13" Content="Шлюз" Click="OnRepairGateway" ToolTip="Восстановить шлюз; подключения и Windows сохранятся" />
                                 <Button x:Name="PrepareHostButton" Style="{StaticResource TextAction}" FontSize="13" Content="Подготовить ПК" Click="OnPrepareHost" ToolTip="Включит виртуализацию, нужны права администратора" />
                                 <Border Width="1" Height="14" Background="{StaticResource Line}" Margin="6,0" />
-                                <Button Style="{StaticResource TextAction}" FontSize="13" Content="Отчёт" Click="OnCopyReport" ToolTip="Скопировать отчёт проверки" />
+                                <Button Style="{StaticResource TextAction}" FontSize="13" Content="Сообщить о проблеме" Click="OnReportProblem" ToolTip="Описание и журналы одним архивом" />
                                 <Button Style="{StaticResource TextAction}" FontSize="13" Content="Журналы" Click="OnOpenLogs" ToolTip="Открыть папку журналов запуска" />                            </StackPanel>
                             <Border Style="{StaticResource GroupBox}" Margin="0" VerticalAlignment="Top">
                                 <ScrollViewer VerticalScrollBarVisibility="Hidden" PanningMode="VerticalOnly">
@@ -501,6 +502,30 @@
                                 </DockPanel>
                             </Border>
                             <Button Style="{StaticResource Pill}" Height="40" FontSize="15" Content="Выбрать файл" Click="OnExportChoose" HorizontalAlignment="Right" />
+                        </StackPanel>
+
+                        <!-- Problem report: a description plus a cleaned log package. The draft survives closing. -->
+                        <StackPanel x:Name="ReportSheet" Visibility="Collapsed">
+                            <Border Style="{StaticResource GroupBox}" Padding="16,10" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="Что произошло?" Style="{StaticResource Caption}" Margin="2,0,0,4" />
+                                    <TextBox x:Name="ReportWhat" Style="{StaticResource Area}" Height="60" MaxLength="4000" TextChanged="OnReportEdited" />
+                                    <TextBlock Text="Как повторить, по желанию" Style="{StaticResource Caption}" Margin="2,6,0,4" />
+                                    <TextBox x:Name="ReportSteps" Style="{StaticResource Area}" Height="38" MaxLength="4000" TextChanged="OnReportEdited" />
+                                    <TextBlock Text="Контакт для ответа: Telegram или почта" Style="{StaticResource Caption}" Margin="2,6,0,4" />
+                                    <TextBox x:Name="ReportContact" Style="{StaticResource Field}" Height="34" MaxLength="200" TextChanged="OnReportEdited" />
+                                </StackPanel>
+                            </Border>
+                            <DockPanel Margin="4,0,4,8">
+                                <Button x:Name="ReportImagesButton" DockPanel.Dock="Right" Style="{StaticResource TextAction}" FontSize="13" Content="Добавить снимок" Click="OnReportImages" Margin="0,-4,-7,0" VerticalAlignment="Top" />
+                                <TextBlock x:Name="ReportContents" Style="{StaticResource Caption}" Text="Приложим журналы запуска, проверку и историю событий. Пути, имена и пароли вычищаются." />
+                            </DockPanel>
+                            <!-- Sending is the path; saving a ZIP appears only when sending failed -->
+                            <DockPanel>
+                                <Button x:Name="ReportSendButton" DockPanel.Dock="Right" Style="{StaticResource Pill}" Height="40" FontSize="15" Content="Отправить" Click="OnReportSend" Margin="10,0,0,0" />
+                                <Button x:Name="ReportSaveButton" DockPanel.Dock="Right" Style="{StaticResource SoftPill}" Height="40" FontSize="15" Content="Сохранить ZIP" Click="OnReportSave" Visibility="Collapsed" />
+                                <Grid />
+                            </DockPanel>
                         </StackPanel>
 
                         <!-- Keys -->
