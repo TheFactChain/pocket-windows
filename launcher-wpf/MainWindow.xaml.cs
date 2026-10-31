@@ -42,9 +42,6 @@ namespace WindowsClaude.Launcher
         readonly DispatcherTimer lifecycleTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         readonly DispatcherTimer saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         readonly DispatcherTimer toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
-        readonly Border[] stepCards = new Border[4];
-        readonly TextBlock[] stepTexts = new TextBlock[4];
-        readonly Ellipse[] stepDots = new Ellipse[4];
         Forms.NotifyIcon trayIcon;
 
         Dictionary<string, object> readinessReport, operationResult, settingsHost, originalSettings, originalWindows, originalViewer, originalFiles;
@@ -89,15 +86,6 @@ namespace WindowsClaude.Launcher
         public MainWindow()
         {
             InitializeComponent();
-            string[] steps = { "Шлюз", "VPN", "Windows", "Файлы" };
-            for (int index = 0; index < 4; index++)
-            {
-                stepDots[index] = new Ellipse { Width = 7, Height = 7, Margin = new Thickness(0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center };
-                stepTexts[index] = new TextBlock { Text = steps[index], FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-                stepCards[index] = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(4, 5, 4, 5), Margin = new Thickness(2),
-                    Child = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Children = { stepDots[index], stepTexts[index] } } };
-                Steps.Children.Add(stepCards[index]);
-            }
             BuildHelp();
             for (int index = 0; index < Modes.GetLength(0); index++) ResolutionBox.Items.Add(Modes[index, 0] + " × " + Modes[index, 1]);
             VersionText.Text = ReleaseInfo.Read(Bridge.Root).DisplayText;
@@ -787,7 +775,7 @@ namespace WindowsClaude.Launcher
             if (blocker == null && fileServerStopped) NextStepText.Text = FileServerRestart;
             if (blocker == null && filesState == "partial") NextStepText.Text = "Часть папок ПК недоступна. Открой «Проверка», чтобы узнать какие и почему.";
             if (blocker == null && fileRecovery) NextStepText.Text = (fileServerStopped ? FileServerRestart + " " : "") + recoveryDetail;
-            UpdateHero(report, filesState);
+            UpdateHero();
             if (StatusText.Text != shownStatus) { shownStatus = StatusText.Text; Rise(StatusText, 0); Rise(NextStepText, 60); }
             string warning = runtimeActive ? Text(report, "network_warning", "") : "";
             NetworkText.Text = warning; Show(NetworkText, warning.Length > 0);
@@ -886,23 +874,13 @@ namespace WindowsClaude.Launcher
             return row;
         }
 
-        void UpdateHero(Dictionary<string, object> report, string filesState)
+        void UpdateHero()
         {
-            bool running = workState == "running", starting = ActiveVmState(workState) && !running;
+            bool running = workState == "running";
             bool attention = !ready && readinessReport != null && !runtimeActive;
             StatusIcon.Background = running ? GreenSoft : attention ? GreySoft : BlueSoft;
             StatusGlyph.Foreground = running ? Green : attention ? Grey : Blue;
             Pulse.Fill = running ? Green : Blue;
-            bool[] done = { gatewayState == "running", Flag(report, "network_verified"), running, filesState == "ready" };
-            bool[] active = { ActiveVmState(gatewayState) && gatewayState != "running", gatewayState == "running" && !done[1], starting, running && filesState != "ready" && filesState != "off" && filesState.Length > 0 };
-            for (int index = 0; index < 4; index++)
-            {
-                stepDots[index].Fill = done[index] ? Green : active[index] ? Blue : Hex("#C7C7CC");
-                stepTexts[index].Foreground = done[index] ? GreenInk : active[index] ? BlueInk : Grey;
-                stepCards[index].Background = done[index] ? GreenSoft : active[index] ? BlueSoft : Brushes.White;
-                stepCards[index].ToolTip = index == 3 && filesState == "off" ? "Файлы ПК выключены" : null;
-            }
-            Show(Steps, (runtimeActive && workState != "running") || (busy && activeOperationAction == "start")); // steps only while starting
         }
 
         static string FormatGiB(int mib) { return ((decimal)mib / 1024).ToString("0.######", CultureInfo.CurrentCulture); }

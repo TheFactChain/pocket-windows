@@ -30,7 +30,7 @@
                         <Button x:Name="ForceStopButton" Style="{StaticResource DangerPill}" Height="40" FontSize="13" Margin="0,8,0,0" Click="OnForceStop" Content="Принудительно выключить" Visibility="Collapsed" />
                     </StackPanel>
                     <Grid x:Name="Hero">
-                        <Grid.RowDefinitions><RowDefinition Height="*" MinHeight="40" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="*" MinHeight="40" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                         <!-- Only the icon shrinks; the status and actions retain readable font sizes. -->
                         <Viewbox StretchDirection="DownOnly" MaxHeight="196"><Grid Width="196" Height="196" HorizontalAlignment="Center">
                             <Ellipse x:Name="Pulse" Fill="{StaticResource Accent}" Opacity="0" RenderTransformOrigin="0.5,0.5">
@@ -63,9 +63,7 @@
                         <TextBlock x:Name="StatusText" Grid.Row="1" Text="Проверяем готовность…" FontSize="19" FontWeight="SemiBold" Foreground="{StaticResource Ink}"
                                    TextAlignment="Center" TextWrapping="Wrap" Margin="0,10,0,0" />
                         <TextBlock x:Name="NextStepText" Grid.Row="2" FontSize="13" Foreground="{StaticResource Muted}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0" />
-                        <TextBlock x:Name="NetworkText" Grid.Row="3" FontSize="12.5" Foreground="#A06A12" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0" />
-                        <UniformGrid x:Name="Steps" Grid.Row="4" Columns="4" Margin="0,10,0,0" />
-                    </Grid>
+                        <TextBlock x:Name="NetworkText" Grid.Row="3" FontSize="12.5" Foreground="#A06A12" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0" />                    </Grid>
                 </DockPanel>
             </Border>
 
