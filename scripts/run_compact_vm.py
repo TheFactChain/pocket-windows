@@ -12,6 +12,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import QEMU
 import launch_runtime as runtime
 from portable_app import ENGINE_SHA256
 from prepare_compact_master import plain_path
@@ -27,7 +28,7 @@ import windows_guest_settings as windows_settings
 def arguments(project, operation, phase):
     settings = load_settings(project)
     escape = lambda path: qemu_path(path).replace(',', ',,')
-    share = project / 'runtime/qemu-11.1.0/share'
+    share = project / QEMU / 'share'
     return ['-name', 'WindowsClaude-Maintenance-' + phase, '-machine', 'q35', '-accel', 'whpx',
             '-cpu', windows_hardware.CPU_MODEL, '-smp', str(settings['vcpus']), '-m', str(settings['work_memory_mib']), '-L', qemu_path(share),
             '-nic', 'none', '-display', 'none', '-vga', 'std', '-serial', 'none',

@@ -45,28 +45,20 @@ def _number(value, maximum=LIMIT, minimum=0):
     return value
 
 
-def _url(url, version, suffix):
-    if type(url) is not str:
-        return False
-    expected = ('https://github.com/TheFactChain/pocket-windows/releases/download/v'
-                + version + '/Pocket-Windows-' + version + suffix)
-    if url == expected:
-        return True
-    api = urllib.parse.urlsplit(os.environ.get('POCKET_WINDOWS_UPDATE_API', ''))
-    parsed = urllib.parse.urlsplit(url)
-    return (api.scheme == parsed.scheme == 'http' and api.hostname == parsed.hostname == '127.0.0.1'
-            and api.port == parsed.port and parsed.username is None and parsed.password is None and not parsed.fragment)
+UPDATER = 2  # highest min_updater this toolkit understands
+RETRIES = 6
 
 
 def _validate(value):
     if (type(value) is not dict or set(value) != {'schema', 'min_updater', 'release', 'archive', 'toolkit', 'files', 'chunks', 'gateway'}
             or type(value['schema']) is not int or value['schema'] != 2
-            or type(value['min_updater']) is not int or value['min_updater'] != 2):
+            or type(value['min_updater']) is not int or not 1 <= value['min_updater'] <= UPDATER):
         raise ValueError('Invalid v2 update schema')
-    info = release.validate_release_info(value['release'])
-    for key, suffix in (('archive', '-chunks.zip'), ('toolkit', '-updater.zip')):
+    release.validate_release_info(value['release'])
+    # Owner and host are not identity: stored catalogs from a renamed repository must stay readable.
+    for key in ('archive', 'toolkit'):
         item = value[key]
-        if type(item) is not dict or set(item) != {'url', 'bytes', 'sha256'} or not _url(item['url'], info['release_id'], suffix):
+        if type(item) is not dict or set(item) != {'url', 'bytes', 'sha256'} or not release.asset_url(item['url']):
             raise ValueError('Invalid update asset identity')
         _number(item['bytes'], ARCHIVE_LIMIT, minimum=1)
         _digest(item['sha256'])
@@ -154,7 +146,7 @@ def build(release_path, toolkit_path, base_url=None):
     archive_path = root/(stem + '-chunks.zip')
     index_path = root/(stem + '-update-v2.json')
     toolkit_record = release.file_record(release.pack.file_under(toolkit.parent, toolkit.name), toolkit.name)
-    base_url = base_url or ('https://github.com/TheFactChain/pocket-windows/releases/download/v' + info['release_id'])
+    base_url = base_url or release.release_url(info['release_id'], '')
     files, chunks = [], {}
     gateway = None
     with zipfile.ZipFile(archive_path, 'x', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
@@ -493,10 +485,11 @@ class _Redirect(urllib.request.HTTPRedirectHandler):
 
 
 def _final_url(original, final):
+    # Redirects may reach any HTTPS host; each chunk is verified by its SHA-256 from the authenticated index.
     source, parsed = urllib.parse.urlsplit(original), urllib.parse.urlsplit(final)
     if parsed.username is not None or parsed.password is not None or parsed.fragment:
         return False
-    return ((parsed.scheme == 'https' and parsed.hostname in ('github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com') and parsed.port in (None, 443))
+    return ((parsed.scheme == 'https' and bool(parsed.hostname))
             or source.scheme == parsed.scheme == 'http' and source.hostname == parsed.hostname == '127.0.0.1' and source.port == parsed.port)
 
 
@@ -509,7 +502,7 @@ def _fetch(archive, row):
     end = start + count - 1
     request = urllib.request.Request(archive['url'], headers={'Range': f'bytes={start}-{end}',
         'Accept-Encoding': 'identity', 'User-Agent': 'PocketWindows-Launcher'})
-    for attempt in range(3):
+    for attempt in range(RETRIES):
         try:
             with _open(request, timeout=30) as response:
                 if (not _final_url(archive['url'], response.url) or response.status != 206
@@ -524,9 +517,9 @@ def _fetch(archive, row):
                     raise ConnectionError('Truncated chunk range')
                 return _decode(data, row, row['method']), count
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead):
-            if attempt == 2:
+            if attempt == RETRIES - 1:
                 raise
-            time.sleep(.2*(attempt + 1))
+            time.sleep(min(16, 2 ** attempt))  # 1+2+4+8+16 s rides out a short network drop
 
 
 def prepare(index_path, sha256, target, stage, progress=lambda value: None, offline=False):

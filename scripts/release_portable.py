@@ -1,6 +1,7 @@
 """Build one committed release and update application files without replacing user data."""
 import argparse
 import ast
+import base64
 from contextlib import ExitStack, contextmanager
 import ctypes
 from ctypes import wintypes
@@ -17,10 +18,12 @@ import sys
 import tempfile
 import time
 import traceback
+import urllib.parse
 import uuid
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import POWERSHELL, PYTHON, QEMU
 import pack_existing_runtime as pack
 import prepare_runtime_bundle as bundle
 import launch_runtime as runtime
@@ -31,10 +34,10 @@ INFO = 'release-info.json'
 JOURNAL = 'state/app-update.json'
 INVENTORY = 'state/application-files.json'
 JSON_LIMIT = 16 * 1024 * 1024
-REQUIRED_RUNTIME = ('runtime/python-3.12.14/python.exe',
-                    'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
-                    'runtime/qemu-11.1.0/qemu-img.exe',
-                    'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd')
+REQUIRED_RUNTIME = (PYTHON + '/python.exe',
+                    QEMU + '/qemu-system-x86_64.exe',
+                    QEMU + '/qemu-img.exe',
+                    QEMU + '/share/edk2-x86_64-code.fd')
 MASTER_HASHES = {'work_sha256': 'fc5f18a8342ed7575dd028c36208c06a803ea0100fe44ee37e5bbdd4393f65b5',
                  'vars_sha256': '73696892959e012e0a9b74073bdafa6a1cfbe4dc1d871195447cca6d6ce11214'}
 validate_release_info = pack.validate_release_info
@@ -42,6 +45,18 @@ validate_release_info = pack.validate_release_info
 
 def absolute(path):
     return Path(os.path.abspath(path))
+
+
+def _replace(source, target, seconds=10):
+    """Antivirus and indexers hold freshly written files briefly; a sharing violation must not force a rollback."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return os.replace(source, target)
+        except PermissionError as error:
+            if getattr(error, 'winerror', None) not in (5, 32) or time.monotonic() >= deadline:
+                raise
+            time.sleep(.25)
 
 
 def directory(path):
@@ -350,7 +365,7 @@ def _rollback(target, journal):
                 # A partial copy from an interrupted attempt must not block recovery.
                 replacement = transaction / 'restore' / (uuid.uuid4().hex + '.tmp')
                 copy_record(backup, replacement, row['old'])
-                os.replace(replacement, path)
+                _replace(replacement, path)
         row['phase'] = 'restored'
         atomic_json(target / JOURNAL, journal)
     journal['phase'] = 'rolled_back'
@@ -513,8 +528,11 @@ def probe_app(target, nonce):
     names = {row['path'] for row in records}
     if not {'Launcher.exe', INFO, *REQUIRED_RUNTIME} <= names:
         raise ValueError('Provisional runtime is incomplete')
+    # Rehash only what this transaction wrote: the full inventory (gateway disk included) does not fit the probe window on slow disks.
+    written = {row['path'] for row in journal['files']}
     for row in records:
-        if file_record(pack.file_under(target, row['path']), row['path']) != row:
+        path = pack.file_under(target, row['path'])
+        if (file_record(path, row['path']) != row) if row['path'] in written else path.stat().st_size != row['bytes']:
             raise ValueError('Provisional file differs: ' + row['path'])
     for name in REQUIRED_RUNTIME[1:3]:
         check = subprocess.run([str(pack.file_under(target, name)), '--version'], cwd=target,
@@ -760,7 +778,7 @@ def apply_update(release, target, probe=False, prepared_sha256=None, _local_stag
                     if row['new'] is None:
                         remove_owned_file(path, identity(path))
                     else:
-                        os.replace(staged, path)
+                        _replace(staged, path)
                     row['phase'] = 'installed'
                     atomic_json(target / JOURNAL, journal)
                 for row in journal['files']:
@@ -845,6 +863,7 @@ def master_files(master):
 def prepare_release(source, output, master, release_id, components=None, bridge=None):
     import update_toolkit
     source, output = absolute(source), absolute(output)
+    pinned_keys()
     commit = source_commit(source)
     validate_build_inputs(source, commit)
     info = validate_release_info({'schema': 1, 'release_id': release_id, 'source_commit': commit})
@@ -867,7 +886,7 @@ def prepare_release(source, output, master, release_id, components=None, bridge=
         if pins != [engine['sha256']]:
             raise ValueError('QEMU engine source pins differ: ' + name)
     directory(output)
-    powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    powershell = POWERSHELL
     for script, destination in (('Build-Launcher.ps1', output / 'app'),):
         run_logged([powershell, '-NoProfile', '-NonInteractive', '-File', source / 'scripts' / script,
                     '-OutputDirectory', destination], source, output / (script + '.log'))
@@ -939,7 +958,7 @@ def package_release(release, source, master):
                     'Личные подключения в этот комплект не входят.\n')
     (stage / 'НАЧАТЬ.txt').write_text(instructions, encoding='utf-8-sig')
     shutil.copyfile(source / 'docs/third-party.md', stage / 'third-party.md')
-    python = source / 'runtime/python-3.12.14/python.exe'
+    python = source / PYTHON / 'python.exe'
     run_logged([python, '-X', 'utf8', '-I', '-S', '-B', source / 'scripts/pack_existing_runtime.py',
                 '--mode', 'public', '--project', stage, '--output', release / archive_name],
                source, release / 'package.log')
@@ -1051,9 +1070,106 @@ def app_update_index(archive, manifest, digest):
                               'compressed_bytes': entry.compress_size, 'method': entry.compress_type})
     release_id = manifest['release_id']
     return {'schema': 1, 'release': manifest,
-            'archive': {'url': 'https://github.com/TheFactChain/pocket-windows/releases/download/v'
-                        + release_id + '/Pocket-Windows-' + release_id + '-app.zip',
+            'archive': {'url': release_url(release_id, 'Pocket-Windows-' + release_id + '-app.zip'),
                         'bytes': size, 'sha256': digest}, 'files': files}
+
+
+SOURCES = Path(__file__).resolve().with_name('update_sources.json')
+MANIFEST = 'update-manifest.json'
+_CNG = '$ErrorActionPreference="Stop"; $c="System.Security.Cryptography."; '
+KEYGEN = (_CNG + '$p=New-Object ($c+"CngKeyCreationParameters"); $p.KeyUsage="Signing"; '
+          '$p.ExportPolicy=$(if($env:WCP_EXPORTABLE -eq "1"){"AllowPlaintextExport"}else{"None"}); '
+          '$k=[System.Security.Cryptography.CngKey]::Create([System.Security.Cryptography.CngAlgorithm]::ECDsaP256,$env:WCP_KEY,$p); '
+          '[Console]::Out.Write([Convert]::ToBase64String($k.Export([System.Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)))')
+SIGN = (_CNG + '$d=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()); '
+        '$k=[System.Security.Cryptography.CngKey]::Open($env:WCP_KEY); $e=New-Object ($c+"ECDsaCng") $k; $s=$e.SignData($d); '
+        'if(-not $e.VerifyData($d,$s)){throw "signature self-check failed"}; '
+        '[Console]::Out.Write([Convert]::ToBase64String($s)+" "+[Convert]::ToBase64String($k.Export([System.Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)))')
+DELETE_KEY = _CNG + '[System.Security.Cryptography.CngKey]::Open($env:WCP_KEY).Delete()'
+
+
+def update_sources():
+    """Publisher hosts and pinned keys live in data, not code: a move edits update_sources.json only."""
+    value = json.loads(SOURCES.read_text(encoding='utf-8'))
+    if (type(value) is not dict or value.get('schema') != 1 or '{release_id}' not in value.get('release_base', '')
+            or not all(asset_url(url) for url in [value['release_base'], *value['feeds']])
+            or not value['keys'] or type(value.get('signing_key')) is not str):
+        raise ValueError('Invalid update_sources.json')
+    return value
+
+
+def pinned_keys():
+    """A launcher shipped with placeholder keys could never verify an update again."""
+    keys = update_sources()['keys']
+    for key in keys:
+        try:
+            blob = base64.b64decode(key, validate=True)
+        except ValueError:
+            blob = b''
+        if len(blob) != 72 or not blob.startswith(b'ECS1'):
+            raise ValueError('update_sources.json must pin real ECDSA P-256 keys; run keygen first')
+    return keys
+
+
+def release_url(release_id, name):
+    return update_sources()['release_base'].format(release_id=release_id) + name
+
+
+def asset_url(url):
+    """Any HTTPS host is transport only: the signed manifest's sizes and SHA-256 authenticate the bytes."""
+    if type(url) is not str:
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username is not None or parsed.password is not None or parsed.fragment:
+        return False
+    if parsed.scheme == 'https' and parsed.hostname:
+        return True
+    api = urllib.parse.urlsplit(os.environ.get('POCKET_WINDOWS_UPDATE_API', ''))
+    return api.scheme == parsed.scheme == 'http' and api.hostname == parsed.hostname == '127.0.0.1' and api.port == parsed.port
+
+
+def _cng(script, key, data=b'', exportable=False):
+    result = subprocess.run([str(POWERSHELL), '-NoProfile', '-NonInteractive', '-Command', script], input=data,
+                            capture_output=True, timeout=120, creationflags=subprocess.CREATE_NO_WINDOW,
+                            env=os.environ | {'WCP_KEY': key, 'WCP_EXPORTABLE': '1' if exportable else '0'})
+    if result.returncode:
+        raise RuntimeError('CNG key operation failed: ' + result.stderr.decode(errors='replace')[-800:])
+    return result.stdout.decode('ascii').strip()
+
+
+def keygen(name, exportable=False):
+    """Create a signing key in the current user's CNG store; only the public blob leaves it."""
+    return {'key': name, 'exportable': exportable, 'public': _cng(KEYGEN, name, exportable=exportable)}
+
+
+def sign_manifest(release, key=None):
+    """Write update-manifest.json: the launcher trusts this signature, never the host it came from."""
+    release = absolute(release)
+    info = verify_release(release)
+    sources = update_sources()
+    stem = 'Pocket-Windows-' + info['release_id']
+
+    def asset(name):
+        record = file_record(pack.file_under(release, name), name)
+        return {'url': release_url(info['release_id'], name), 'bytes': record['bytes'], 'sha256': record['sha256']}
+    assets = {'app': asset(stem + '-app.zip')}
+    if (release / (stem + '-update-v2.json')).exists():
+        assets |= {'update_v2': asset(stem + '-update-v2.json'), 'updater': asset(stem + '-updater.zip')}
+    data, public = envelope({'schema': 1, 'release_id': info['release_id'], 'source_commit': info['source_commit'],
+                             'feeds': sources['feeds'], 'assets': assets}, key or sources['signing_key'])
+    if public not in sources['keys']:
+        raise ValueError('Signing key is not pinned in update_sources.json')
+    path = release / MANIFEST
+    with _pinned_directory(release, create=False), path.open('xb') as stream:
+        stream.write(data)
+    return {'manifest': str(path), 'release_id': info['release_id'], 'assets': sorted(assets), 'key': public}
+
+
+def envelope(manifest, key):
+    """The exact signed bytes travel with their signature, so no host or second request can mix them up."""
+    body = json_bytes(manifest)
+    signature, public = _cng(SIGN, key, base64.b64encode(body)).split(' ')
+    return json_bytes({'schema': 1, 'manifest': base64.b64encode(body).decode('ascii'), 'signature': signature}), public
 
 
 def _sha256_file(path):
@@ -1288,6 +1404,12 @@ def main():
     v2 = commands.add_parser('v2-package')
     v2.add_argument('--release', type=Path, required=True)
     v2.add_argument('--source', type=Path, required=True)
+    signer = commands.add_parser('sign-manifest')
+    signer.add_argument('--release', type=Path, required=True)
+    signer.add_argument('--key', help='CNG key name (default: signing_key in update_sources.json)')
+    generator = commands.add_parser('keygen')
+    generator.add_argument('--key', required=True)
+    generator.add_argument('--exportable', action='store_true', help='Backup key the owner exports and keeps offline')
     install = commands.add_parser('install-app')
     install.add_argument('--zip', type=Path, required=True)
     install.add_argument('--sha256', required=True)
@@ -1335,6 +1457,10 @@ def main():
             raise ValueError('Toolkit source differs from this release')
         toolkit = update_toolkit.build(args.source, args.release, manifest['release_id'])
         result = app_update_v2.build(args.release, toolkit['path'])
+    elif args.command == 'sign-manifest':
+        result = sign_manifest(args.release, args.key)
+    elif args.command == 'keygen':
+        result = keygen(args.key, args.exportable)
     elif args.command == 'install-app':
         result = install_app(args.zip, args.sha256, args.target)
     elif args.command == 'check-app':

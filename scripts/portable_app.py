@@ -1,5 +1,6 @@
 """JSON backend for the desktop EXE. Diagnostics never return profile credentials."""
 import argparse
+from datetime import datetime, timezone
 import ctypes
 from ctypes import wintypes
 import hashlib
@@ -15,6 +16,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import POWERSHELL, PYTHON, QEMU
 import windows_guest_settings as windows_settings
 import host_file_sharing as file_sharing
 import launch_runtime as runtime
@@ -25,9 +27,9 @@ from profile_store import ProfileStore, StoreBusy, StoreError, SecretsUnavailabl
 from gateway_package import inspect_current
 
 ENGINE_SHA256 = '93b16a220fdc7b6125ecd63758fa8cd45f0ec8329359ad27aa796325445f7738'
-RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
-                 'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
-                 'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd',
+RUNTIME_FILES = (PYTHON + '/python.exe',
+                 QEMU + '/qemu-system-x86_64.exe',
+                 QEMU + '/share/edk2-x86_64-code.fd',
                  'scripts/launch_runtime.py', 'scripts/control_guest_install.py',
                  'scripts/runtime_network_plan.py', 'scripts/runtime_config.py',
                  'scripts/Start-Runtime.ps1', 'scripts/connection_profile.py',
@@ -38,7 +40,7 @@ RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
                  'scripts/windows_hardware.py',
                  'scripts/host_file_sharing.py', 'scripts/file_share_carrier.py', 'scripts/clipboard_bridge.py',
                  'scripts/clipboard_files.py', 'scripts/clipboard_stage.py',
-                 'scripts/window_branding.py', 'runtime/qemu-11.1.0/qemu-img.exe')
+                 'scripts/window_branding.py', QEMU + '/qemu-img.exe')
 GUEST_FILES = ('images/workvm-empty.qcow2', 'state/workvm-vars.fd')
 CHECK_INFO = {
     'windows_x64': ('Версия Windows', 'Нужна 64-разрядная Windows', 'retry', 'Проверить снова'),
@@ -164,6 +166,10 @@ def preflight(root, host=None, *, full=True):
         if active.get('phase') in ('starting', 'ready', 'restarting', 'stopping', 'stopped', 'error'):
             startup = {'receipt': active_path.relative_to(root).as_posix(),
                        'phase': active['phase'], 'supervisor_active': supervisor_active}
+            error = active.get('gateway_error')
+            if (active['phase'] == 'error' and error in CONNECTION_ERRORS and not supervisor_active
+                    and (datetime.now(timezone.utc) - datetime.fromisoformat(active['observed_utc'])).total_seconds() < 3600):
+                startup.update(gateway_error=error, gateway_error_message=CONNECTION_ERRORS[error])  # the last failed launch, for the connection line
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
         pass
     if not checks['runtime_state']['passed']:
@@ -212,7 +218,7 @@ def preflight(root, host=None, *, full=True):
             check('gateway_package', True, 'Установлен шлюз ' + gateway_version + '. Структура корректна; полная проверка SHA256 выполняется перед запуском.')
         except (OSError, ValueError, RuntimeError, KeyError, TypeError):
             check('gateway_package', False, 'Не найдена исправная версия шлюза. Восстанови её из пакета компонентов.')
-        powershell = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        powershell = POWERSHELL
         check('powershell', powershell.is_file(), 'Windows PowerShell найден.' if powershell.is_file() else 'Для запуска нужен встроенный Windows PowerShell 5.1.')
     connection = {'selected_profile': None, 'applied_revision_id': None, 'verified': False}
     try:
@@ -462,7 +468,7 @@ def start(root):
     with (directory / 'supervisor.stdout.log').open('xb') as output, \
             (directory / 'supervisor.stderr.log').open('xb') as errors:
         process = subprocess.Popen(
-            [str(root / 'runtime/python-3.12.14/python.exe'), '-X', 'utf8', '-I', '-S', '-B',
+            [str(root / PYTHON / 'python.exe'), '-X', 'utf8', '-I', '-S', '-B',
              str(root / 'scripts/launch_runtime.py'), '--project', str(root), '--receipt', str(receipt)],
             cwd=root, stdout=output, stderr=errors, stdin=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW)
@@ -511,7 +517,7 @@ def start(root):
                   network_acceptance_scope=report.get('network_acceptance_scope', 'none'),
                   network_warning=report.get('network_warning', 'Подключение текущего сеанса не подтверждено.'))
     if result.get('ok'):
-        current = preflight(root)
+        current = preflight(root, full=False)  # files were just verified above; only session state is new
         result.update({key: current[key] for key in ('network_verified', 'network_acceptance_scope',
                                                     'network_warning', 'connection', 'runtime') if key in current})
     return result
@@ -603,7 +609,7 @@ def test_connection(root, request):
         if not acquired or runtime.engine_processes(root):
             return {'ok': False, 'code': 'runtime_busy', 'message': 'Перед проверкой подключения штатно выключи Windows и шлюз.'}
         inspect_current(root)
-        command = [str(root / 'runtime/python-3.12.14/python.exe'), '-I', '-S', '-B',
+        command = [str(root / PYTHON / 'python.exe'), '-X', 'utf8', '-I', '-S', '-B',
                    str(root / 'scripts/gateway_controller.py'), '--project', str(root)]
         command += ['--test-draft'] if draft is not None else ['--test-profile', view['profile_id']]
         process = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE if draft is not None else subprocess.DEVNULL,
@@ -652,7 +658,7 @@ def test_connection(root, request):
 
 
 def stop_runtime(root):
-    process = subprocess.Popen([str(root / 'runtime/python-3.12.14/python.exe'), '-I', '-S', '-B',
+    process = subprocess.Popen([str(root / PYTHON / 'python.exe'), '-X', 'utf8', '-I', '-S', '-B',
         str(root / 'scripts/launch_runtime.py'), '--project', str(root), '--stop'], cwd=root,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding='utf-8', creationflags=subprocess.CREATE_NO_WINDOW)

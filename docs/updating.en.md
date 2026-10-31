@@ -13,7 +13,7 @@ Find your installed version in **«Обновления» (Updates)** in the lau
 3. Keep the folder writable and check free disk space. The launcher also checks space for downloading, installation and rollback.
 4. Choose the instructions **for your starting version** below. Do not extract `app` over the installation manually or replace the Windows disk with another image.
 
-## Version 2026.10.25.3 and later
+## Version 2026.10.30.1 and later
 
 The full **2026.10.30.1** bundle on Google Drive already includes the updater. Use this normal flow for it, including immediately after the first extraction.
 
@@ -24,6 +24,18 @@ The full **2026.10.30.1** bundle on Google Drive already includes the updater. U
 The new updater checks file contents and downloads changed chunks with resume support. The amount depends on your starting version and cache. If a separate complete download is offered, read its size before confirming. You do not need to download `-chunks.zip`, `-update*.json` or `-updater.zip` manually.
 
 These steps cover a normal update of a healthy installation. An older operation that was interrupted or moved between folders may need separate recovery; do not overwrite files manually while it is unresolved.
+
+Launchers newer than 2026.10.30.2 accept only updates signed with the project key and do not depend on the repository address. Do not download update packages from other sources: the launcher rejects them anyway.
+
+## Versions 2026.10.25.3 to 2026.10.29.3
+
+These copies look for updates at the repository's former address (before the GitHub account was renamed) and no longer update themselves: «Проверить» (Check) reports that the check failed. If an "update" ever appears at the old address, do not install it: that account no longer belongs to the project. Update the copy manually the same way as described below for 2026.10.24.13, using the latest release:
+
+1. Shut down guest Windows normally and close every panel of this copy.
+2. From the [Latest page](https://github.com/TheFactChain/pocket-windows/releases/latest), download `Pocket-Windows-<version>-app.zip` and `Pocket-Windows-<version>-app.zip.sha256` into one folder.
+3. Run the block from the next section with `$archive` set to the downloaded ZIP and the `$expected = ...` line replaced by `$expected = (Get-Content -LiteralPath ($archive + '.sha256')).Split(' ')[0]`.
+
+Afterwards «Обновления» (Updates) works again and later releases arrive the normal way.
 
 ## Version 2026.10.24.13
 

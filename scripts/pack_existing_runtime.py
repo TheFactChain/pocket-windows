@@ -15,6 +15,7 @@ import sys
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import PYTHON, QEMU
 from file_snapshot import locked_read, remove_owned_file
 from profile_store import ProfileStore, _pinned_directory, _plain
 from runtime_config import validate_settings
@@ -42,7 +43,7 @@ FILE_COMPONENT_FILES = tuple('runtime/host-files/' + name for name in (
     'HostFiles.exe', 'HostFilesGuest.exe', 'SMBLibrary.dll', 'SMBLibrary.Win32.dll', 'Utilities.dll',
     'SMBLibrary.LICENSE.txt', 'SMBLibrary-source.zip', 'NOTICE.txt', 'build-manifest.json'))
 PROFILE_FILE = 'profiles/profiles.json'
-RUNTIME_PREFIXES = ('runtime/python-3.12.14/', 'runtime/qemu-11.1.0/')
+RUNTIME_PREFIXES = (PYTHON + '/', QEMU + '/')
 CHUNK = 4 * 1024 * 1024
 MAX_METADATA = 16 * 1024 * 1024
 
@@ -256,8 +257,8 @@ def collect(project, source=None, mode='personal'):
                     or type(row['sha256']) is not str or not re.fullmatch('[a-f0-9]{64}', row['sha256'])):
                 raise ValueError('Invalid component record')
             add(row['path'], {'bytes': row['bytes'], 'sha256': row['sha256']})
-        for name in ('runtime/python-3.12.14/python.exe', 'runtime/qemu-11.1.0/qemu-system-x86_64.exe',
-                     'runtime/qemu-11.1.0/qemu-img.exe', 'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd'):
+        for name in (PYTHON + '/python.exe', QEMU + '/qemu-system-x86_64.exe',
+                     QEMU + '/qemu-img.exe', QEMU + '/share/edk2-x86_64-code.fd'):
             if name not in entries:
                 raise ValueError('Required runtime component is absent from the manifest')
         add(COMPONENT_FILES[1], recovery_records=components['files'])

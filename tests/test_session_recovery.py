@@ -68,7 +68,7 @@ class SessionRecoveryTests(unittest.TestCase):
         state['status']='running'
         Path(gateway['state']).write_text(json.dumps(state))
         self.identities[202]=state['controller']
-        def stopped(root,records):
+        def stopped(root,records,timeout=None):
             self.inventory.clear()
             self.identities.clear()
             return []
@@ -147,7 +147,7 @@ class SessionRecoveryTests(unittest.TestCase):
         report = {'schema':1, 'project':str(self.root), 'phase':'error',
                   'guests':{'work':runtime.state_record(path, state, state['process']), 'gateway':gateway}}
         receipt.write_text(json.dumps(report))
-        def stopped(root, records):
+        def stopped(root, records, timeout=None):
             if any(record['process']['pid'] == 102 for record in records):
                 self.inventory.clear()
                 self.identities.clear()
@@ -170,7 +170,7 @@ class SessionRecoveryTests(unittest.TestCase):
         gateway_state['status'] = 'running'
         Path(gateway['state']).write_text(json.dumps(gateway_state))
         self.identities[202] = gateway_state['controller']
-        def stopped(root, records):
+        def stopped(root, records, timeout=None):
             for record in records:
                 pid = record['process']['pid']
                 self.inventory.pop(pid, None)

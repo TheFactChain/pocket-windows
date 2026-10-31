@@ -15,12 +15,14 @@ from contextlib import ExitStack, contextmanager
 from collections import deque
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import PYTHON, QEMU
 
 
 NETWORKS = {'gateway': 'gateway', 'work': 'isolated-lan'}
 DISKS = {'gateway': 'images/gateway-empty.qcow2', 'work': 'images/workvm-empty.qcow2'}
 START_TIMEOUT = 210
-SHUTDOWN_TIMEOUT = 120
+SHUTDOWN_TIMEOUT = 300  # Windows may install updates while shutting down
+GATEWAY_SHUTDOWN_TIMEOUT = 120  # the gateway installs nothing; 300+120+controller waits stay under the launcher's 510 s stop limit
 FILETIME_EPOCH = 11644473600
 _CONTROLLER_DRAINS = []
 _CONTROLLER_WRITERS = []
@@ -48,12 +50,12 @@ def _atomic_json_pinned(path, value):
             json.dump(value, stream, indent=2, ensure_ascii=True)
             stream.flush()
             os.fsync(stream.fileno())
-        for attempt in range(5):
+        for attempt in range(40):  # about 2 s: readers and antivirus briefly hold the target
             try:
                 os.replace(temporary, path)
                 break
             except PermissionError:
-                if attempt == 4:
+                if attempt == 39:
                     raise
                 time.sleep(.05)
     finally:
@@ -78,7 +80,7 @@ def read_json(path):
 
 
 def engine_path(root):
-    return root / 'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
+    return root / QEMU / 'qemu-system-x86_64.exe'
 
 
 def qemu_environment(root):
@@ -91,9 +93,9 @@ def qemu_environment(root):
 
 def controller_command(root, role, work_test_media=False):
     if role == 'gateway':
-        return [str(root / 'runtime/python-3.12.14/python.exe'), '-I', '-S', '-B',
+        return [str(root / PYTHON / 'python.exe'), '-X', 'utf8', '-I', '-S', '-B',
                 str(root / 'scripts/gateway_controller.py'), '--project', str(root)]
-    command = [str(root / 'runtime/python-3.12.14/python.exe'), '-I', '-S', '-B',
+    command = [str(root / PYTHON / 'python.exe'), '-X', 'utf8', '-I', '-S', '-B',
             str(root / 'scripts/control_guest_install.py'), '--project', str(root),
             '--guest', role + '-boot', '--network', NETWORKS[role]]
     if work_test_media and role == 'work':
@@ -214,7 +216,12 @@ def engine_processes(root):
         success = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
         while success:
             if entry.szExeFile.casefold() == engine_path(root).name.casefold():
-                identity = process_identity(entry.th32ProcessID)
+                try:
+                    identity = process_identity(entry.th32ProcessID)
+                except OSError as error:
+                    if getattr(error, 'winerror', None) != 5:  # ACCESS_DENIED: another user's QEMU, never ours
+                        raise
+                    identity = None
                 if identity and same_path(identity['image'], engine_path(root)):
                     result[identity['pid']] = identity
             success = kernel.Process32NextW(snapshot, ctypes.byref(entry))
@@ -298,7 +305,7 @@ def valid_controller(root, identity):
     return (isinstance(identity, dict) and type(identity.get('pid')) is int
             and identity['pid'] > 0 and type(identity.get('created_filetime')) is int
             and identity['created_filetime'] > 0
-            and same_path(identity.get('image', ''), root / 'runtime/python-3.12.14/python.exe'))
+            and same_path(identity.get('image', ''), root / PYTHON / 'python.exe'))
 
 
 def valid_vm_identity(root, identity):
@@ -804,10 +811,27 @@ def request_powerdown(root, record):
     return True
 
 
-def wait_records(root, records):
-    deadline = time.monotonic() + SHUTDOWN_TIMEOUT
+def wait_controllers(records, timeout=15):
+    # A gateway counts as stopped when its QEMU exits, but its controller still holds
+    # gateway-controller.lock while cleaning up; an immediate relaunch would hit StoreBusy.
+    deadline = time.monotonic() + timeout
+    for record in records:
+        controller = record.get('controller')
+        while controller and time.monotonic() < deadline:
+            try:
+                if not same_identity(controller, process_identity(controller['pid'])):
+                    break
+            except (OSError, RuntimeError, KeyError, TypeError):
+                break
+            time.sleep(.2)
+
+
+def wait_records(root, records, timeout=SHUTDOWN_TIMEOUT):
+    deadline = time.monotonic() + timeout
     while True:
         live = [record for record in records if record_live(root, record)]
+        if not live:
+            wait_controllers([record for record in records if 'session_nonce' not in record])
         if not live or time.monotonic() >= deadline:
             return live
         time.sleep(.5)
@@ -864,7 +888,7 @@ def finish_windows(root, report):
     confirm_windows_shutdown(root, report['guests']['work'])
     gateway = report['guests']['gateway']
     request_powerdown(root, gateway)
-    if wait_records(root, [gateway]):
+    if wait_records(root, [gateway], GATEWAY_SHUTDOWN_TIMEOUT):
         raise RuntimeError('Gateway ignored graceful shutdown; running guest retained. Shut it down inside its window')
 
 
@@ -873,7 +897,7 @@ def stop_records(root, records):
         guests = records.get(role, [])
         for record in guests:
             request_powerdown(root, record)
-        if wait_records(root, guests):
+        if wait_records(root, guests, SHUTDOWN_TIMEOUT if role == 'work' else GATEWAY_SHUTDOWN_TIMEOUT):
             raise RuntimeError(role + ' ignored graceful shutdown; running guests retained. Shut it down inside its window')
         if role == 'work':
             for record in guests:
@@ -1061,10 +1085,18 @@ def active_receipt(root):
 
 
 def join_existing(root):
-    deadline = time.monotonic() + START_TIMEOUT + 10
+    started = time.monotonic()
+    deadline = started + START_TIMEOUT + 10
     while time.monotonic() < deadline:
         try:
             path, report = active_receipt(root)
+            supervisor = report.get('supervisor')
+            if supervisor and not same_identity(supervisor, process_identity(supervisor['pid'])):
+                # The lock holder is not the receipt's supervisor (verify, settings save, repair): the receipt is from an old session.
+                if time.monotonic() - started > 10:
+                    raise RuntimeError('Another operation is using the project right now; try again in a few seconds')
+                time.sleep(.2)
+                continue
             if report['phase'] in ('ready','restarting'):
                 if (all(record_live(root, report['guests'][role]) for role in ('gateway', 'work'))
                         and controller_live(root, report['guests']['work'])
@@ -1082,7 +1114,7 @@ def join_existing(root):
 def require_runtime(root):
     if os.name != 'nt':
         raise RuntimeError('Windows is required')
-    if not same_path(sys.executable, root / 'runtime/python-3.12.14/python.exe'):
+    if not same_path(sys.executable, root / PYTHON / 'python.exe'):
         raise RuntimeError('Use this project\'s bundled Python runtime')
 
 
@@ -1128,17 +1160,26 @@ def run_start(root, receipt, work_test_media=False):
             report.update(phase='ready', message='Gateway and Windows are running')
             save()
             last_work_state=None
-            while record_live(root, report['guests']['work']):
-                if not record_live(root, report['guests']['gateway']):
-                    raise RuntimeError('Gateway exited while Windows remains active; Windows retained')
-                work_state=read_json(safe_state_path(root,report['guests']['work']['state']))
-                observed=(work_state.get('status'),work_state.get('generation'),report['guests']['work']['process']['created_filetime'],
-                          report['guests']['gateway'].get('generation'))
-                if observed != last_work_state:
-                    report.update(phase='restarting' if work_state.get('status') == 'restarting' else 'ready',
-                                  message='Windows is restarting' if work_state.get('status') == 'restarting' else 'Gateway and Windows are running')
-                    save()
-                    last_work_state=observed
+            failures=0
+            while True:
+                try:
+                    if not record_live(root, report['guests']['work']):
+                        break
+                    if not record_live(root, report['guests']['gateway']):
+                        raise RuntimeError('Gateway exited while Windows remains active; Windows retained')
+                    work_state=read_json(safe_state_path(root,report['guests']['work']['state']))
+                    observed=(work_state.get('status'),work_state.get('generation'),report['guests']['work']['process']['created_filetime'],
+                              report['guests']['gateway'].get('generation'))
+                    if observed != last_work_state:
+                        report.update(phase='restarting' if work_state.get('status') == 'restarting' else 'ready',
+                                      message='Windows is restarting' if work_state.get('status') == 'restarting' else 'Gateway and Windows are running')
+                        save()
+                        last_work_state=observed
+                    failures=0
+                except (OSError, ValueError):
+                    failures+=1  # a transient state-file or process read must not end supervision; about 10 s of failures does
+                    if failures >= 20:
+                        raise
                 time.sleep(.5)
             report.update(phase='stopping', message='Windows exited; checking guest shutdown before stopping gateway')
             save()

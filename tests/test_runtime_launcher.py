@@ -205,7 +205,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_gateway_command_uses_session_controller(self):
         command = runtime.controller_command(self.root, 'gateway')
-        self.assertEqual(command[4:], [str(self.root/'scripts/gateway_controller.py'), '--project', str(self.root)])
+        self.assertEqual(command[6:], [str(self.root/'scripts/gateway_controller.py'), '--project', str(self.root)])
 
     def test_legacy_gateway_cannot_be_adopted_as_ready(self):
         record, state = self.gateway2()
@@ -352,7 +352,7 @@ class RuntimeTests(unittest.TestCase):
     def test_commands_use_only_bundled_python_and_fixed_controller_flags(self):
         command = runtime.controller_command(self.root, 'work')
         self.assertEqual(command, [str(self.root / 'runtime/python-3.12.14/python.exe'),
-                                  '-I', '-S', '-B', str(self.root / 'scripts/control_guest_install.py'),
+                                  '-X', 'utf8', '-I', '-S', '-B', str(self.root / 'scripts/control_guest_install.py'),
                                   '--project', str(self.root), '--guest', 'work-boot',
                                   '--network', 'isolated-lan'])
 
@@ -537,7 +537,7 @@ class RuntimeTests(unittest.TestCase):
         work, _ = self.guest('work', 102)
         events = []
         with mock.patch.object(runtime, 'request_powerdown', side_effect=lambda root, rec: events.append(('request', rec['process']['pid']))), \
-             mock.patch.object(runtime, 'wait_records', side_effect=lambda root, recs: events.append(('wait', recs[0]['process']['pid'])) or []), \
+             mock.patch.object(runtime, 'wait_records', side_effect=lambda root, recs, timeout=None: events.append(('wait', recs[0]['process']['pid'])) or []), \
              mock.patch.object(runtime, 'confirm_windows_shutdown', side_effect=lambda root, rec, **kwargs: events.append(('proof', rec['process']['pid']))):
             runtime.stop_records(self.root, {'work': [work], 'gateway': [gateway]})
         self.assertEqual(events, [('request', 102), ('wait', 102), ('proof', 102), ('request', 101), ('wait', 101)])

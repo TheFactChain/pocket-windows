@@ -19,6 +19,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from runtime_config import QEMU
 from file_snapshot import locked_read, QEMU_IMG_SHA256
 from profile_store import _pinned_directory, _plain
 import launch_runtime as runtime
@@ -250,7 +251,7 @@ def install_command(operation):
     relative = base + operation.name + "/"
     return [str(runtime.engine_path(ROOT)), "-name", "WindowsClaude-gateway-build",
             "-machine", "pc", "-accel", "whpx", "-cpu", "Westmere", "-smp", "2", "-m", "1024",
-            "-L", "runtime/qemu-11.1.0/share", "-display", "none", "-vga", "none",
+            "-L", QEMU + "/share", "-display", "none", "-vga", "none",
             "-monitor", "none", "-qmp", "stdio", "-parallel", "none",
             "-serial", "file:" + relative + "installer-serial.log",
             "-serial", "file:" + relative + "installer-syslog.log",

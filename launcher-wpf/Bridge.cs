@@ -23,6 +23,8 @@ internal static class Bridge
         PendingReply pending = reply as PendingReply;
         return pending == null ? null : pending.Settled;
     }
+    // Mirrors scripts/runtime_config.PYTHON; tests/test_update_audit_fixes.py keeps them equal.
+    internal const string PythonDir = "runtime\\python-3.12.14";
     internal static string Root
     {
         get { return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); }
@@ -96,7 +98,7 @@ internal static class Bridge
             else if (code == "ready") reply["message"] = "Этот ПК готов к аппаратному ускорению виртуальных машин.";
             return reply;
         }
-        string python = Path.Combine(root, "runtime", "python-3.12.14", "python.exe");
+        string python = Path.Combine(root, PythonDir, "python.exe");
         string backend = Path.Combine(root, "scripts", "portable_app.py");
         if (!File.Exists(python))
         {

@@ -244,6 +244,25 @@ class ChunkUpdateTests(unittest.TestCase):
             report = update.seed_cache(value, release2/'app', self.target)
         self.assertEqual(report['chunks'], len(value['chunks']))
 
+    def test_catalogs_survive_owner_rename_and_newer_updater(self):
+        """Stored catalogs from the old GitHub owner or another mirror stay readable; host is not identity."""
+        self.assertIn('/releases/download/v2026.10.27.1/', self.value['archive']['url'])
+        for host in ('https://github.com/nekontritce11123-lab/pocket-windows/releases/download/v2026.10.27.1/',
+                     'https://188.130.234.243:8443/pocket-windows/'):
+            value = json.loads(json.dumps(self.value))
+            value['archive']['url'] = host + 'Pocket-Windows-2026.10.27.1-chunks.zip'
+            value['toolkit']['url'] = host + 'Pocket-Windows-2026.10.27.1-updater.zip'
+            update._validate(value)
+        for url in ('http://github.com/x', 'https://user@github.com/x', 'file:///C:/x'):
+            value = json.loads(json.dumps(self.value))
+            value['archive']['url'] = url
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                update._validate(value)
+        value = json.loads(json.dumps(self.value))
+        value['min_updater'] = update.UPDATER + 1
+        with self.assertRaises(ValueError):
+            update._validate(value)
+
     def test_range_headers_digest_fail_hard_and_network_retries(self):
         original = self.response
         for header in ('Content-Range', 'Content-Length', 'Content-Encoding'):
@@ -259,11 +278,14 @@ class ChunkUpdateTests(unittest.TestCase):
         with mock.patch.object(update, '_open', side_effect=ConnectionError('offline')) as opener, mock.patch.object(update.time, 'sleep'):
             with self.assertRaises(ConnectionError):
                 update.prepare(self.index, self.digest, self.target, self.base/'offline')
-            self.assertEqual(opener.call_count, 3)
-        self.assertFalse(update._final_url(self.value['archive']['url'], 'https://evil.example/payload'))
+            self.assertEqual(opener.call_count, update.RETRIES)
+        # Hosts are transport only: any HTTPS mirror is fine, chunk SHA-256 authenticates the bytes.
+        self.assertTrue(update._final_url(self.value['archive']['url'], 'https://mirror.example/payload'))
+        self.assertFalse(update._final_url(self.value['archive']['url'], 'http://evil.example/payload'))
+        self.assertFalse(update._final_url(self.value['archive']['url'], 'https://user@evil.example/payload'))
         request = update.urllib.request.Request(self.value['archive']['url'])
         with self.assertRaises(ValueError):
-            update._Redirect().redirect_request(request, None, 302, '', {}, 'https://evil.example/payload')
+            update._Redirect().redirect_request(request, None, 302, '', {}, 'http://evil.example/payload')
 
     def test_safe_internal_stage_and_application_data_boundary(self):
         with mock.patch.object(update, '_open', side_effect=self.response):

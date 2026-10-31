@@ -2,7 +2,6 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import sys
@@ -23,14 +22,7 @@ CHUNK = 65536
 
 
 def archive_url(url, version):
-    expected = ('https://github.com/TheFactChain/pocket-windows/releases/download/v'
-                + version + '/Pocket-Windows-' + version + '-app.zip')
-    if url == expected:
-        return True
-    api = urllib.parse.urlsplit(os.environ.get('POCKET_WINDOWS_UPDATE_API', ''))
-    parsed = urllib.parse.urlsplit(url)
-    return (api.scheme == parsed.scheme == 'http' and api.hostname == parsed.hostname == '127.0.0.1'
-            and api.port == parsed.port and parsed.username is None and not parsed.fragment)
+    return release.asset_url(url)
 
 
 def read_index(path, digest):
@@ -107,9 +99,8 @@ def fetch_member(archive, entry, row, destination):
             with urllib.request.urlopen(request, timeout=30) as response:
                 final = urllib.parse.urlsplit(response.url)
                 original = urllib.parse.urlsplit(archive['url'])
-                secure_redirect = (final.scheme == 'https' and final.hostname in
-                                   ('github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com')
-                                   and final.username is None and final.port in (None, 443))
+                # Any HTTPS host: the member bytes are checked against the authenticated index below.
+                secure_redirect = final.scheme == 'https' and bool(final.hostname) and final.username is None
                 local_redirect = original.scheme == 'http' and final.scheme == 'http' and final.hostname == '127.0.0.1' and final.port == original.port
                 if (not (secure_redirect or local_redirect) or response.status != 206
                         or response.headers.get('Content-Range') != f'bytes {start}-{end}/{archive["bytes"]}'

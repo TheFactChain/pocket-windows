@@ -22,6 +22,7 @@ import uuid
 if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from runtime_config import QEMU
 from file_snapshot import locked_read, QEMU_IMG_SHA256
 import launch_runtime as runtime
 
@@ -118,7 +119,7 @@ def prepare_compact_windows(root, executor=None):
     root = root.absolute()
     executor = _execute if executor is None else executor
     source = root / 'images/workvm-empty.qcow2'
-    tool = root / 'runtime/qemu-11.1.0/qemu-img.exe'
+    tool = root / QEMU / 'qemu-img.exe'
     journal = None
     journal_path = None
 

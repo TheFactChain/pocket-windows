@@ -22,6 +22,7 @@ class GuiStartNativeTests(unittest.TestCase):
             (root / 'scripts').mkdir()
             shutil.copytree(ROOT / 'runtime/python-3.12.14', root / 'runtime/python-3.12.14')
             shutil.copyfile(ROOT / 'scripts/launch_runtime.py', root / 'scripts/runtime_probe.py')
+            shutil.copyfile(ROOT / 'scripts/runtime_config.py', root / 'scripts/runtime_config.py')
             release = root / 'release'
             script = """import argparse,json,os,sys,time
 from pathlib import Path

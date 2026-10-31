@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import QEMU
 from compact_windows import _plain, _validate_info
 from file_snapshot import QEMU_IMG_SHA256
 from runtime_config import load_settings
@@ -45,7 +46,7 @@ def arguments(project, master, settings):
     for name in ('Compact-Windows.ps1', 'RUN.CMD'):
         plain_path(media / name)
     escape = lambda path: str(path).replace('\\', '/').replace(',', ',,')
-    share = project / 'runtime/qemu-11.1.0/share'
+    share = project / QEMU / 'share'
     return ['-name', 'WindowsClaude-MAINTENANCE-COPY', '-machine', 'q35', '-accel', 'whpx',
             '-cpu', windows_hardware.CPU_MODEL, '-smp', str(settings['vcpus']),
             '-m', str(settings['work_memory_mib']), '-L', str(share),
@@ -63,7 +64,7 @@ def arguments(project, master, settings):
 
 
 def checked_disk(project, disk):
-    tool = plain_path(project / 'runtime/qemu-11.1.0/qemu-img.exe')
+    tool = plain_path(project / QEMU / 'qemu-img.exe')
     with tool.open('rb') as stream:
         if hashlib.file_digest(stream, 'sha256').hexdigest() != QEMU_IMG_SHA256:
             raise ValueError('qemu-img does not match the approved runtime')

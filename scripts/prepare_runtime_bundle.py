@@ -10,10 +10,11 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import zipfile
 
-QEMU = 'runtime/qemu-11.1.0'
-PYTHON = 'runtime/python-3.12.14'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import PYTHON, QEMU
 MANIFEST = 'runtime/components-manifest.json'
 RECOVERY = 'runtime/components-recovery.zip'
 # pc/q35, std VGA, explicit work UEFI, gateway direct Linux boot, e1000/virtio NICs.

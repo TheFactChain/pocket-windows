@@ -16,11 +16,12 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import QEMU
 import launch_runtime as runtime
 from file_snapshot import locked_read, QEMU_IMG_SHA256, remove_owned_file, qemu_path
 from gateway_profile import validate_session, endpoint_ipv4
 from connection_profile import validate_profile
-from profile_store import ProfileStore, _exclusive_file, _pinned_directory, _plain, _identifier, _unique_keys
+from profile_store import ProfileStore, _exclusive_file_wait, _pinned_directory, _plain, _identifier, _unique_keys
 from runtime_config import load_settings
 from runtime_logs import CappedWriter, start_capped_drain
 from session_carrier import create_carrier
@@ -30,6 +31,7 @@ START_TIMEOUT = 180
 HEALTH_TIMEOUT = 45
 SHUTDOWN_RETRY_INTERVAL = 5
 REFRESH_AFTER = 45
+GATEWAY_SHUTDOWN_TIMEOUT = runtime.GATEWAY_SHUTDOWN_TIMEOUT
 
 
 class SessionStatus:
@@ -196,7 +198,7 @@ def arguments(root, directory, media, settings):
         raise ValueError('A readonly private session carrier is required')
     return ['-name', 'WindowsClaude-gateway-boot', '-machine', 'q35', '-accel', 'whpx',
             '-cpu', 'Westmere', '-smp', str(settings['vcpus']), '-m', str(settings['gateway_memory_mib']),
-            '-L', 'runtime/qemu-11.1.0/share', '-display', 'none', '-vga', 'none', '-nic', 'none',
+            '-L', QEMU + '/share', '-display', 'none', '-vga', 'none', '-nic', 'none',
             '-monitor', 'none', '-parallel', 'none', '-qmp', 'stdio',
             '-chardev', 'ringbuf,id=wcserial,size=65536', '-serial', 'chardev:wcserial',
             '-drive', 'if=none,id=wcroot,format=qcow2,file=' + relative + '/gateway.qcow2',
@@ -248,21 +250,26 @@ class Qmp:
         self.command('qmp_capabilities')
 
     def _read(self):
-        for line in self.process.stdout:
-            try:
-                value = json.loads(line)
-            except ValueError:
-                continue
-            if 'event' in value:
-                if value['event'] in ('SHUTDOWN', 'RESET', 'SUSPEND', 'SUSPEND_DISK', 'RESUME'):
-                    event = {'event': value['event'], 'observed_utc': runtime.utc_now(),
-                             'data': {k: v for k, v in value.get('data', {}).items() if k in ('guest', 'reason')}}
-                    self.events.append(event)
-                    self.events[:] = self.events[-64:]
-                    runtime.atomic_json(self.directory / 'qmp-events.json', self.events)
-                continue
-            self.messages.put(value)
-        self.messages.put({'eof': True})
+        try:
+            for line in self.process.stdout:
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    continue
+                if 'event' in value:
+                    if value['event'] in ('SHUTDOWN', 'RESET', 'SUSPEND', 'SUSPEND_DISK', 'RESUME'):
+                        event = {'event': value['event'], 'observed_utc': runtime.utc_now(),
+                                 'data': {k: v for k, v in value.get('data', {}).items() if k in ('guest', 'reason')}}
+                        self.events.append(event)
+                        self.events[:] = self.events[-64:]
+                        try:
+                            runtime.atomic_json(self.directory / 'qmp-events.json', self.events)
+                        except OSError:
+                            pass  # the events file is diagnostic; losing a write must not stop the reader
+                    continue
+                self.messages.put(value)
+        finally:
+            self.messages.put({'eof': True})  # always wake command(), or every later call waits its full timeout
 
     def command(self, name, parameters=None):
         self.sequence += 1
@@ -321,7 +328,7 @@ def wait_failed_gateway_exit(process, qmp):
 
 
 def wait_requested_gateway_exit(process, qmp, report, save):
-    deadline = time.monotonic() + runtime.SHUTDOWN_TIMEOUT
+    deadline = time.monotonic() + GATEWAY_SHUTDOWN_TIMEOUT
     report.update(status='stopping', network_verified=False, shutdown_retry_count=0,
                   acpi_powerdown_requested_utc=runtime.utc_now())
     save()
@@ -357,7 +364,8 @@ def run(root, profile_id=None, test_only=False, *, store=None, stop_after_ready=
     report = {}
     with ExitStack() as held:
         held.enter_context(_pinned_directory(root / 'state'))
-        held.enter_context(_exclusive_file(root / 'state/gateway-controller.lock'))
+        # The previous controller may still be cleaning up after its QEMU exited.
+        held.enter_context(_exclusive_file_wait(root / 'state/gateway-controller.lock', 15))
         if runtime.engine_processes(root):
             raise RuntimeError('Stop the existing portable VMs before a new gateway session')
         package = held.enter_context(open_current(root))
@@ -602,15 +610,19 @@ def run(root, profile_id=None, test_only=False, *, store=None, stop_after_ready=
                             save()
                 finally:
                     if process is None or process.poll() is not None:
-                        if carrier is not None:
-                            carrier.cleanup(guest_stopped=True)
-                            report['carrier_removed'] = True
-                        remove_owned_file(disk, disk_identity)
-                        report['overlay_removed'] = True
-                        if process is None:
-                            report.update(status='exited')
-                            report.setdefault('error', 'GATEWAY_START_FAILED')
-                        save()
+                        try:  # a failing carrier cleanup must not leave the overlay and the final state behind
+                            if carrier is not None:
+                                carrier.cleanup(guest_stopped=True)
+                                report['carrier_removed'] = True
+                        finally:
+                            try:
+                                remove_owned_file(disk, disk_identity)
+                                report['overlay_removed'] = True
+                            finally:
+                                if process is None:
+                                    report.update(status='exited')
+                                    report.setdefault('error', 'GATEWAY_START_FAILED')
+                                save()
                 if (not report.get('refresh_requested') or report.get('stop_requested')
                         or report.get('guest_shutdown') is not True or report.get('exit_code') != 0
                         or report.get('error') or report.get('overlay_removed') is not True

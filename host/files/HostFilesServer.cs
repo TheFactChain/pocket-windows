@@ -101,11 +101,11 @@ internal sealed class HostFilesServer : IDisposable
             using(var random=RandomNumberGenerator.Create())
             {
                 byte[] bytes=new byte[2];
-                for(int attempt=0;attempt<8;attempt++)
+                for(int attempt=0;attempt<32;attempt++)
                 {
                     random.GetBytes(bytes);int port=49152+(BitConverter.ToUInt16(bytes,0)%16384);
                     try {result.server.Listen(port);result.Port=port;return result;}
-                    catch(SocketException error){if(error.SocketErrorCode!=SocketError.AddressAlreadyInUse)throw;}
+                    catch(SocketException error){if(error.SocketErrorCode!=SocketError.AddressAlreadyInUse&&error.SocketErrorCode!=SocketError.AccessDenied)throw;} // WinNAT/Hyper-V reserve ranges inside 49152-65535
                 }
             }
             throw new IOException("No session port available");

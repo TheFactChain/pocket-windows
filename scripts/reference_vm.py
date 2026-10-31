@@ -18,6 +18,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import QEMU
 import launch_runtime as runtime
 import windows_hardware
 import windows_guest_settings as windows_settings
@@ -31,8 +32,8 @@ from runtime_logs import CappedWriter, start_capped_drain
 ENGINE_SHA256 = '93b16a220fdc7b6125ecd63758fa8cd45f0ec8329359ad27aa796325445f7738'
 SOURCE = 'images/workvm-empty.qcow2'
 VARS = 'state/workvm-vars.fd'
-CODE = 'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd'
-TOOL = 'runtime/qemu-11.1.0/qemu-img.exe'
+CODE = QEMU + '/share/edk2-x86_64-code.fd'
+TOOL = QEMU + '/qemu-img.exe'
 PUBLIC_FILES = ('Collect-ReferenceInventory.ps1', 'Run-Inventory.cmd', 'README.md', 'handoff.json')
 
 
@@ -86,7 +87,7 @@ def arguments(operation, reference_id, settings, gateway=False, template_nonce=N
     handoff = 'template-handoff' if template_nonce else 'handoff'
     result = ['-name', 'WindowsClaude-Reference', '-machine', 'q35', '-accel', 'whpx',
             '-cpu', windows_hardware.CPU_MODEL, '-smp', str(settings['vcpus']), '-m', str(settings['work_memory_mib']),
-            '-L', 'runtime/qemu-11.1.0/share', '-nic', 'none', '-display', 'sdl,gl=off',
+            '-L', QEMU + '/share', '-nic', 'none', '-display', 'sdl,gl=off',
             '-vga', 'std', '-serial', 'none',
             '-chardev', 'ringbuf,id=wcrefreturn,size=16777216', '-serial', 'chardev:wcrefreturn',
             '-parallel', 'none', '-monitor', 'none', '-qmp', 'stdio', '-S', '-no-reboot',

@@ -106,7 +106,7 @@ class DownloadTests(unittest.TestCase):
         for change in ('path','url','overlap','boolean'):
             previous=json.loads(json.dumps(self.index))
             if change=='path':self.index['files'][0]['path']='../private.txt'
-            elif change=='url':self.index['archive']['url']='https://example.com/app.zip'
+            elif change=='url':self.index['archive']['url']='http://example.com/app.zip'
             elif change=='overlap':self.index['files'][1]['offset']=self.index['files'][0]['offset']
             else:self.index['files'][0]['offset']=True
             self.save_index()

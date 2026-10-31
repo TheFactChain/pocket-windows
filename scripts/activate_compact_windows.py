@@ -15,6 +15,7 @@ if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import compact_windows as compact
+from runtime_config import QEMU
 from file_snapshot import locked_read
 from profile_store import _pinned_directory, _plain
 import launch_runtime as runtime
@@ -150,7 +151,7 @@ def _validate_evidence(root, operation, prepared, boot):
     if type(virtual) is not int or virtual <= 0 or identity.get('virtual_size') != virtual:
         raise ValueError('Candidate virtual size mismatch')
     compact_id = _expected({key: value for key, value in identity.items() if key != 'virtual_size'})
-    tool = root / 'runtime/qemu-11.1.0/qemu-img.exe'
+    tool = root / QEMU / 'qemu-img.exe'
     commands = prepared.get('commands')
     if not isinstance(commands, list):
         raise ValueError('Missing check and compare evidence')

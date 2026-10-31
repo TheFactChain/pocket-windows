@@ -424,7 +424,8 @@ namespace WindowsClaude.Launcher
                 if (!Flag(Child(readinessReport, "capabilities"), "recover_session"))
                 {
                     StatusText.Text = "Действие не завершено";
-                    NextStepText.Text = "Повтори проверку. Подробности ошибки в разделе «Проверка».";
+                    string detail = Friendly(completed); // keep the specific cause (for example a rejected connection) from the action result
+                    NextStepText.Text = detail.Length > 0 ? detail : "Повтори проверку. Подробности ошибки в разделе «Проверка».";
                     Show(NextActionButton, !stopAvailable);
                 }
             }
@@ -673,14 +674,15 @@ namespace WindowsClaude.Launcher
                 runtimeActive = ActiveVmState(workState) || ActiveVmState(gatewayState);
                 var connection = Child(result, "connection");
                 var selected = Child(connection, "selected_profile");
+                string lastFailure = Text(startup, "gateway_error_message", "");
                 if (selected == null) { ConnectionValue.Text = "Добавить подключение"; ConnectionDetail.Text = "Вставь ссылку от своего Proxy или купи ниже"; ProxyPrice.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0.55, TimeSpan.FromSeconds(1.6)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } }); }
                 else
                 {
                     string protocol = Text(selected, "protocol", ""); protocol = protocol == "hysteria2" ? "Hysteria2" : protocol.ToUpperInvariant();
                     ConnectionValue.Text = Text(selected, "name", "Профиль");
-                    ConnectionDetail.Text = protocol + ", " + (Flag(selected, "needs_correction") ? "нужно исправить адрес" : Flag(selected, "needs_credentials") ? "нужно ввести пароль заново" : Flag(connection, "verified") ? "подключено и проверено" : "проверится при запуске")
+                    ConnectionDetail.Text = protocol + ", " + (Flag(selected, "needs_correction") ? "нужно исправить адрес" : Flag(selected, "needs_credentials") ? "нужно ввести пароль заново" : Flag(connection, "verified") ? "подключено и проверено" : lastFailure.Length > 0 ? "последний запуск не удался" : "проверится при запуске")
                         + Environment.NewLine + (Text(selected, "protocol", "") == "hysteria2" ? "TCP и UDP. Интернет: только IPv4." : "Только TCP. Интернет: только IPv4.");
-                    ConnectionDetail.ToolTip = "Внешний IPv6 недоступен. Локальная сеть Windows сохраняет IPv6. Для программ с UDP выбери Hysteria2.";
+                    ConnectionDetail.ToolTip = (lastFailure.Length > 0 && !Flag(connection, "verified") ? lastFailure + Environment.NewLine : "") + "Внешний IPv6 недоступен. Локальная сеть Windows сохраняет IPv6. Для программ с UDP выбери Hysteria2.";
                     ProxyPrice.BeginAnimation(OpacityProperty, null); ProxyPrice.Opacity = 1;
                 }
             }

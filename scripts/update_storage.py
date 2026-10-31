@@ -6,6 +6,7 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import PYTHON
 import app_update_v2 as update
 import release_portable as release
 from file_snapshot import locked_read, remove_owned_file
@@ -330,8 +331,8 @@ def _ephemeral(root):
             if type(row) is not dict or set(row) != {'path', 'bytes', 'sha256'} or not release.pack.safe_name(row['path']):
                 raise ValueError('Invalid toolkit source inventory')
             name = row['path']
-            if name.startswith('runtime/python-3.12.14/'):
-                name = 'py/' + name[len('runtime/python-3.12.14/'):]
+            if name.startswith(PYTHON + '/'):
+                name = 'py/' + name[len(PYTHON + '/'):]
             if name in mapped or expected.get(name) != dict(row, path=name):
                 raise ValueError('Toolkit sources differ from file inventory')
             mapped.add(name)

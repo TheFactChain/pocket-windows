@@ -21,7 +21,7 @@ class ControllerSafety(unittest.TestCase):
         with mock.patch.object(Path, 'exists', return_value=True):
             root = Path('fixture-maintenance-root').resolve()
             for guest in ('work-install', 'work-resume', 'work-boot'):
-                scope = {'work': True, 'root': root, 'arguments': [],
+                scope = {'work': True, 'root': root, 'arguments': [], 'QEMU': 'runtime/qemu-11.1.0',
                          'args': SimpleNamespace(guest=guest), 'install': guest == 'work-install',
                          'windows_hardware': SimpleNamespace(arguments=lambda: []),
                          'sha': lambda path: ('cad59a1a6303b8a89ac18f9353e1cff44212f5836c83473a345dfe7e199d7743'

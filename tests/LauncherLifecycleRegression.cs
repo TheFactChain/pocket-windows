@@ -17,6 +17,7 @@ namespace WindowsClaude.Launcher { public partial class App : Application { inte
 internal static class Bridge
 {
     internal static string Root { get { return AppDomain.CurrentDomain.BaseDirectory; } }
+    internal const string PythonDir = "runtime\\python-3.12.14";
     internal static readonly List<string> Calls = new List<string>();
     internal static Func<string, object, Task<Dictionary<string, object>>> Handler;
     internal static Task<Dictionary<string, object>> RunAsync(string root, string action, object payload)

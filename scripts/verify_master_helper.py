@@ -18,6 +18,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import QEMU
 import launch_runtime as runtime
 import run_compact_vm as compact
 import windows_guest_settings as display
@@ -82,7 +83,7 @@ def boot(project, operation, settings, helper_bytes, index, idle, shutdown_timeo
     display.write_settings(settings_folder, settings, nonce)
     medium = Medium({'schema': 1, 'session_nonce': nonce, 'username': 'WCP_test',
                      'password': secrets.token_urlsafe(32), 'shares': []}, helper_bytes)
-    engine = project / 'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
+    engine = project / QEMU / 'qemu-system-x86_64.exe'
     result = {'boot': index, 'requested': settings, 'network': 'none', 'display_receipt': None, 'shutdown_confirmed': False}
     process = None
     try:
@@ -145,7 +146,7 @@ def main(argv=None):
     helper_bytes = (project / 'runtime/host-files/HostFilesGuest.exe').read_bytes()
     if hashlib.sha256(helper_bytes).hexdigest() != args.helper_sha256.lower():
         raise ValueError('The helper in the runtime is not the one installed in the master')
-    engine = project / 'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
+    engine = project / QEMU / 'qemu-system-x86_64.exe'
     with engine.open('rb') as stream:
         if hashlib.file_digest(stream, 'sha256').hexdigest() != compact.ENGINE_SHA256:
             raise ValueError('Unexpected QEMU engine')
@@ -153,7 +154,7 @@ def main(argv=None):
     base_vars = args.master / 'vars.fd' if args.master else project / 'state/workvm-vars.fd'
     operation.mkdir(parents=True)
     disk, firmware = operation / 'verification.qcow2', operation / 'verification-vars.fd'
-    subprocess.run([str(project / 'runtime/qemu-11.1.0/qemu-img.exe'), 'create', '-f', 'qcow2', '-F', 'qcow2', '-b',
+    subprocess.run([str(project / QEMU / 'qemu-img.exe'), 'create', '-f', 'qcow2', '-F', 'qcow2', '-b',
                     compact.qemu_path(base_disk), compact.qemu_path(disk)],
                    check=True, creationflags=subprocess.CREATE_NO_WINDOW, stdout=subprocess.DEVNULL)
     shutil.copyfile(base_vars, firmware)

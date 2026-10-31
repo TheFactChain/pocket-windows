@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 sys.path.insert(0,str(Path(__file__).resolve().parent))
+from runtime_config import QEMU
 from runtime_network_plan import arguments as network_arguments
 from collections import deque
 from runtime_logs import start_capped_drain, CappedWriter
@@ -63,7 +64,7 @@ root=Path(args.project).resolve(strict=True)
 settings=load_settings(root)
 if args.guest != 'work-boot':
     assert ctypes.windll.shell32.IsUserAnAdmin(), 'Use the authorized administrator CLI; no automatic elevation.'
-engine=root/'runtime/qemu-11.1.0/qemu-system-x86_64.exe'
+engine=root/ QEMU / 'qemu-system-x86_64.exe'
 assert sha(engine)==ENGINE_SHA256
 work=args.guest.startswith('work-')
 install=args.guest.endswith('-install')
@@ -78,14 +79,14 @@ if install:
 stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
 output=root/'logs'/('guest-'+args.guest+'-'+stamp)
 output.mkdir(parents=True,exist_ok=False)
-arguments=['-name','WindowsClaude-'+args.guest,'-machine','q35' if work else 'pc','-accel','whpx','-cpu',windows_hardware.CPU_MODEL if work else 'Westmere','-smp',str(settings['vcpus']),'-m',str(settings['work_memory_mib'] if work else settings['gateway_memory_mib']),'-L','runtime/qemu-11.1.0/share','-nic','none','-display','sdl,gl=off','-vga','std','-serial','none','-parallel','none','-monitor','none','-qmp','stdio']
+arguments=['-name','WindowsClaude-'+args.guest,'-machine','q35' if work else 'pc','-accel','whpx','-cpu',windows_hardware.CPU_MODEL if work else 'Westmere','-smp',str(settings['vcpus']),'-m',str(settings['work_memory_mib'] if work else settings['gateway_memory_mib']),'-L',QEMU + '/share','-nic','none','-display','sdl,gl=off','-vga','std','-serial','none','-parallel','none','-monitor','none','-qmp','stdio']
 if work:
     arguments += windows_hardware.arguments()
     firmware=root/'state/workvm-vars.fd'
     if not firmware.exists():
-        original=root/'runtime/qemu-11.1.0/share/edk2-i386-vars.fd'
+        original=root/ QEMU / 'share/edk2-i386-vars.fd'
         with firmware.open('xb') as file:file.write(original.read_bytes())
-    arguments+=['-drive','if=pflash,unit=0,format=raw,readonly=on,file=runtime/qemu-11.1.0/share/edk2-x86_64-code.fd','-drive','if=pflash,unit=1,format=raw,file=state/workvm-vars.fd','-drive','if=ide,index=0,format=qcow2,discard=unmap,file=images/workvm-empty.qcow2']
+    arguments+=['-drive','if=pflash,unit=0,format=raw,readonly=on,file=' + QEMU + '/share/edk2-x86_64-code.fd','-drive','if=pflash,unit=1,format=raw,file=state/workvm-vars.fd','-drive','if=ide,index=0,format=qcow2,discard=unmap,file=images/workvm-empty.qcow2']
     if install or args.guest=='work-resume':
         iso=root/'build/tiny11-normal-26300.9457-ru-RU-20261019T223332091Z/tiny11-packonly-20261019T231246022Z.iso'
         assert sha(iso)=='cad59a1a6303b8a89ac18f9353e1cff44212f5836c83473a345dfe7e199d7743'
@@ -245,23 +246,25 @@ def save():
     print(json.dumps({'state':str(output/'state.json'),'pid':process.pid,'status':report['status']}),flush=True)
 controls=queue.Queue()
 def read_qmp():
-    for line in process.stdout:
-        try:
-            message=json.loads(line)
-            if 'event' in message:
-                allowed={'reason','device','node-name','operation','action','nospace','error','guest'}
-                event={'observed_utc':datetime.now(timezone.utc).isoformat(),'event':message['event'],'data':{k:v for k,v in message.get('data',{}).items() if k in allowed}}
-                if work_reboot_session:
-                    event['generation']=report['generation']
-                event['data']={key: value[:512] if isinstance(value,str) else value for key,value in event['data'].items()}
-                qmp_events.append(event)
-                runtime.atomic_json(output/'qmp-events.json', list(qmp_events))
-                if normal_runtime and message['event'] == 'SHUTDOWN':
-                    clear_work_taskbar()
-            else:
-                inbox.put(message)
-        except ValueError:pass
-    inbox.put({'eof':True})
+    try:
+        for line in process.stdout:
+            try:
+                message=json.loads(line)
+                if 'event' in message:
+                    allowed={'reason','device','node-name','operation','action','nospace','error','guest'}
+                    event={'observed_utc':datetime.now(timezone.utc).isoformat(),'event':message['event'],'data':{k:v for k,v in message.get('data',{}).items() if k in allowed}}
+                    if work_reboot_session:
+                        event['generation']=report['generation']
+                    event['data']={key: value[:512] if isinstance(value,str) else value for key,value in event['data'].items()}
+                    qmp_events.append(event)
+                    runtime.atomic_json(output/'qmp-events.json', list(qmp_events))
+                    if normal_runtime and message['event'] == 'SHUTDOWN':
+                        clear_work_taskbar()
+                else:
+                    inbox.put(message)
+            except Exception:pass # one bad line or failed side effect must not stop the reader
+    finally:
+        inbox.put({'eof':True}) # always wake command(), or every later call waits its full timeout
 def read_controls():
     for line in sys.stdin:
         try:controls.put(json.loads(line))

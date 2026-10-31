@@ -29,7 +29,7 @@ class ForceStopTests(unittest.TestCase):
                       'started_utc':datetime.fromtimestamp(self.process['created_filetime']/10000000-runtime.FILETIME_EPOCH+.2, timezone.utc).isoformat(),
                       'arguments':['-drive','if=ide,format=qcow2,file=images/workvm-empty.qcow2'],
                       'stop_requested':True,
-                      'acpi_powerdown_requested_utc':(datetime.now(timezone.utc)-timedelta(seconds=130)).isoformat()}
+                      'acpi_powerdown_requested_utc':(datetime.now(timezone.utc)-timedelta(seconds=runtime.SHUTDOWN_TIMEOUT+10)).isoformat()}
         self.save()
         self.identities = {101:self.process, 201:self.controller}
         self.kernel = mock.Mock()

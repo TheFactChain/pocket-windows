@@ -9,6 +9,7 @@ import sys
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_config import PYTHON
 import pack_existing_runtime as pack
 from file_snapshot import locked_read
 from profile_store import _plain, _pinned_directory
@@ -86,11 +87,11 @@ def validate_host_build(source, component_directory=None):
 
 
 def _runtime_members(source):
-    root = source / 'runtime/python-3.12.14'
-    members = [('py/' + name, 'runtime/python-3.12.14/' + name) for name in PYTHON_ROOT_FILES]
+    root = source / PYTHON
+    members = [('py/' + name, PYTHON + '/' + name) for name in PYTHON_ROOT_FILES]
     for name in ('LICENSE.txt', 'NOTICE.txt'):
         if (root / name).exists():
-            members.append(('py/' + name, 'runtime/python-3.12.14/' + name))
+            members.append(('py/' + name, PYTHON + '/' + name))
     for folder in ('Lib', 'DLLs'):
         base = root / folder
         _plain(base)
@@ -105,7 +106,7 @@ def _runtime_members(source):
                 if folder == 'DLLs' and (path.suffix.lower() not in ('.dll', '.pyd') or name.startswith(('_test', '_ctypes_test', '_tkinter', 'tcl', 'tk'))):
                     continue
                 relative = path.relative_to(root).as_posix()
-                members.append(('py/' + relative, 'runtime/python-3.12.14/' + relative))
+                members.append(('py/' + relative, PYTHON + '/' + relative))
     return members
 
 

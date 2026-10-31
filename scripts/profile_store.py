@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 import uuid
 
 from connection_profile import validate_profile
@@ -73,6 +74,22 @@ def _exclusive_file(path, create=True):
         yield handle
     finally:
         kernel.CloseHandle(handle)
+
+
+@contextmanager
+def _exclusive_file_wait(path, seconds, create=True):
+    """Like _exclusive_file, but a briefly held lock (a previous owner still cleaning up) is waited out."""
+    deadline = time.monotonic() + seconds
+    with ExitStack() as stack:
+        while True:
+            try:
+                handle = stack.enter_context(_exclusive_file(path, create))
+                break
+            except StoreBusy:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(.1)
+        yield handle
 
 
 @contextmanager
@@ -181,7 +198,7 @@ class ProfileStore:
     @contextmanager
     def _transaction(self):
         try:
-            with _pinned_directory(self.directory), _exclusive_file(self.directory / 'profiles.lock'):
+            with _pinned_directory(self.directory), _exclusive_file_wait(self.directory / 'profiles.lock', 3):
                 yield
         except OSError:
             raise StoreError('Profile storage is unavailable; check the directory and permissions') from None

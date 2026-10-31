@@ -1,5 +1,12 @@
 """Non-secret host-independent runtime settings; profile/VPS data belongs elsewhere."""
 import json
+import os
+from pathlib import Path
+
+# The one place that names the bundled runtime versions (the launcher's Bridge.PythonDir mirrors PYTHON).
+PYTHON = 'runtime/python-3.12.14'
+QEMU = 'runtime/qemu-11.1.0'
+POWERSHELL = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
 
 DEFAULTS = {'schema': 1, 'work_memory_mib': 4096, 'gateway_memory_mib': 1024,
             'vcpus': 2, 'lan_port': 31861}

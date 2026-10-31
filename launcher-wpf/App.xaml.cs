@@ -23,7 +23,8 @@ namespace WindowsClaude.Launcher
                 if (args.Length > 0 && args[0] == "--update-probe")
                 {
                     if (args.Length != 2) return 1;
-                    var deadline = DateTime.UtcNow.AddSeconds(5);
+                    // The installer records this PID only after the process starts; a cold start with antivirus scanning can exceed a few seconds.
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
                     while (!AppUpdate.ValidProbe(Bridge.Root, args[1]))
                     {
                         if (DateTime.UtcNow >= deadline) return 1;

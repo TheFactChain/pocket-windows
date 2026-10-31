@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "release_base": "https://github.com/TheFactChain/pocket-windows/releases/download/v{release_id}/",
+  "feeds": [
+    "https://github.com/TheFactChain/pocket-windows/releases/latest/download/update-manifest.json",
+    "https://188.130.234.243:8443/pocket-windows/update-manifest.json"
+  ],
+  "keys": [
+    "RUNTMSAAAADdjP9TMHcJC1yzo+EMu+3h5v1DoWszB9oUdg5Q0Ia7oovhxPD7lBXBtq+AV8kRzLUmALZKv/5pmGAyVC2eetVx",
+    "RUNTMSAAAAAc7ESHeltKr8P7wsTW09Sxg3BQTxKFbQyLR3tiNeM4Yn737ZdvxAjyEpl15JAt1aN28RNYsH8fOh6f3pUZRalx"
+  ],
+  "signing_key": "PocketWindowsUpdate-A"
+}

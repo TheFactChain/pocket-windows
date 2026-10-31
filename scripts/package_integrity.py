@@ -7,15 +7,16 @@ from pathlib import Path
 import re
 import stat
 
+from runtime_config import PYTHON, QEMU
 from file_snapshot import locked_read
 from profile_store import ProfileStore, _plain, _pinned_directory
 import pack_existing_runtime as pack
 import launch_runtime as runtime
 
 MARKER = 'state/package-initial-check.json'
-RUNTIME_FILES = ('runtime/python-3.12.14/python.exe',
-    'runtime/qemu-11.1.0/qemu-system-x86_64.exe', 'runtime/qemu-11.1.0/qemu-img.exe',
-    'runtime/qemu-11.1.0/share/edk2-x86_64-code.fd')
+RUNTIME_FILES = (PYTHON + '/python.exe',
+    QEMU + '/qemu-system-x86_64.exe', QEMU + '/qemu-img.exe',
+    QEMU + '/share/edk2-x86_64-code.fd')
 # The schema-2 baseline is immutable; future APP_FILES additions belong to the update inventory.
 SCHEMA2_APPS = tuple('scripts/' + name for name in (
     'portable_app.py', 'package_integrity.py', 'pack_existing_runtime.py', 'launch_runtime.py', 'control_guest_install.py',
