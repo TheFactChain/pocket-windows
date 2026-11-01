@@ -207,34 +207,29 @@
                         <StackPanel x:Name="SettingsBody" IsEnabled="False">
                             <Border x:Name="SettingsGroup" Style="{StaticResource GroupBox}" Margin="0,0,0,8">
                                 <StackPanel>
-                                    <!-- Memory and processors: two labelled numbers side by side -->
-                                    <Grid Margin="16,7,16,7">
-                                        <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="1" /><ColumnDefinition /></Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                        <TextBlock Text="Память" Style="{StaticResource RowText}" HorizontalAlignment="Center" Margin="0,0,0,3" />
-                                        <Border Background="{StaticResource Page}" CornerRadius="10" Padding="2" HorizontalAlignment="Center">
+                                    <DockPanel Margin="16,0" MinHeight="39">
+                                        <Border Width="30" Height="30" CornerRadius="9" Background="#34C759" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Ram20" FontSize="17" Foreground="White" /></Border>
+                                        <Border DockPanel.Dock="Right" Background="{StaticResource Page}" CornerRadius="10" Padding="2" VerticalAlignment="Center">
                                             <StackPanel Orientation="Horizontal">
                                                 <Button Style="{StaticResource Step}" Click="OnMemoryDown" ToolTip="Меньше на 0,5 ГБ" AutomationProperties.Name="Память меньше"><ui:SymbolIcon Symbol="Subtract16" FontSize="14" Foreground="#3390EC" /></Button>
-                                                <TextBox x:Name="MemoryInput" Style="{StaticResource Number}" Width="44" TextChanged="OnSettingChanged" LostKeyboardFocus="OnSettingEdited" KeyDown="OnNumberKey" AutomationProperties.Name="Память" />
-                                                <TextBlock Text="ГБ" Margin="0,0,4,0" VerticalAlignment="Center" FontSize="13" Foreground="#8A8A8E" />
+                                                <TextBox x:Name="MemoryInput" Style="{StaticResource Number}" TextChanged="OnSettingChanged" LostKeyboardFocus="OnSettingEdited" KeyDown="OnNumberKey" AutomationProperties.Name="Память, ГБ" />
                                                 <Button Style="{StaticResource Step}" Click="OnMemoryUp" ToolTip="Больше на 0,5 ГБ" AutomationProperties.Name="Память больше"><ui:SymbolIcon Symbol="Add16" FontSize="14" Foreground="#3390EC" /></Button>
                                             </StackPanel>
                                         </Border>
-                                    </StackPanel>
-                                        <Border Grid.Column="1" Margin="0,4" Background="#E5E5EA" />
-                                    <StackPanel Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                        <TextBlock Text="Процессоры" Style="{StaticResource RowText}" HorizontalAlignment="Center" Margin="0,0,0,3" />
-                                        <Border Background="{StaticResource Page}" CornerRadius="10" Padding="2" HorizontalAlignment="Center">
+                                        <TextBlock Text="Память, ГБ" Style="{StaticResource RowText}" VerticalAlignment="Center" />
+                                    </DockPanel>
+                                    <DockPanel Margin="16,0" MinHeight="39">
+                                        <Border Width="30" Height="30" CornerRadius="9" Background="#FF9500" Margin="0,0,14,0"><ui:SymbolIcon Symbol="DeveloperBoard20" FontSize="17" Foreground="White" /></Border>
+                                        <Border DockPanel.Dock="Right" Background="{StaticResource Page}" CornerRadius="10" Padding="2" VerticalAlignment="Center">
                                             <StackPanel Orientation="Horizontal">
                                                 <Button Style="{StaticResource Step}" Click="OnCpuDown" AutomationProperties.Name="Процессоров меньше"><ui:SymbolIcon Symbol="Subtract16" FontSize="14" Foreground="#3390EC" /></Button>
-                                                <TextBox x:Name="CpuInput" Style="{StaticResource Number}" Width="44" TextChanged="OnSettingChanged" LostKeyboardFocus="OnSettingEdited" KeyDown="OnNumberKey" AutomationProperties.Name="Процессоры" />
+                                                <TextBox x:Name="CpuInput" Style="{StaticResource Number}" TextChanged="OnSettingChanged" LostKeyboardFocus="OnSettingEdited" KeyDown="OnNumberKey" AutomationProperties.Name="Процессоры" />
                                                 <Button Style="{StaticResource Step}" Click="OnCpuUp" AutomationProperties.Name="Процессоров больше"><ui:SymbolIcon Symbol="Add16" FontSize="14" Foreground="#3390EC" /></Button>
                                             </StackPanel>
                                         </Border>
-                                    </StackPanel>
-                                    </Grid>
-                                    <Border Style="{StaticResource Separator}" />
-                                    <DockPanel Margin="16,0" MinHeight="40">
+                                        <TextBlock Text="Процессоры" Style="{StaticResource RowText}" VerticalAlignment="Center" />
+                                    </DockPanel>
+                                    <DockPanel Margin="16,0" MinHeight="39">
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#5856D6" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Desktop24" FontSize="17" Foreground="White" /></Border>
                                         <ComboBox x:Name="ResolutionBox" Visibility="Collapsed" SelectionChanged="OnSettingChanged" />
                                         <Border DockPanel.Dock="Right" Background="{StaticResource Page}" CornerRadius="10" Padding="2" VerticalAlignment="Center">
@@ -246,8 +241,7 @@
                                         </Border>
                                         <TextBlock Text="Разрешение" Style="{StaticResource RowText}" />
                                     </DockPanel>
-                                    <Border Style="{StaticResource Separator}" />
-                                    <DockPanel Margin="16,0" MinHeight="40">
+                                    <DockPanel Margin="16,0" MinHeight="39">
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#AF52DE" Margin="0,0,14,0"><ui:SymbolIcon Symbol="FullScreenMaximize24" FontSize="17" Foreground="White" /></Border>
                                         <ui:ToggleSwitch x:Name="FullscreenSwitch" DockPanel.Dock="Right" Click="OnSettingChanged" />
                                         <TextBlock Text="Открывать на весь экран" Style="{StaticResource RowText}" />
@@ -256,7 +250,7 @@
                             </Border>
                             <Border Style="{StaticResource GroupBox}" Margin="0,0,0,2">
                                 <StackPanel>
-                                    <DockPanel Margin="16,0" MinHeight="40">
+                                    <DockPanel Margin="16,0" MinHeight="39">
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#34C759" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Clipboard24" FontSize="17" Foreground="White" /></Border>
                                         <ui:ToggleSwitch x:Name="ClipboardSwitch" DockPanel.Dock="Right" Click="OnSettingChanged" />
                                         <StackPanel VerticalAlignment="Center">
@@ -264,8 +258,7 @@
                                             <TextBlock x:Name="ClipboardDetail" Style="{StaticResource Caption}" MaxWidth="330" Visibility="Collapsed" />
                                         </StackPanel>
                                     </DockPanel>
-                                    <Border Style="{StaticResource Separator}" />
-                                    <DockPanel Margin="16,0" MinHeight="40">
+                                    <DockPanel Margin="16,0" MinHeight="39">
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#FFCC00" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Folder24" FontSize="17" Foreground="White" /></Border>
                                         <ui:ToggleSwitch x:Name="FilesSwitch" DockPanel.Dock="Right" Click="OnFilesSwitch" />
                                         <Button x:Name="FilesChoiceButton" DockPanel.Dock="Right" Style="{StaticResource TextAction}" Content="Выбрать" Click="OnFilesChoice" Margin="0,0,6,0" VerticalAlignment="Center" />
@@ -274,8 +267,7 @@
                                             <TextBlock x:Name="FilesDetail" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                     </DockPanel>
-                                    <Border Style="{StaticResource Separator}" />
-                                    <DockPanel Margin="16,0" MinHeight="40">
+                                    <DockPanel Margin="16,0" MinHeight="39">
                                         <Border Width="30" Height="30" CornerRadius="9" Background="#3390EC" Margin="0,0,14,0"><ui:SymbolIcon Symbol="Globe24" FontSize="17" Foreground="White" /></Border>
                                         <ui:ToggleSwitch x:Name="DirectRuSwitch" DockPanel.Dock="Right" Click="OnSettingChanged" AutomationProperties.Name="Российские сайты напрямую" />
                                         <StackPanel VerticalAlignment="Center">
