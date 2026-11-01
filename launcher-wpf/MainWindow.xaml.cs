@@ -905,7 +905,7 @@ namespace WindowsClaude.Launcher
             if (!settingsDirty)
             {
                 SettingsNote.Foreground = Grey;
-                SettingsNote.Text = runtimeActive ? "Настройки можно менять, когда Windows выключена." : "Сохраняется само, применится при следующем запуске.";
+                SettingsNote.Text = runtimeActive ? "Настройки можно менять, когда Windows выключена." : "";
             }
         }
 
@@ -1000,7 +1000,7 @@ namespace WindowsClaude.Launcher
         const string ContactUrl = "https://t.me/Daniil_Simples";
         
         void OnBuyProxy(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Proxy за 900 ₽"); }
-        void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Claude Pro за 2 000 ₽"); }
+        void OnClaude(object sender, RoutedEventArgs e) { OpenContact("Хочу купить Claude Pro за 2 100 ₽"); }
         // t.me opens the chat with the message already typed in; a bot takes the same idea as ?start=<code>.
         // Every 5 seconds the shop group lifts by a pixel or two, barely there, so it only seems to have moved; it never grows, because the page clips at its edge.
         void StartShopNudge()
@@ -1428,7 +1428,7 @@ namespace WindowsClaude.Launcher
         {
             bool on = FilesSwitch.IsChecked == true;
             Show(FoldersRow, on); Show(FilesChoiceButton, on); Show(FolderPanel, FilesSelected.IsChecked == true); Show(AddFolderButton, FilesSelected.IsChecked == true);
-            FilesDetail.Text = !on ? "Выключено" : FilesSelected.IsChecked == true ? (folders.Count == 0 ? "Добавь папку" : "Папок: " + folders.Count) : "Все диски ПК";
+            FilesDetail.Text = !on ? "Windows не видит файлы ПК" : FilesSelected.IsChecked == true ? (folders.Count == 0 ? "Добавь папку" : "Папки ПК в Проводнике: " + folders.Count) : "Диски ПК в Проводнике Windows";
             FolderPanel.Children.Clear();
             foreach (string folder in folders)
             {
@@ -1459,7 +1459,7 @@ namespace WindowsClaude.Launcher
             UpdateFilesRows(); ScheduleSave();
         }
         void OnFilesMode(object sender, RoutedEventArgs e) { UpdateFilesRows(); ScheduleSave(); }
-        void OnFilesChoice(object sender, RoutedEventArgs e) { OpenSheet("Файлы ПК в Windows", FilesSheet); }
+        void OnFilesChoice(object sender, RoutedEventArgs e) { OpenSheet("Доступ к файлам ПК", FilesSheet); }
         void OnAddFolder(object sender, RoutedEventArgs e)
         {
             using (var dialog = new Forms.FolderBrowserDialog { Description = "Папка ПК, которая будет видна в Windows" })
@@ -1542,7 +1542,7 @@ namespace WindowsClaude.Launcher
                     SetOperation("");
                     var check = await Run("diagnose", null);
                     if (!closing) Display(check);
-                    if (!settingsDirty) SettingsNote.Text = "Сохранено. Применится при следующем запуске.";
+                    if (!settingsDirty) SettingsNote.Text = "";
                 }
                 else { SettingsNote.Text = Bridge.Message(completed); SettingsNote.Foreground = Red; SetOperation(Bridge.Message(completed)); if (Flag(completed, "outcome_unknown")) TrackUnknownOutcome(completed); }
                 return Bridge.Ok(completed);

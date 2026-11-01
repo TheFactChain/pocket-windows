@@ -140,7 +140,7 @@ internal static class LauncherLifecycleRegression
             settingsRoot.Measure(new Size(744, 418)); settingsRoot.Arrange(new Rect(0, 0, 744, 418)); settingsRoot.UpdateLayout();
             var pane = (FrameworkElement)Field(window, "SettingsPane");
             Func<string, Rect> boundsOf = name => { var part = (FrameworkElement)Field(window, name); return part.TransformToAncestor(pane).TransformBounds(new Rect(part.RenderSize)); };
-            Assert(boundsOf("SettingsNote").Bottom <= boundsOf("KeysButton").Top + 1, "Settings page fits without scrolling: note ends at " + boundsOf("SettingsNote").Bottom + ", bottom actions start at " + boundsOf("KeysButton").Top);
+            Assert(boundsOf("SettingsBody").Bottom <= boundsOf("KeysButton").Top + 1, "Settings page fits without scrolling: settings end at " + boundsOf("SettingsBody").Bottom + ", bottom actions start at " + boundsOf("KeysButton").Top);
             Assert(((FrameworkElement)Field(window, "FilesChoiceButton")).IsVisible, "Folder choice opens from the files row");
             Call(window, "OnFilesChoice", null, new RoutedEventArgs());
             Assert(((FrameworkElement)Field(window, "FilesSheet")).Visibility == Visibility.Visible && ((Panel)Field(window, "FolderPanel")).Children.Count == 3, "The folder sheet lists every chosen folder");
