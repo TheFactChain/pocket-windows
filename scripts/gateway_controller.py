@@ -130,7 +130,7 @@ def resolve_endpoint(profile, pending=None):
     raise ValueError('Connection hostname has no supported IPv4 address')
 
 
-def make_session(store, version, profile_id=None, *, draft=None, held=None, lookup=None):
+def make_session(store, version, profile_id=None, *, draft=None, held=None, lookup=None, direct_ru=False):
     if draft is not None:
         if profile_id is not None:
             raise ValueError('A draft cannot select a stored profile')
@@ -147,7 +147,9 @@ def make_session(store, version, profile_id=None, *, draft=None, held=None, look
     endpoint = resolve_endpoint(profile, lookup)
     return selected, validate_session({
         'schema': 1, 'nonce': uuid.uuid4().hex, 'revision': selected['revision_id'],
-        'gateway_version': version, 'endpoint_ipv4': endpoint, 'profile': profile})
+        'gateway_version': version, 'endpoint_ipv4': endpoint, 'profile': profile,
+        # Only present when on, so an older gateway image still accepts a session with it off.
+        **({'direct_ru': True} if direct_ru else {})})
 
 
 def powerdown_requested(directory):
@@ -378,7 +380,8 @@ def run(root, profile_id=None, test_only=False, *, store=None, stop_after_ready=
             if hashlib.file_digest(stream, 'sha256').hexdigest() != expected:
                 raise ValueError('A verified QEMU component has changed')
         lookup = {}
-        selected, session = make_session(store or ProfileStore(root / 'profiles'), package['version'], profile_id, draft=draft, held=held, lookup=lookup)
+        selected, session = make_session(store or ProfileStore(root / 'profiles'), package['version'], profile_id, draft=draft, held=held, lookup=lookup,
+                                         direct_ru=settings.get('direct_ru', False) and not test_only)
         held.enter_context(_pinned_directory(root / 'logs'))
         directory = root / 'logs' / ('guest-gateway-boot-' + session['nonce'])
         directory.mkdir()

@@ -6,9 +6,9 @@ sha256sum -c SHA256SUMS
 install -d -m 0755 /usr/local/lib/wc-gateway /etc/windowsclaude /etc/systemd/network
 install -m 0755 sing-box /usr/local/bin/sing-box
 install -m 0755 session.py /usr/local/lib/wc-gateway/session.py
-install -m 0644 gateway_profile.py connection_profile.py /usr/local/lib/wc-gateway/
+install -m 0644 gateway_profile.py connection_profile.py ru-ipv4.txt /usr/local/lib/wc-gateway/
 install -m 0644 wc-session.service /etc/systemd/system/
-printf '%s\n' '2026.10.27.1' > /etc/windowsclaude/gateway-version
+printf '%s\n' '2026.11.01.1' > /etc/windowsclaude/gateway-version
 printf '%s\n' 'auto lo' 'iface lo inet loopback' > /etc/network/interfaces
 for entry in 'wan0 52:54:00:77:00:01' 'lan0 52:54:00:77:00:02'; do
     set -- $entry
@@ -37,11 +37,11 @@ update-grub
 python3 -m py_compile /usr/local/lib/wc-gateway/*.py
 /usr/local/bin/sing-box version > /etc/windowsclaude/sing-box-version.txt
 dpkg-query -W -f='${Package}\t${Version}\n' > /etc/windowsclaude/packages.tsv
-sha256sum /usr/local/bin/sing-box /usr/local/lib/wc-gateway/*.py \
+sha256sum /usr/local/bin/sing-box /usr/local/lib/wc-gateway/*.py /usr/local/lib/wc-gateway/ru-ipv4.txt \
     /etc/systemd/system/wc-session.service > /etc/windowsclaude/installed-sha256.txt
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 find /var/log -type f -exec truncate -s 0 {} \;
 rm -f /etc/machine-id /var/lib/dbus/machine-id
 touch /etc/machine-id
-printf 'WC_BUILD_COMPLETE 2026.10.27.1\n' > /dev/ttyS0
+printf 'WC_BUILD_COMPLETE 2026.11.01.1\n' > /dev/ttyS0

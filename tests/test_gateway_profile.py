@@ -172,6 +172,84 @@ class GatewayProfileTests(unittest.TestCase):
             self.assertIn(rule, online)
             self.assertNotIn(rule, gateway.firewall(self.session(protocol), connected=False))
 
+    RU = gateway.load_ru_ipv4((Path(__file__).resolve().parents[1] / 'gateway/ru-ipv4.txt').read_text(encoding='ascii'))
+
+    def test_shipped_russian_list_holds_russian_services_and_never_foreign_or_proxy_addresses(self):
+        import ipaddress
+        networks = [ipaddress.IPv4Network(n) for n in self.RU]
+        inside = lambda ip: any(ipaddress.IPv4Address(ip) in n for n in networks)
+        for ip in ('77.88.55.88', '87.250.250.242', '95.213.11.180', '178.248.237.68'):  # Yandex, VK, Mail.ru
+            self.assertTrue(inside(ip), ip)
+        for ip in ('160.79.104.10', '104.18.32.47', '1.1.1.1', '8.8.8.8', '142.250.74.46',  # Anthropic, Cloudflare, Google
+                   '188.130.234.243', '109.248.199.149', '46.8.43.165',  # the proxy VPS
+                   '77.88.8.8', '77.88.8.1'):  # Yandex DNS: DoH must not reveal visited sites from the real IP
+            self.assertFalse(inside(ip), ip)
+        self.assertTrue(all(n.is_global for n in networks))
+
+    def test_russian_list_parser_fails_closed(self):
+        for text in ('10.0.0.0/8\n' + '5.0.0.0/24\n' * 1000, '5.0.0.0/24\n', '0.0.0.0/0\n' * 1000, 'not-a-network\n'):
+            with self.assertRaises(ValueError):
+                gateway.load_ru_ipv4(text)
+        import ipaddress
+        overlapping = '5.0.0.0/16\n' + ''.join(f'5.{i // 250}.{i % 250}.0/24\n' for i in range(1000))
+        merged = [ipaddress.IPv4Network(n) for n in gateway.load_ru_ipv4(overlapping)]
+        self.assertEqual(str(merged[0]), '5.0.0.0/16')
+        self.assertFalse(any(a.overlaps(b) for a, b in zip(merged, merged[1:])))  # nft needs disjoint intervals
+
+    def test_direct_russian_routing_is_off_unless_the_session_asks(self):
+        for protocol in ('hysteria2', 'socks5'):
+            config = gateway.sing_box_config(self.session(protocol), self.RU)
+            self.assertEqual([o['tag'] for o in config['outbounds']], ['proxy'])
+            self.assertNotIn('rule_set', config['route'])
+            self.assertNotIn('ru_ipv4', gateway.firewall(self.session(protocol), ru_ipv4=self.RU))
+        for flag in (1, 'true', None):
+            session = self.session()
+            session['direct_ru'] = flag
+            with self.assertRaises(ValueError):
+                gateway.validate_session(session)
+
+    def test_enabled_without_the_list_fails_closed(self):
+        session = dict(self.session(), direct_ru=True)
+        with self.assertRaisesRegex(ValueError, 'missing'):
+            gateway.sing_box_config(session)
+        with self.assertRaisesRegex(ValueError, 'missing'):
+            gateway.firewall(session)
+        self.assertNotIn('ru_ipv4', gateway.firewall(session, connected=False))
+
+    def test_only_tcp_to_russian_addresses_leaves_directly(self):
+        for protocol in ('hysteria2', 'socks5', 'http', 'https'):
+            session = dict(self.session(protocol), direct_ru=True)
+            config = gateway.sing_box_config(session, self.RU)
+            direct, = [o for o in config['outbounds'] if o['tag'] == 'direct']
+            self.assertEqual(direct, {'type': 'direct', 'tag': 'direct', 'bind_interface': 'wan0'})
+            rules = config['route']['rules']
+            self.assertEqual(rules[0], {'action': 'sniff'})
+            self.assertEqual(rules[1], {'port': 53, 'action': 'hijack-dns'})
+            to_direct = [r for r in rules if r.get('outbound') == 'direct']
+            self.assertEqual(to_direct, [{'network': 'tcp', 'rule_set': 'ru-ipv4', 'outbound': 'direct'}])
+            self.assertEqual(rules[-1], to_direct[0])  # every proxy-forcing rule comes first
+            self.assertIn({'port': [53, 853], 'outbound': 'proxy'}, rules)
+            self.assertIn('2ip.ru', next(r for r in rules if 'domain_suffix' in r)['domain_suffix'])
+            self.assertEqual(config['route']['final'], 'proxy')
+            self.assertEqual(config['route']['rule_set'], [{'type': 'inline', 'tag': 'ru-ipv4', 'rules': [{'ip_cidr': self.RU}]}])
+            self.assertEqual(config['dns']['servers'][0]['detour'], 'proxy')
+
+    def test_gateway_firewall_itself_allows_only_tcp_to_russian_addresses(self):
+        for protocol, transport in (('hysteria2', 'udp'), ('socks5', 'tcp')):
+            session = dict(self.session(protocol), direct_ru=True)
+            rules = gateway.firewall(session, ru_ipv4=self.RU)
+            self.assertIn(' set ru_ipv4 {\n  type ipv4_addr; flags interval;\n  elements = { ' + self.RU[0] + ', ', rules)
+            output = rules.split(' chain output {', 1)[1]
+            wan_out = sorted(line.strip() for line in output.splitlines() if 'oifname "wan0"' in line)
+            self.assertEqual(wan_out, sorted([
+                f'oifname "wan0" ip daddr 203.0.113.7 {transport} dport 443 accept',
+                'oifname "wan0" ip daddr @ru_ipv4 tcp dport != { 53, 853 } accept']))
+            input_rules = rules.split(' chain input {', 1)[1].split(' chain forward {', 1)[0]
+            self.assertIn('iifname "wan0" ip saddr @ru_ipv4 tcp sport != { 53, 853 } ct state established accept', input_rules)
+            self.assertNotIn('iifname "lan0" oifname "wan0"', rules)
+            offline = gateway.firewall(session, connected=False, ru_ipv4=self.RU)
+            self.assertNotIn('ru_ipv4', offline)
+
     def test_rejects_injection_unknown_fields_and_missing_auth(self):
         for key, value in [('endpoint_ipv4', '1.2.3.4; accept'), ('nonce', 'bad'), ('revision', True), ('surprise', 1)]:
             session = self.session()

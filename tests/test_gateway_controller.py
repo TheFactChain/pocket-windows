@@ -334,7 +334,10 @@ class GatewayControllerTests(unittest.TestCase):
         addresses = ['169.254.1.2', '0.0.0.0', '224.0.0.1', '127.0.0.2', '192.168.1.5', '203.0.113.5']
         with mock.patch.object(controller.socket, 'getaddrinfo', return_value=[(2, 1, 6, '', (address, 8080)) for address in addresses]):
             _, session = controller.make_session(store, 'test')
+            _, direct = controller.make_session(store, 'test', direct_ru=True)
         self.assertEqual(session['endpoint_ipv4'], '192.168.1.5')
+        self.assertNotIn('direct_ru', session)  # an older gateway image keeps accepting sessions with the switch off
+        self.assertIs(direct['direct_ru'], True)
         with mock.patch.object(controller.socket, 'getaddrinfo', return_value=[(2, 1, 6, '', (address, 8080)) for address in addresses[:4]]):
             with self.assertRaises(ValueError):
                 controller.make_session(store, 'test')

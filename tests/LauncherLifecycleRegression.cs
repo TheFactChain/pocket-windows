@@ -126,6 +126,33 @@ internal static class LauncherLifecycleRegression
             Call(window, "OnStart", null, new RoutedEventArgs());
             Pump(() => Bridge.Calls.Contains("start"));
             Assert((string)((Dictionary<string, object>)((Dictionary<string, object>)selectedSettings)["files"])["mode"] == "selected", "Adding a folder saves selected mode before start");
+            Assert((bool)((Dictionary<string, object>)selectedSettings)["direct_ru"], "Russian sites go direct by default");
+            window = Window();
+            var crowded = Report();
+            crowded["settings"] = new Dictionary<string, object> { { "work_memory_mib", 4096 }, { "vcpus", 2 }, { "direct_ru", false } };
+            crowded["file_settings"] = new Dictionary<string, object> { { "mode", "selected" }, { "folders", new[] { @"C:\Users\Owner\Documents", @"D:\Work\Projects", @"E:\Shared\Downloads" } } };
+            Call(window, "LoadSettings", crowded);
+            Assert(((Wpf.Ui.Controls.ToggleSwitch)Field(window, "DirectRuSwitch")).IsChecked == false, "A saved choice to keep everything on the proxy is shown");
+            window.Left = -30000; window.Top = -30000; window.Show();
+            Call(window, "Navigate", AppPage.Settings);
+            DateTime pageShown = DateTime.UtcNow.AddMilliseconds(800); Pump(() => DateTime.UtcNow >= pageShown);
+            var settingsRoot = (FrameworkElement)window.Content;
+            settingsRoot.Measure(new Size(744, 418)); settingsRoot.Arrange(new Rect(0, 0, 744, 418)); settingsRoot.UpdateLayout();
+            var pane = (FrameworkElement)Field(window, "SettingsPane");
+            Func<string, Rect> boundsOf = name => { var part = (FrameworkElement)Field(window, name); return part.TransformToAncestor(pane).TransformBounds(new Rect(part.RenderSize)); };
+            Assert(boundsOf("SettingsNote").Bottom <= boundsOf("KeysButton").Top + 1, "Settings page fits without scrolling: note ends at " + boundsOf("SettingsNote").Bottom + ", bottom actions start at " + boundsOf("KeysButton").Top);
+            Assert(((FrameworkElement)Field(window, "FilesChoiceButton")).IsVisible, "Folder choice opens from the files row");
+            Call(window, "OnFilesChoice", null, new RoutedEventArgs());
+            Assert(((FrameworkElement)Field(window, "FilesSheet")).Visibility == Visibility.Visible && ((Panel)Field(window, "FolderPanel")).Children.Count == 3, "The folder sheet lists every chosen folder");
+            Call(window, "CloseSheet");
+            string layoutPng = Environment.GetEnvironmentVariable("POCKET_LAYOUT_PNG");
+            if (!String.IsNullOrEmpty(layoutPng))
+            {
+                var shot = new RenderTargetBitmap(744, 418, 96, 96, PixelFormats.Pbgra32); shot.Render(settingsRoot);
+                var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(shot));
+                using (var file = System.IO.File.Create(layoutPng)) encoder.Save(file);
+            }
+            window.Hide();
             window = Window();
             Call(window, "LoadProfileView", new Dictionary<string, object> {
                 { "profile_id", new string('a', 32) }, { "protocol", "hysteria2" }, { "host", "saved.example" },

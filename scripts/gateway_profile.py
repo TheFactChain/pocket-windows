@@ -3,6 +3,29 @@ import ipaddress
 import re
 from connection_profile import validate_profile, validate_ipv4_endpoint
 
+# Russian services that report the caller's address back: a foreign page could ask them for the real IP.
+# shortcut: a known list only, any other Russian echo service still answers with the real IP.
+IP_ECHO = ['2ip.ru', '2ip.io', '2ip.me', 'myip.ru', 'ip-ping.ru', 'whatismyip.ru',
+           'internet.yandex.ru', 'ipinfo.ru', 'ip.ru', 'ip2geo.ru']
+NEVER_DIRECT_PORTS = (53, 853)
+
+
+def load_ru_ipv4(text):
+    """Strict list of Russian IPv4 networks (one CIDR per line, # comments); anything odd fails closed."""
+    networks = []
+    for line in text.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        network = ipaddress.IPv4Network(line)
+        if not network.is_global or network.prefixlen < 8:
+            raise ValueError('Unexpected network in the Russian list')
+        networks.append(network)
+    if len(networks) < 1000:
+        raise ValueError('The Russian list is incomplete')
+    # nft refuses overlapping interval elements; merging keeps the gateway up whatever the file holds.
+    return [str(n) for n in ipaddress.collapse_addresses(networks)]
+
 
 def endpoint_ipv4(value):
     """Use the QEMU host alias for a proxy running on this PC, before generating any rules."""
@@ -12,8 +35,10 @@ def endpoint_ipv4(value):
 
 def validate_session(value):
     fields = {'schema', 'nonce', 'revision', 'gateway_version', 'endpoint_ipv4', 'profile'}
-    if not isinstance(value, dict) or set(value) != fields:
+    if not isinstance(value, dict) or not fields <= set(value) <= fields | {'direct_ru'}:
         raise ValueError('Invalid session fields')
+    if type(value.get('direct_ru', False)) is not bool:
+        raise ValueError('Invalid direct Russian routing flag')
     if type(value['schema']) is not int or value['schema'] != 1:
         raise ValueError('Unsupported session schema')
     if not isinstance(value['nonce'], str) or not re.fullmatch('[a-f0-9]{32,64}', value['nonce']):
@@ -37,8 +62,18 @@ def validate_session(value):
     return {**value, 'profile': profile, 'endpoint_ipv4': endpoint}
 
 
-def sing_box_config(value):
+def direct_networks(session, ru_ipv4):
+    """Russian networks reachable around the proxy, or none: an enabled flag without the list fails closed."""
+    if not session.get('direct_ru'):
+        return []
+    if not ru_ipv4:
+        raise ValueError('The Russian network list is missing')
+    return ru_ipv4
+
+
+def sing_box_config(value, ru_ipv4=()):
     session = validate_session(value)
+    direct = direct_networks(session, ru_ipv4)
     p = session['profile']
     protocol = p['protocol']
     outbound = {'type': 'http' if protocol == 'https' else 'socks' if protocol == 'socks5' else protocol,
@@ -58,6 +93,18 @@ def sing_box_config(value):
     rules = [{'port': 53, 'action': 'hijack-dns'}, {'ip_version': 6, 'action': 'reject'}]
     if protocol != 'hysteria2':
         rules.append({'network': 'udp', 'action': 'reject'})
+    outbounds, rule_sets = [outbound], []
+    if direct:
+        # Only TCP to a Russian address leaves directly; UDP (WebRTC, QUIC), DNS ports and IP echo services keep the proxy.
+        rules = [{'action': 'sniff'}] + rules + [
+            {'port': list(NEVER_DIRECT_PORTS), 'outbound': 'proxy'},
+            {'domain_suffix': IP_ECHO, 'outbound': 'proxy'},
+            {'network': 'tcp', 'rule_set': 'ru-ipv4', 'outbound': 'direct'}]
+        outbounds.append({'type': 'direct', 'tag': 'direct', 'bind_interface': 'wan0'})
+        rule_sets = [{'type': 'inline', 'tag': 'ru-ipv4', 'rules': [{'ip_cidr': direct}]}]
+    route = {'rules': rules, 'final': 'proxy', 'auto_detect_interface': False}
+    if rule_sets:
+        route['rule_set'] = rule_sets
     return {'log': {'disabled': True},
             'dns': {'servers': [{'type': 'https', 'tag': 'secure-dns', 'server': '1.1.1.1',
                                   'server_port': 443, 'path': '/dns-query', 'detour': 'proxy',
@@ -72,8 +119,8 @@ def sing_box_config(value):
                           'listen_port': 53},
                          {'type': 'direct', 'tag': 'lan-dns6', 'listen': 'fd77:233::1', 'listen_port': 53},
                          {'type': 'mixed', 'tag': 'health', 'listen': '127.0.0.1', 'listen_port': 18080}],
-            'outbounds': [outbound],
-            'route': {'rules': rules, 'final': 'proxy', 'auto_detect_interface': False}}
+            'outbounds': outbounds,
+            'route': route}
 
 
 def closed_firewall():
@@ -86,10 +133,11 @@ table inet windowsclaude {
 '''
 
 
-def firewall(value, connected=True):
+def firewall(value, connected=True, ru_ipv4=()):
     if type(connected) is not bool:
         raise ValueError('A boolean connection state is required')
     session = validate_session(value)
+    direct = direct_networks(session, ru_ipv4) if connected else []
     p = session['profile']
     transport = 'udp' if p['protocol'] == 'hysteria2' else 'tcp'
     networks = '{ tcp, udp }' if p['protocol'] == 'hysteria2' else 'tcp'
@@ -124,14 +172,21 @@ def firewall(value, connected=True):
   oifname "lan0" ip6 saddr { ::/128, fe80::/10 } ip6 daddr ff02::/16 ip6 hoplimit 1 meta l4proto ipv6-icmp icmpv6 type { 130, 131, 132, 143 } accept
   oifname "lan0" ip6 saddr { fe80::/10, fd77:233::1 } ip6 daddr { fe80::/10, fd77:233::/64, ff02::1:2 } udp sport 547 udp dport 546 accept
 '''
+    ru_set, wan_input, wan_output = '', '', ''
+    if direct:
+        # Independent of sing-box: the gateway itself can reach no address but the proxy and Russian networks over TCP.
+        ru_set = ' set ru_ipv4 {\n  type ipv4_addr; flags interval;\n  elements = { ' + ', '.join(direct) + ' }\n }\n'
+        ports = ', '.join(map(str, NEVER_DIRECT_PORTS))
+        wan_input = f'  iifname "wan0" ip saddr @ru_ipv4 tcp sport != {{ {ports} }} ct state established accept\n'
+        wan_output = f'  oifname "wan0" ip daddr @ru_ipv4 tcp dport != {{ {ports} }} accept\n'
     return f'''flush ruleset
 table inet windowsclaude {{
- chain input {{
+{ru_set} chain input {{
   type filter hook input priority filter; policy drop;
   iifname "lo" accept
   ct state invalid drop
   iifname "wan0" ip saddr {session['endpoint_ipv4']} {transport} sport {p['port']} ct state established accept
-  iifname "wan0" ip protocol icmp ct state related accept
+{wan_input}  iifname "wan0" ip protocol icmp ct state related accept
   iifname "lan0" ip saddr {{ 0.0.0.0, 192.168.233.0/24 }} udp sport 68 udp dport 67 accept
 {local_input}{lan_input} }}
  chain forward {{
@@ -141,7 +196,7 @@ table inet windowsclaude {{
   type filter hook output priority filter; policy drop;
   oifname "lo" accept
   oifname "wan0" ip daddr {session['endpoint_ipv4']} {transport} dport {p['port']} accept
-  oifname "lan0" ip daddr {{ 192.168.233.0/24, 255.255.255.255 }} udp sport 67 udp dport 68 accept
+{wan_output}  oifname "lan0" ip daddr {{ 192.168.233.0/24, 255.255.255.255 }} udp sport 67 udp dport 68 accept
 {local_output}{lan_output} }}
 }}
 '''

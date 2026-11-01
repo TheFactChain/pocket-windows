@@ -8,8 +8,9 @@ PYTHON = 'runtime/python-3.12.14'
 QEMU = 'runtime/qemu-11.1.0'
 POWERSHELL = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
 
+# direct_ru: Russian sites go around the proxy (TCP to Russian addresses only, enforced inside the gateway).
 DEFAULTS = {'schema': 1, 'work_memory_mib': 4096, 'gateway_memory_mib': 1024,
-            'vcpus': 2, 'lan_port': 31861}
+            'vcpus': 2, 'lan_port': 31861, 'direct_ru': True}
 RANGES = {'work_memory_mib': (1024, 32768), 'gateway_memory_mib': (256, 4096),
           'vcpus': (1, 32), 'lan_port': (1024, 65535)}
 VIEWER_DEFAULTS = {'schema': 1, 'start_fullscreen': False, 'remember_window': True, 'share_clipboard': True}
@@ -68,4 +69,6 @@ def validate_settings(value):
     for key, (low, high) in RANGES.items():
         if type(result[key]) is not int or not low <= result[key] <= high:
             raise ValueError('Invalid runtime setting: ' + key)
+    if type(result['direct_ru']) is not bool:
+        raise ValueError('Invalid runtime setting: direct_ru')
     return result

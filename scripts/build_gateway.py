@@ -24,9 +24,9 @@ from file_snapshot import locked_read, QEMU_IMG_SHA256
 from profile_store import _pinned_directory, _plain
 import launch_runtime as runtime
 
-GATEWAY_VERSION = "2026.10.27.1"
+GATEWAY_VERSION = "2026.11.01.1"
 DELIVERY_NAMES = ("install.sh", "sing-box", "session.py", "gateway_profile.py",
-                  "connection_profile.py", "wc-session.service")
+                  "connection_profile.py", "wc-session.service", "ru-ipv4.txt")
 DEBIAN_NAME = "debian-13.7.0-amd64-netinst.iso"
 DEBIAN_SHA512 = (
     "ef04d0276850d70e4aaec0b55003628660e9631b26e35215a70ab3c8c707294a4b127"
@@ -307,7 +307,8 @@ def install_gateway():
             "session.py": "gateway/runtime/session.py",
             "wc-session.service": "gateway/runtime/wc-session.service",
             "gateway_profile.py": "scripts/gateway_profile.py",
-            "connection_profile.py": "scripts/connection_profile.py"}.items()}
+            "connection_profile.py": "scripts/connection_profile.py",
+            "ru-ipv4.txt": "gateway/ru-ipv4.txt"}.items()}
         files["sing-box"] = folder / "sing-box"
         for path in files.values():
             _plain(path)

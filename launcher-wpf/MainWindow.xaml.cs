@@ -179,7 +179,7 @@ namespace WindowsClaude.Launcher
             currentPage = page;
             if (page != AppPage.Home)
             {
-                PageTitle.Text = page == AppPage.Connection ? "Подключения" : page == AppPage.Settings ? "Характеристики" : page == AppPage.Updates ? "Обновления" : "Проверка";
+                PageTitle.Text = page == AppPage.Connection ? "Подключения" : page == AppPage.Settings ? "Настройки" : page == AppPage.Updates ? "Обновления" : "Проверка";
                 Show(ConnectionsPane, page == AppPage.Connection); Show(SettingsPane, page == AppPage.Settings); Show(ChecksPanel, page == AppPage.Diagnostics);
                 Show(UpdatesPane, page == AppPage.Updates);
                 Show(RefreshButton, page == AppPage.Diagnostics);
@@ -207,7 +207,7 @@ namespace WindowsClaude.Launcher
 
         void OpenSheet(string title, UIElement content)
         {
-            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, HelpSheet, ReportSheet }) Show(part, part == content);
+            foreach (var part in new UIElement[] { AddSheet, EditorSheet, ExportSheet, FilesSheet, HelpSheet, ReportSheet }) Show(part, part == content);
             SheetTitle.Text = title;
             if (SheetHost.Visibility == Visibility.Visible) { content.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))); return; }
             Show(SheetHost, true);
@@ -1400,6 +1400,7 @@ namespace WindowsClaude.Launcher
                         if (Text(originalWindows, "width", "") == Modes[index, 0].ToString() && Text(originalWindows, "height", "") == Modes[index, 1].ToString()) selected = index;
                 ResolutionBox.SelectedIndex = selected;                FullscreenSwitch.IsChecked = Flag(originalViewer, "start_fullscreen");
                 ClipboardSwitch.IsChecked = originalViewer == null || !originalViewer.ContainsKey("share_clipboard") || Flag(originalViewer, "share_clipboard");
+                DirectRuSwitch.IsChecked = !originalSettings.ContainsKey("direct_ru") || Flag(originalSettings, "direct_ru");
                 string mode = Text(originalFiles, "mode", "off");
                 folders.Clear();
                 var saved = originalFiles != null && originalFiles.ContainsKey("folders") ? originalFiles["folders"] as IEnumerable : null;
@@ -1425,7 +1426,7 @@ namespace WindowsClaude.Launcher
         void UpdateFilesRows()
         {
             bool on = FilesSwitch.IsChecked == true;
-            Show(FoldersRow, on); Show(FolderPanel, FilesSelected.IsChecked == true); Show(AddFolderButton, FilesSelected.IsChecked == true);
+            Show(FoldersRow, on); Show(FilesChoiceButton, on); Show(FolderPanel, FilesSelected.IsChecked == true); Show(AddFolderButton, FilesSelected.IsChecked == true);
             FilesDetail.Text = !on ? "Выключено" : FilesSelected.IsChecked == true ? (folders.Count == 0 ? "Добавь папку" : "Папок: " + folders.Count) : "Все диски ПК";
             FolderPanel.Children.Clear();
             foreach (string folder in folders)
@@ -1457,6 +1458,7 @@ namespace WindowsClaude.Launcher
             UpdateFilesRows(); ScheduleSave();
         }
         void OnFilesMode(object sender, RoutedEventArgs e) { UpdateFilesRows(); ScheduleSave(); }
+        void OnFilesChoice(object sender, RoutedEventArgs e) { OpenSheet("Файлы ПК в Windows", FilesSheet); }
         void OnAddFolder(object sender, RoutedEventArgs e)
         {
             using (var dialog = new Forms.FolderBrowserDialog { Description = "Папка ПК, которая будет видна в Windows" })
@@ -1507,7 +1509,7 @@ namespace WindowsClaude.Launcher
             if (mode == "selected" && folders.Count == 0) { error = "Добавь хотя бы одну папку ПК."; return false; }
             int resolution = Math.Max(0, ResolutionBox.SelectedIndex);
             value = new Dictionary<string, object>(originalSettings);
-            value["schema"] = 1; value["work_memory_mib"] = mib; value["vcpus"] = cpus;
+            value["schema"] = 1; value["work_memory_mib"] = mib; value["vcpus"] = cpus; value["direct_ru"] = DirectRuSwitch.IsChecked == true;
             value["windows"] = new Dictionary<string, object> { { "schema", 1 }, { "width", Modes[resolution, 0] }, { "height", Modes[resolution, 1] }, { "fit", false } };
             value["viewer"] = new Dictionary<string, object> { { "schema", 1 }, { "start_fullscreen", FullscreenSwitch.IsChecked == true }, { "remember_window", originalViewer == null || !originalViewer.ContainsKey("remember_window") || Flag(originalViewer, "remember_window") }, { "share_clipboard", ClipboardSwitch.IsChecked == true } };
             value["files"] = new Dictionary<string, object> { { "schema", 1 }, { "mode", mode }, { "folders", folders.ToArray() } };

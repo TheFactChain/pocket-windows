@@ -14,10 +14,11 @@ import tarfile
 import time
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gateway_profile import closed_firewall, firewall, sing_box_config, validate_session
+from gateway_profile import closed_firewall, firewall, load_ru_ipv4, sing_box_config, validate_session
 
 RUN = Path('/run/wc-session')
 VERSION = Path('/etc/windowsclaude/gateway-version')
+RU_IPV4 = Path(__file__).resolve().parent / 'ru-ipv4.txt'
 DOH_PROVIDERS = (('1.1.1.1', 'cloudflare-dns.com', '/dns-query'),
                  ('8.8.8.8', 'dns.google', '/resolve'))
 HEALTH_TARGETS = ('example.com', 'www.iana.org')
@@ -286,9 +287,10 @@ def main():
         failure_code = 'GATEWAY_VERSION_MISMATCH'
         if session['gateway_version'] != VERSION.read_text().strip():
             raise ValueError('Gateway version mismatch')
-        config = RUN / 'sing-box.json'
-        config.write_text(json.dumps(sing_box_config(session)), encoding='utf-8')
         failure_code = 'PROXY_CONFIG_INVALID'
+        ru_ipv4 = load_ru_ipv4(RU_IPV4.read_text(encoding='ascii')) if session.get('direct_ru') else []
+        config = RUN / 'sing-box.json'
+        config.write_text(json.dumps(sing_box_config(session, ru_ipv4)), encoding='utf-8')
         command('/usr/local/bin/sing-box', 'check', '-c', str(config))
         emit('FIREWALL_READY', session)
         failure_code = 'NETWORK_DEVICES_UNAVAILABLE'
@@ -348,7 +350,7 @@ def main():
                 if not connected:
                     failure_code = 'NFT_RULES_FAILED'
                     try:
-                        apply_rules(firewall(session))
+                        apply_rules(firewall(session, ru_ipv4=ru_ipv4))
                     except Exception as error:
                         raise RuntimeError('Firewall application failed') from error
                     connected = True

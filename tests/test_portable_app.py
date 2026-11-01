@@ -556,6 +556,12 @@ class PortableAppTests(unittest.TestCase):
                                              'vcpus': 2})
             self.assertEqual(saved['lan_port'], 32861)
             self.assertEqual(app.load_settings(root), saved)
+            self.assertTrue(saved['direct_ru'])  # Russian sites go direct unless the user turns it off
+            self.assertFalse(app.save_settings(root, dict(saved, direct_ru=False))['direct_ru'])
+            self.assertFalse(app.load_settings(root)['direct_ru'])
+            for invalid in (1, 'false', None):
+                with self.assertRaises(ValueError):
+                    app.save_settings(root, dict(saved, direct_ru=invalid))
 
     def test_display_preferences_save_without_touching_the_windows_disk(self):
         with tempfile.TemporaryDirectory() as temporary:
