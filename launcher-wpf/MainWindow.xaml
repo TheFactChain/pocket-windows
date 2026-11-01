@@ -27,9 +27,7 @@
                     <StackPanel DockPanel.Dock="Bottom">
                         <Button x:Name="NextActionButton" Style="{StaticResource SoftPill}" Height="44" FontSize="14.5" Margin="0,8,0,0" Click="OnNextAction" />
                         <Button x:Name="StopButton" Style="{StaticResource DangerPill}" Height="44" FontSize="14.5" Margin="0,8,0,0" Click="OnStop" Content="Выключить Windows" />
-                        <Button x:Name="ForceStopButton" Style="{StaticResource DangerPill}" Height="40" FontSize="13" Margin="0,8,0,0" Click="OnForceStop" Content="Принудительно выключить" Visibility="Collapsed" />
-                        <Button x:Name="ReportProblemLink" Style="{StaticResource TextAction}" FontSize="13" HorizontalAlignment="Center" Margin="0,4,0,-4" Content="Сообщить о проблеме" Click="OnReportProblem" Visibility="Collapsed" />
-                    </StackPanel>
+                        <Button x:Name="ForceStopButton" Style="{StaticResource DangerPill}" Height="40" FontSize="13" Margin="0,8,0,0" Click="OnForceStop" Content="Принудительно выключить" Visibility="Collapsed" />                    </StackPanel>
                     <Grid x:Name="Hero">
                         <Grid.RowDefinitions><RowDefinition Height="*" MinHeight="40" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                         <!-- Only the icon shrinks; the status and actions retain readable font sizes. -->

@@ -841,7 +841,6 @@ namespace WindowsClaude.Launcher
             DiagnosticSummary.Text = checks.Count == 0 ? "Не выполнялась" : failed == 0 ? (setupRequired ? "Нужна настройка" : "Всё в порядке") : failed == 1 ? "1 проблема" : failed + (failed < 5 ? " проблемы" : " проблем");
             ChecksHeroTitle.Text = failed > 0 ? DiagnosticSummary.Text : checks.Count == 0 ? "Проверка не выполнялась" : setupRequired ? "Нужна настройка" : "Всё в порядке";
             ChecksHeroDetail.Text = checks.Count == 0 ? "ПК и комплект" : setupRequired && failed == 0 ? "Добавь или выбери подключение для запуска Windows." : checks.All(item => !Flag(item, "passed")) ? "Остальное проверится после исправления" : "Пройдено " + checks.Count(item => Flag(item, "passed")) + " из " + checks.Count;
-            Show(ReportProblemLink, failed > 0 || (operationResult != null && !Bridge.Ok(operationResult)));
 
             Dictionary<string, object> blocker = null;
             if (!Bridge.Ok(result))
@@ -865,8 +864,8 @@ namespace WindowsClaude.Launcher
             Show(NextActionButton, !Bridge.Ok(result) && !stopAvailable);
             if (!Bridge.Ok(result))
             {
-                if (blocker == null) StatusText.Text = outcomeUnknown ? "Действие не подтверждено" : "Действие не завершено";
-                NextStepText.Text = "Открой «Проверка»: там причина и дальнейшие действия.";
+                // A known cause is shown as its first sentence with its own button; only an unexplained failure points to Проверка.
+                if (blocker == null) { StatusText.Text = outcomeUnknown ? "Действие не подтверждено" : "Действие не завершено"; NextStepText.Text = "Причина и что делать дальше в разделе «Проверка»."; }
             }
             if (isReadiness && Flag(blocker, "setup_required") && !outcomeUnknown)
                 NextStepText.Text = Text(blocker, "detail", "Добавь или выбери подключение для запуска Windows.");
