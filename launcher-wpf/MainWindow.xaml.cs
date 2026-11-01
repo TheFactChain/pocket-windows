@@ -1030,7 +1030,7 @@ namespace WindowsClaude.Launcher
             if (report != null)
             {
                 UpdateStatusTitle.Text = "Результат обновления"; UpdateStatusText.Text = report;
-                Navigate(AppPage.Updates);
+                ShowUpdateOffer(); Navigate(AppPage.Updates);
                 await Task.Delay(TimeSpan.FromHours(6));
             }
             while (!closing)
@@ -1093,6 +1093,14 @@ namespace WindowsClaude.Launcher
             // At the latest version the same action only re-checks and repairs files; say so instead of offering an "update".
             InstallUpdateButton.Content = updating ? "Отменить" : offered && updateOffer.Repair ? "Восстановить файлы" : "Обновить";
             InstallUpdateButton.IsEnabled = !App.UpdateProbePending && !checkingUpdate && !updateHandedOff && (updating || (offered && !busy && !runtimeActive && !outcomeUnknown));
+            // The badge says the state before any text is read: working, new version, trouble, or up to date.
+            string said = UpdateStatusTitle.Text + " " + UpdateStatusText.Text;
+            bool trouble = !updating && (said.Contains("Не удалось") || said.Contains("не установлено") || said.Contains("прервано"));
+            bool working = updating || updateHandedOff || checkingUpdate, available = offered && !updateOffer.Repair;
+            bool unknown = !working && !trouble && !available && (said.Contains("не определена") || UpdateStatusTitle.Text == "Проверить новую версию");
+            UpdateGlyph.Symbol = working ? SymbolRegular.ArrowSync24 : trouble ? SymbolRegular.Warning24 : available ? SymbolRegular.ArrowDownload24 : unknown ? SymbolRegular.Info24 : SymbolRegular.Checkmark24;
+            UpdateGlyph.Foreground = working || (!trouble && available) ? BlueInk : trouble ? OrangeInk : unknown ? Grey : GreenInk;
+            UpdateBadge.Background = working || (!trouble && available) ? BlueSoft : trouble ? OrangeSoft : unknown ? GreySoft : GreenSoft;
         }
 
         void UpdateBytesProgress(Dictionary<string, object> value)
@@ -1110,7 +1118,11 @@ namespace WindowsClaude.Launcher
                 double overall = low + (high - low) * (measured ? Math.Min(1.0, done / (double)total) : 0);
                 UpdateProgress.IsIndeterminate = false;
                 UpdateProgress.Value = Math.Max(UpdateProgress.Value, Math.Min(100, overall));
-                UpdateStatusText.Text = title + ": " + UpdateProgress.Value.ToString("0") + "%. Можно отменить.";
+                UpdatePercent.Text = UpdateProgress.Value.ToString("0") + "%"; Show(UpdatePercent, true);
+                // The line under the title explains the stage instead of repeating it.
+                UpdateStatusText.Text = (phase == "downloading" ? "Скачиваем только изменённые файлы." : phase == "assembling" ? "Собираем новые файлы из скачанных частей." :
+                    phase == "prepared" || phase == "checking" ? "Проверяем файлы перед установкой." : "Сверяем установленные файлы с новой версией.")
+                    + " Программа пока не изменена, можно отменить.";
             });
         }
 
@@ -1124,9 +1136,10 @@ namespace WindowsClaude.Launcher
             if (runtimeActive || busy || outcomeUnknown || closing) return;
             updating = true; updateCancel = new CancellationTokenSource(); Busy(true);
             StatusText.Text = "Обновляем Pocket Windows";
-            NextStepText.Text = "Сначала проверим файлы, затем панель откроется снова.";
-            UpdateStatusTitle.Text = "Загружаем обновление";
-            UpdateStatusText.Text = "Загрузку можно отменить. Программа пока не изменена.";
+            NextStepText.Text = "На время установки панель закроется и откроется сама.";
+            UpdateStatusTitle.Text = "Готовим обновление";
+            UpdateStatusText.Text = "Сверяем установленные файлы с новой версией. Программа пока не изменена, можно отменить.";
+            UpdatePercent.Text = "0%"; Show(UpdatePercent, true);
             UpdateProgress.IsIndeterminate = false; UpdateProgress.Value = 0;
             AppUpdate.Package package = null;
             try
@@ -1146,7 +1159,12 @@ namespace WindowsClaude.Launcher
                 updateCancel.Token.ThrowIfCancellationRequested();
                 if (runtimeActive || outcomeUnknown) throw new InvalidOperationException("Сначала выключи Windows.");
                 AppUpdate.Launch(Bridge.Root, package);
-                updateHandedOff = true; UpdateStatusTitle.Text = "Устанавливаем обновление"; ShowUpdateOffer();
+                updateHandedOff = true; ShowUpdateOffer();
+                // Say it before the window disappears, so closing reads as a step of the update and not as a crash.
+                UpdateStatusTitle.Text = "Устанавливаем обновление"; Show(UpdatePercent, false);
+                UpdateStatusText.Text = "Панель сейчас закроется и откроется сама через минуту или две. Открывать её заново не нужно.";
+                StatusText.Text = "Устанавливаем обновление"; NextStepText.Text = "Панель откроется сама, когда установка закончится.";
+                await Task.Delay(2500);
                 Close();
             }
             catch (OperationCanceledException)
@@ -1165,7 +1183,7 @@ namespace WindowsClaude.Launcher
                 updateCancel.Dispose(); updateCancel = null; updating = false;
                 if (!closing)
                 {
-                    Busy(false); UpdateProgress.IsIndeterminate = false;
+                    Busy(false); UpdateProgress.IsIndeterminate = false; Show(UpdatePercent, false);
                     if (readinessReport != null) Display(readinessReport);
                     ShowUpdateOffer();
                     if (closeAfterUpdateCancel) Close();

@@ -636,12 +636,23 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'identity changed'):
                 release.wait_for_launcher(self.target, 123, 456)
 
-    def test_launcher_opened_during_staging_blocks_all_replacements(self):
-        with mock.patch.object(release, 'project_processes', side_effect=[{}, {}, {123: {'pid': 123}}]):
+    def test_launcher_left_open_during_staging_blocks_all_replacements(self):
+        busy = iter([{}, {}])
+        with mock.patch.object(release, 'SETTLE_SECONDS', 0), \
+                mock.patch.object(release, 'project_processes', side_effect=lambda target: next(busy, {123: {'pid': 123}})):
             with self.assertRaisesRegex(RuntimeError, 'while the update'):
                 release.apply_update(self.bundle, self.target)
         self.assertEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
         self.assertFalse((self.target / release.JOURNAL).exists())
+        self.unchanged_private()
+
+    def test_panel_opened_briefly_during_staging_does_not_cancel_the_update(self):
+        # The third check sees a panel that closes itself on seeing the updater; the update waits and goes on.
+        states = iter([{}, {}, {123: {'pid': 123}}, {123: {'pid': 123}}])
+        with mock.patch.object(release.time, 'sleep'), \
+                mock.patch.object(release, 'project_processes', side_effect=lambda target: next(states, {})):
+            release.apply_update(self.bundle, self.target)
+        self.assertNotEqual((self.target / 'Launcher.exe').read_bytes(), self.old_launcher)
         self.unchanged_private()
 
     def test_failed_preparation_removes_only_its_unpublished_transaction(self):
@@ -699,7 +710,8 @@ class ReleaseTests(unittest.TestCase):
             release.verify_release(self.bundle)
 
     def test_busy_target_is_rejected_without_side_by_side_executables(self):
-        with mock.patch.object(release, 'project_processes', return_value={123: {'pid': 123}}):
+        with mock.patch.object(release, 'SETTLE_SECONDS', 0), \
+                mock.patch.object(release, 'project_processes', return_value={123: {'pid': 123}}):
             with self.assertRaises(RuntimeError):
                 release.apply_update(self.bundle, self.target)
         self.assertEqual(list(self.target.glob('Launcher*')), [self.target / 'Launcher.exe'])

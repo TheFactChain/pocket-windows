@@ -268,6 +268,23 @@ def project_processes(root):
     return result
 
 
+SETTLE_SECONDS = 20
+
+
+def processes_settled(target):
+    """True when no other process runs from this copy, waiting a little for one that is closing.
+
+    A panel opened by hand during an update sees the running updater and exits by itself; the
+    update must not fail on that moment. Nothing is stopped here.
+    """
+    deadline = time.monotonic() + SETTLE_SECONDS
+    while project_processes(target):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(.5)
+    return True
+
+
 def _journal(target):
     value = read_json(pack.file_under(target, JOURNAL), JSON_LIMIT)
     if (type(value) is not dict or type(value.get('schema')) is not int or value['schema'] not in (1, 2, 3)
@@ -633,7 +650,7 @@ def apply_update(release, target, probe=False, prepared_sha256=None, _local_stag
         raise ValueError('Release and installed application must be separate directories')
     manifest = prepared_release(release, prepared_sha256, target) if prepared_sha256 else verify_release(release)
     with _pinned_directory(target, create=False):
-        if project_processes(target):
+        if not processes_settled(target):
             raise RuntimeError('Close Launcher and shut down Windows and gateway before updating')
         from package_integrity import verify_initial
         integrity = verify_initial(target)
@@ -642,7 +659,7 @@ def apply_update(release, target, probe=False, prepared_sha256=None, _local_stag
         legacy_without_manifest = integrity['code'] == 'legacy' and not (target / 'MANIFEST.json').exists()
         directory(target / 'state')
         with runtime.ProjectLock(target) as acquired, ExitStack() as pins:
-            if not acquired or project_processes(target):
+            if not acquired or not processes_settled(target):
                 raise RuntimeError('Close Launcher and shut down Windows and gateway before updating')
             if (target / JOURNAL).exists():
                 raise RuntimeError('An unfinished update requires explicit rollback first')
@@ -762,7 +779,7 @@ def apply_update(release, target, probe=False, prepared_sha256=None, _local_stag
             atomic_json(target / JOURNAL, journal)
             probe_process = None
             try:
-                if project_processes(target):
+                if not processes_settled(target):
                     raise RuntimeError('Another process opened this copy while the update was being prepared')
                 for row in journal['files']:
                     path = target / row['path']

@@ -32,6 +32,9 @@ namespace WindowsClaude.Launcher
                     }
                     UpdateProbeNonce = args[1]; UpdateProbePending = true;
                 }
+                // A panel opened by hand while the updater replaces files would hold the copy and cancel the update,
+                // or offer to roll back a live update: say what is happening and leave at once instead.
+                if (!UpdateProbePending && UpdaterRunning(Bridge.Root)) { ShowUpdatingNotice(); return 0; }
                 using (var instance = new InstallationInstance(Bridge.Root))
                 {
                 if (!instance.IsOwner) return 0;
@@ -131,6 +134,31 @@ namespace WindowsClaude.Launcher
                 if (IsOwner) mutex.ReleaseMutex();
                 mutex.Dispose(); activate.Dispose();
             }
+        }
+
+        // The updater runs its own Python from state\app-updater-<id>; its presence means an update is in progress.
+        static bool UpdaterRunning(string root)
+        {
+            string prefix = Path.Combine(Path.GetFullPath(root), "state", "app-updater-");
+            foreach (var process in System.Diagnostics.Process.GetProcessesByName("python"))
+            {
+                try { if (process.MainModule.FileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true; }
+                catch (Exception) { }  // another user's or a protected process: not ours
+                finally { process.Dispose(); }
+            }
+            return false;
+        }
+
+        // Shown by Windows PowerShell from System32, so nothing from this copy stays open during the update.
+        static void ShowUpdatingNotice()
+        {
+            try
+            {
+                string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+                string script = "Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.MessageBox]::Show('Pocket Windows сейчас обновляется. Панель откроется сама, когда обновление закончится. Ничего делать не нужно.', 'Pocket Windows')";
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(powershell, "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"" + script + "\"") { UseShellExecute = false, CreateNoWindow = true });
+            }
+            catch (Exception) { }
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr window);
