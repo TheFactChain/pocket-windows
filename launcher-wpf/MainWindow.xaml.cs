@@ -813,7 +813,8 @@ namespace WindowsClaude.Launcher
             var unavailable = UnavailableFolders(report);
             var clipboard = Child(report, "clipboard");
             string clipboardState = Text(clipboard, "status", "off"), clipboardDetail = ClipboardStatusDetail(report);
-            ClipboardDetail.Text = clipboardDetail;
+            // The switch already shows on or off; the caption only reports what the running bridge is doing.
+            ClipboardDetail.Text = clipboardState == "off" ? "" : clipboardDetail; Show(ClipboardDetail, ClipboardDetail.Text.Length > 0);
             bool fileServerStopped = FileSharingState(report) == "failed" && Text(Child(report, "host_files"), "code", "") == "FILE_SERVER_STOPPED";
             var hostFiles = Child(report, "host_files");
             bool fileRecovery = Flag(hostFiles, "recovery_required") || Flag(hostFiles, "recovery_log_failed") || Flag(hostFiles, "recovery_channel_failed");
